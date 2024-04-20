@@ -1,16 +1,16 @@
 /************************************************************************/
 /*                                                                      */
-/*    zimt - abstraction layer for SIMD programming                     */
+/*    envutil - utility to convert between environment formats          */
 /*                                                                      */
 /*            Copyright 2024 by Kay F. Jahnke                           */
 /*                                                                      */
 /*    The git repository for this software is at                        */
 /*                                                                      */
-/*    https://github.com/kfjahnke/zimt                                  */
+/*    https://github.com/kfjahnke/envutil                               */
 /*                                                                      */
 /*    Please direct questions, bug reports, and contributions to        */
 /*                                                                      */
-/*    kfjahnke+zimt@gmail.com                                           */
+/*    kfjahnke+envutil@gmail.com                                        */
 /*                                                                      */
 /*    Permission is hereby granted, free of charge, to any person       */
 /*    obtaining a copy of this software and associated documentation    */
@@ -39,9 +39,6 @@
 // utility program producing a lat/lon 'environment map' from a cubemap.
 // and the reverse.
 
-// As an example program for zimt, this program is maybe too complex
-// and not entirely on the topic, but it does demonstrate the use
-// of a good range of zimt features in a 'real' program.
 // AFAICT there are two formats used to represent a complete 360X180
 // degree environment. The more common one is a lat/lon environment,
 // which captures the environment in a single image in spherical
@@ -2852,7 +2849,7 @@ int main ( int argc , const char ** argv )
     .metavar("ITP");
   ap.arg("--twine TWINE")
     .help("use twine*twine oversampling and box filter - best with itp1")
-    .metavar("ITP");
+    .metavar("TWINE");
   ap.arg("--face_fov FOV")
     .help("field of view of the cube faces of a cubemap input (in degrees)")
     .metavar("FOV");

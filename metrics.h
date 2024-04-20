@@ -1,16 +1,16 @@
 /************************************************************************/
 /*                                                                      */
-/*    zimt - abstraction layer for SIMD programming                     */
+/*    envutil - utility to convert between environment formats          */
 /*                                                                      */
 /*            Copyright 2024 by Kay F. Jahnke                           */
 /*                                                                      */
 /*    The git repository for this software is at                        */
 /*                                                                      */
-/*    https://github.com/kfjahnke/zimt                                  */
+/*    https://github.com/kfjahnke/envutil                               */
 /*                                                                      */
 /*    Please direct questions, bug reports, and contributions to        */
 /*                                                                      */
-/*    kfjahnke+zimt@gmail.com                                           */
+/*    kfjahnke+envutil@gmail.com                                        */
 /*                                                                      */
 /*    Permission is hereby granted, free of charge, to any person       */
 /*    obtaining a copy of this software and associated documentation    */
