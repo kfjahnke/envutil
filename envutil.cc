@@ -255,7 +255,7 @@ static std::string metamatch;
 static std::regex field_re;
 std::string input , output , save_ir , ts_options ;
 int extent , support_min , tile_width ;
-int itp , twine ;
+int itp , twine , twine_width ;
 double face_fov ;
 
 // helper function to save a zimt array to an image file. I am
@@ -449,6 +449,23 @@ void make_spread ( int w , int h , float d ,
       trg.push_back ( v ) ;
     }
   }
+
+  // to use a gaussian for weighting instead of the box filter:
+
+  // auto sigma = - x0 / 2.0 ;
+  // double sum = 0.0 ;
+  // for ( auto & p : trg )
+  // {
+  //   auto x = p[0] / sigma ;
+  //   auto y = p[1] / sigma ;
+  //   auto d = sqrt ( x * x + y * y ) ;
+  //   p[2] *= exp ( - d ) ;
+  //   sum += p[2] ;
+  // }
+  // for ( auto & p : trg )
+  // {
+  //   p[2] /= sum ;
+  // }
 }
 
 // code to move from 3D ray coordinates to lat/lon. This is the
@@ -2279,7 +2296,8 @@ void latlon_to_ir ( const zimt::view_t < 2 , pix_t<nchannels> > & latlon ,
       std::cout << "applying a twine of " << twine << std::endl ;
 
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
-    make_spread ( twine , twine , sf.px_to_model , twine_v ) ;
+    make_spread ( twine , twine ,
+                  sf.px_to_model * twine_width , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
 
@@ -2648,7 +2666,8 @@ void cubemap_to_latlon ( std::unique_ptr < ImageInput > & inp ,
       std::cout << "applying a twine of " << twine << std::endl ;
 
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
-    make_spread ( twine , twine , sf.px_to_model , twine_v ) ;
+    make_spread ( twine , twine ,
+                  sf.px_to_model * twine_width , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
 
@@ -2783,7 +2802,7 @@ void latlon_to_cubemap ( const std::string & latlon ,
         std::cout << "applying a twine of " << twine << std::endl ;
 
       std::vector < zimt::xel_t < float , 3 > > twine_v ;
-      make_spread ( twine , twine , 1 , twine_v ) ;
+      make_spread ( twine , twine ,  twine_width , twine_v ) ;
 
       twine_t < nchannels > twined_act ( act , twine_v ) ;
 
@@ -2850,6 +2869,9 @@ int main ( int argc , const char ** argv )
   ap.arg("--twine TWINE")
     .help("use twine*twine oversampling and box filter - best with itp1")
     .metavar("TWINE");
+  ap.arg("--twine_width TWINE_WIDTH")
+    .help("widen the pick-up area of the twining filter")
+    .metavar("TWINE_WIDTH");
   ap.arg("--face_fov FOV")
     .help("field of view of the cube faces of a cubemap input (in degrees)")
     .metavar("FOV");
@@ -2884,6 +2906,7 @@ int main ( int argc , const char ** argv )
   twine = ap["twine"].get<int>(1);
   support_min = ap["support_min"].get<int>(4);
   tile_width = ap["tile_width"].get<int>(64);
+  twine_width = ap["twine_width"].get<float>(1.0);
   face_fov = ap["face_fov"].get<float>(90.0);
   face_fov *= M_PI / 180.0 ;
 
@@ -2975,7 +2998,7 @@ int main ( int argc , const char ** argv )
 
     if ( extent == 0 )
     {
-      extent = 2 * w ;
+      extent = 4 * w ;
       if ( extent % 64 )
         extent = ( ( extent / 64 ) + 1 ) * 64 ;
       if ( verbose )

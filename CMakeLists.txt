@@ -46,27 +46,10 @@ if("${_varsource}" STREQUAL "${_varbinary}")
 	message(FATAL_ERROR "In-source builds are not allowed")
 endif()
 
-# envutil should be built with clang++
-
-set(ENV{CXX} clang++)
-set(ENV{CC} clang)
-
-# get pv-version string from envutil_version_first envutil_version_second
-# and envutil_version_third
-
-macro(getversion file out)
-	set(_vers_lines "")
-	file(STRINGS ${file} _vers_lines)
-	set(number 0)
-	foreach(_l ${_vers_lines} )
-		if(_l MATCHES "^\([0-9]+\)$")
-			# the last one takes over
-			set(number ${CMAKE_MATCH_1})
-		endif()
-	endforeach()
-
-	set(${out} ${number})
-endmacro()
+# # envutil should be built with clang++
+# 
+# set(ENV{CXX} clang++)
+# set(ENV{CC} clang)
 
 set(envutil_major 0)
 set(envutil_minor 0)
@@ -106,46 +89,54 @@ endif()
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
-# We switch of some warnings cluttering the build, assuming it's safe
-# to ignore them.
-
-set(RENDERING_FLAGS "-fno-math-errno -Wno-unused-value")
-
-# handle use of SIMD libraries. for now, we're not using any of the
-# SIMD back-ends, but rely on small loops and autovectorization.
-
-option(USE_GOADING "USE SIMD EMULATION WITH SMALL LOOPS" ON)
-option(USE_HWY_LIBRARY "ACTIVATES USE OF HIGHWAY SIMD LIBRARY" OFF)
-option(USE_VC_LIBRARY "ACTIVATES USE OF VC SIMD LIBRARY" OFF)
-option(USE_STDSIMD "ACTIVATES USE OF STD::SIMD" OFF)
-
-# OIIO anticipates moving to C++17 in 2024, and I may want to access
-# std::filesystem coming with C++17. So I raise the build to using C++17
-# as overall standard.
+## OIIO anticipates moving to C++17 in 2024
 
 set(CMAKE_CXX_STANDARD 17)
 message(STATUS "***** using C++17 standard")
-
-set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS "-O3")
-
-add_executable(${_project_name} envutil.cc)
 
 if ( NOT APPLE )
   find_package ( OpenImageIO CONFIG REQUIRED )
   if ( OpenImageIO_FOUND )
     message ( STATUS "find_package: OpenImageIO = true" )
   endif()
+endif()
 
-  if ( NOT "${OpenImageIO_INCLUDE_DIR}" STREQUAL "" )
-    message ( STATUS "OpenImageIO_INCLUDE_DIR = ${OpenImageIO_INCLUDE_DIR}" )
-    include_directories ( ${OpenImageIO_INCLUDE_DIR} )
+# highway has added code to find it with cmake config mode with
+# the release of 1.0.4. If we can't find highway, we try Vc, and
+# if that doesn't work we use std::simd.
+
+option(USE_GOADING "USE SIMD EMULATION WITH SMALL LOOPS" OFF)
+
+if ( NOT USE_GOADING )
+  find_package ( HWY CONFIG )
+  if ( HWY_FOUND )
+    message ( STATUS "find_package: HWY_FOUND = true" )
+    set ( required_libraries ${required_libraries} hwy )
+    set ( SIMD_LIBRARY "-D USE_HWY" )
+  else()
+    find_package ( VC )
+    if ( VC_FOUND )
+      message ( STATUS "find_package: VC_FOUND = true" )
+      set ( required_libraries ${required_libraries} Vc )
+      set ( SIMD_LIBRARY "-D USE_VC" )
+    else()
+      set ( SIMD_LIBRARY "-D USE_STDSIMD" )
+    endif()
   endif()
 endif()
 
 set( required_libraries
       ${required_libraries} OpenImageIO OpenImageIO_Util )
 
+add_executable(${_project_name} envutil.cc)
+
 target_link_libraries(${_project_name} pthread ${required_libraries})
+
+# note: compiler options for AVX2:
+#      "-Ofast -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
+
+set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
+      "-Ofast ${SIMD_LIBRARY}")
 
 # install the binary
 
