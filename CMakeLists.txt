@@ -132,11 +132,13 @@ add_executable(${_project_name} envutil.cc)
 
 target_link_libraries(${_project_name} pthread ${required_libraries})
 
+# TODO: currently, optimization with -Ofast does not work
+
 # note: compiler options for AVX2:
-#      "-Ofast -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
+#      "-O3 -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
 
 set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
-      "-Ofast ${SIMD_LIBRARY}")
+      "-O3 ${SIMD_LIBRARY}")
 
 # install the binary
 

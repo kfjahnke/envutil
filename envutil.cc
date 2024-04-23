@@ -256,7 +256,7 @@ static std::regex field_re;
 std::string input , output , save_ir , ts_options ;
 int extent , support_min , tile_width ;
 int itp , twine , twine_width ;
-double face_fov ;
+double face_fov , twine_sigma ;
 
 // helper function to save a zimt array to an image file. I am
 // working with openEXR images here, hence the HALF data type.
@@ -428,7 +428,7 @@ struct twine_t
 // for both. The deltas are set up so that, over all pick-ups,
 // they produce a uniform sampling.
 
-void make_spread ( int w , int h , float d ,
+void make_spread ( int w , int h , float d , float sigma ,
                    std::vector < zimt::xel_t < float , 3 > > & trg )
 {
   float wgt = 1.0 / ( w * h ) ;
@@ -437,35 +437,56 @@ void make_spread ( int w , int h , float d ,
   double y0 = - ( h - 1.0 ) / ( 2.0 * h ) ;
   double dy = 1.0 / h ;
   trg.clear() ;
+  sigma *= - x0 ;
+  double sum = 0.0 ;
 
   for ( int y = 0 ; y < h ; y++ )
   {
     for ( int x = 0 ; x < w ; x++ )
     {
+      float wf = 1.0 ;
+      if ( sigma > 0.0 )
+      {
+        double wx = ( x0 + x * dx ) / sigma ;
+        double wy = ( y0 + y * dy ) / sigma ;
+        wf = exp ( - sqrt ( wx * wx + wy * wy ) ) ;
+      }
       zimt::xel_t < float , 3 >
         v { float ( d * ( x0 + x * dx ) ) ,
             float ( d * ( y0 + y * dy ) ) ,
-            wgt } ;
+            wf * wgt } ;
       trg.push_back ( v ) ;
+      sum += wf * wgt ;
     }
   }
 
-  // to use a gaussian for weighting instead of the box filter:
+  if ( sigma != 0.0 )
+  {
+    for ( auto & v : trg )
+    {
+      v[2] /= sum ;
+    }
+  }
 
-  // auto sigma = - x0 / 2.0 ;
-  // double sum = 0.0 ;
-  // for ( auto & p : trg )
-  // {
-  //   auto x = p[0] / sigma ;
-  //   auto y = p[1] / sigma ;
-  //   auto d = sqrt ( x * x + y * y ) ;
-  //   p[2] *= exp ( - d ) ;
-  //   sum += p[2] ;
-  // }
-  // for ( auto & p : trg )
-  // {
-  //   p[2] /= sum ;
-  // }
+  if ( verbose )
+  {
+    if ( sigma != 0.0 )
+    {
+      std::cout << "using this twining filter kernel:" << std::endl ;
+      for ( int y = 0 ; y < h ; y++ )
+      {
+        for ( int x = 0 ; x < w ; x++ )
+        {
+          std::cout << '\t' << trg [ y * h + x ] [ 2 ] ;
+        }
+        std::cout << std::endl ;
+      }
+    }
+    else
+    {
+      std::cout << "using box filter for twining" << std::endl ;
+    }
+  }
 }
 
 // code to move from 3D ray coordinates to lat/lon. This is the
@@ -2297,7 +2318,8 @@ void latlon_to_ir ( const zimt::view_t < 2 , pix_t<nchannels> > & latlon ,
 
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
     make_spread ( twine , twine ,
-                  sf.px_to_model * twine_width , twine_v ) ;
+                  sf.px_to_model * twine_width ,
+                  twine_sigma , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
 
@@ -2667,7 +2689,8 @@ void cubemap_to_latlon ( std::unique_ptr < ImageInput > & inp ,
 
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
     make_spread ( twine , twine ,
-                  sf.px_to_model * twine_width , twine_v ) ;
+                  sf.px_to_model * twine_width ,
+                  twine_sigma , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
 
@@ -2802,7 +2825,7 @@ void latlon_to_cubemap ( const std::string & latlon ,
         std::cout << "applying a twine of " << twine << std::endl ;
 
       std::vector < zimt::xel_t < float , 3 > > twine_v ;
-      make_spread ( twine , twine ,  twine_width , twine_v ) ;
+      make_spread ( twine , twine , twine_width , twine_sigma , twine_v ) ;
 
       twine_t < nchannels > twined_act ( act , twine_v ) ;
 
@@ -2872,6 +2895,9 @@ int main ( int argc , const char ** argv )
   ap.arg("--twine_width TWINE_WIDTH")
     .help("widen the pick-up area of the twining filter")
     .metavar("TWINE_WIDTH");
+  ap.arg("--twine_sigma TWINE_SIGMA")
+    .help("use a truncated gaussian for the twining filter (default: don't)")
+    .metavar("TWINE_SIGMA");
   ap.arg("--face_fov FOV")
     .help("field of view of the cube faces of a cubemap input (in degrees)")
     .metavar("FOV");
@@ -2907,6 +2933,7 @@ int main ( int argc , const char ** argv )
   support_min = ap["support_min"].get<int>(4);
   tile_width = ap["tile_width"].get<int>(64);
   twine_width = ap["twine_width"].get<float>(1.0);
+  twine_sigma = ap["twine_sigma"].get<float>(0.0);
   face_fov = ap["face_fov"].get<float>(90.0);
   face_fov *= M_PI / 180.0 ;
 
