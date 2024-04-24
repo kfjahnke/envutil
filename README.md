@@ -9,10 +9,12 @@ think it's a useful tool.
 
 The program is built with CMake.
 
-The only mandatory dependency is [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO). If you have highway installed,
-the build will use it, if not it tries for Vc, and if that isn't
-present either it uses std::simd. If you dont' want any of the three,
-set the option USE_GOADING=ON.
+The only mandatory dependency is [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) - OIIO in short.
+If you have highway installed, the build will use it, if not it tries for Vc,
+and if that isn't present either it uses std::simd. If you dont' want any of
+the three, set the option USE_GOADING=ON. The functionality and results should
+be the same with either of the back-ends, but processing time will vary,
+especially if you are using 'twining'.
 
 It's recommended to build with clang++ (call cmake with -DCMAKE_CXX_COMPILER=clang++).
 
@@ -45,7 +47,10 @@ envutil --help gives a summary of command line options:
                                 OIIO's anisotropic
         --twine TWINE         use twine*twine oversampling and box filter -
                                 best with itp1
-       --twine_width TWINE_WIDTH  widen the pick-up area of the twining filter
+        --twine_width TWINE_WIDTH  widen the pick-up area of the twining filter
+        --twine_sigma TWINE_SIGMA  use a truncated gaussian for the twining
+                                         filter (default: don't)
+        --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
         --face_fov FOV        field of view of the cube faces of a cubemap
                                 input (in degrees)
         --support_min EXTENT  minimal additional support around the cube face
@@ -125,6 +130,14 @@ in artifacts in the output or become very blurred when you try to counteract the
 artifacts with excessive blurring. There's little to be gained from scaling up
 anyway - the lost detail can't be regained.
 
+## --twine_sigma TWINE_SIGMA  use a truncated gaussian for the twining filter (default: don't)
+
+If you don't pass --twine_sigma, emvutil will use a simple box filter to combine the result of supersampling into single output pixels values. If you pass twine_sigma, the kernel will be derived from a gaussian with a sigma equivalent to twine_sigma times the half kernel width. This gives more weight to supersamples near the center of the pick-up.
+
+## --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
+
+If you pass twine_sigma, marginal twining kernel values may become quite small and using them as filter taps makes no sense. Pass a threshold here to suppress kernel values below the threshold. This is mainly to reduce processing time. Use -v to display the kernel and see which kernel values 'survive' the thresholding.
+
 ## --face_fov FOV        field of view of the cube faces of a cubemap input (in degrees)
 
 If an input cubemap has other than ninety degrees field of view per cubeface image, pass
@@ -144,3 +157,84 @@ Some cubemaps have marginal pixels which coincide geometrically with the virtual
 edges. For such cubemaps, set this flag. The default is to consider the pixels evenly
 distributed so that the marginal samples are half a sampling step from the virtual cube's
 (and the cube face image's) edge.
+
+# Technical Notes
+
+One problem with cubemaps is that they are normally stored as concatenations of
+six square images with precisely ninety degrees fov (field of view). This makes
+access to pixels near the edges tricky - if the interpolator used for the purpose
+needs support, marginal pixels don't have them all around, and it has to be gleaned
+from adjoining cube faces, reprojecting content to provide the support. envutil
+uses an internal representation (IR for short) of the cubemap which holds six
+square images with a fov slightly larger than ninety degrees, where the part
+exceeding the 'ninety degrees proper' cubeface image is augmented with pixels
+reprojected from adjoining cube faces. With this additional 'frame', interpolators
+needing support can operate without need for special-casing access to marginal
+pixels. The formation and use of the IR image is transparent, it's used automatically.
+There are two parameters which influence the size of the 'support margin', namely
+--support_min and --tile_width - usually it's best to leave them at their defaults.
+To access pixels in lat/lon environment maps which are marginal, envutil exploits the
+inherent periodicity of the lat/lon image - simple periodicity in the horizontal and
+'over-the-pole' periodicity in the vertical (that's mirroring plus an offset of half
+the image's width).
+
+As an alternative to the antialiasing and interpolation provided by OIIO, envutil
+offers processing with bilinear interpolation and it's own antialiasing filter, using
+a method which I call 'twining'. Twining exploits the fact that the processing builds
+up a pixel pipeline as a functional construct, and parts of the chain of functors can
+be 'wrapped' in other functors which modify their input or output. So twining picks
+the part of the processing chain which handles the conversion from a 2D pick-up
+coordinate to a pixel value and wraps it in an outer functor which calls that bit
+of processing repeatedly with slightly altered coordinates, gathers the results and
+forms a weighted sum from them. The weighted sum is then produced as output of the
+outer functor. The remainder of the pixel pipeline remains unaffected, so the
+mechanism is independent of other precessing steps and can be used in combination
+with all of the interpolators which envutil offers. So using 'twining' together
+with OIIO's environment lookup is quite possible, though it's not sensible, because
+OIIO provides it's own filtering.
+
+From visual inspection of the results, envutil's use of OIIO's lookup seems to produce
+quite soft images. OIIO's lookup is - with the settings envutil uses - conservative
+and makes an effort to avoid aliasing, erring on the side of caution. Of course I
+can't rule out that my use of OIIO's lookup is not coded correctly, but I'm quite
+confident that I've got it right. Using OIIO's lookup is quite involved, because
+it needs the derivatives of the pick-up coordinate relative to the progress of
+the canonical target image coordinate. As of this writing, OIIO's lookup offers
+functions with SIMD parameter set, processing batches of coordinates. Internally,
+though, the coordinates are processed one after the other (albeit with use of
+vertical SIMDization for the single-coordinate lookups). This is one of the reasons
+why this process isn't very fast. OIIO's method of inspecting the derivatives has
+the advantage of being perfectly general, and the lookup can decide for each pixel
+whether it needs to be interpolated or antialiased.
+
+In contrast, using bilinear interpolation (--itp 1) is very fast, but it's not
+adequate for all situations - especially not if there are large differences in
+resolution between input and output. If the scale of the output is much smaller
+than the input's, the use of 'twining' should provide adequate antialiasing.
+When scaling up, bilinear interpolation only produces visible artifacts if the
+scale change is very large (the typical 'star-shaped artifacts'), which makes
+little sense, because there's no gain to be had from scaling up by large
+factors - the content won't improve. Up-scaling with OIIO's lookup uses bicubic
+interpolation, which may be preferable. Ultimately it's up to the user to find
+a suitable process by inspecting the output. I use OIIO's lookup as default to
+honour it's being well-established and well-thought-out, whereas the use of
+bilinear interpolation, optionally with 'twining', still has to prove it's
+suitability, and 'twining' is my invention and not yet tested much - I'm sure
+I'm not the first one to think of this method, but I haven't done research to
+see if I can find similar code 'out there'. What I am sure of is that my
+implementation is fast due to the use of multithreaded horizontal SIMD code
+through the entire processing chain, so I think it's an attractive offer. I'd
+welcome external evaluation of the results and a discussion of the methods;
+please don't hesitate to open issues on the issue tracker if you's like to
+discuss or report back!
+
+There seems to be ambiguity of what constitutes a 'correct' cube face image with
+ninety degrees field of view. In envutil, I code so that each pixel is taken to
+represent a small square section of the image with constant colour. So the
+'ninety degrees proper' extends form the leftmost pixel's left margin to the
+rightmost pixel's right margin. Some cubemap formats provide images where the
+centers of the marginal pixels coincide with the virtual cube's edges, repeating
+each edge in the image it joins up with in the cube. If you process such cubemaps
+with envutil, pass --ctc (which stands for center-to-center). Otherwise, there will
+be subtle errors along the cube face edges which can easily go unnoticed. Make sure
+you figure out which 'flavour' your cubemaps are.

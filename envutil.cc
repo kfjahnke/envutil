@@ -163,7 +163,7 @@
 
 #include <array>
 #include <filesystem>
-#include <zimt/zimt.h>
+#include "zimt/zimt.h"
 #include <OpenImageIO/texture.h>
 #include <OpenImageIO/filesystem.h>
 
@@ -256,7 +256,7 @@ static std::regex field_re;
 std::string input , output , save_ir , ts_options ;
 int extent , support_min , tile_width ;
 int itp , twine , twine_width ;
-double face_fov , twine_sigma ;
+double face_fov , twine_sigma , twine_threshold ;
 
 // helper function to save a zimt array to an image file. I am
 // working with openEXR images here, hence the HALF data type.
@@ -428,7 +428,8 @@ struct twine_t
 // for both. The deltas are set up so that, over all pick-ups,
 // they produce a uniform sampling.
 
-void make_spread ( int w , int h , float d , float sigma ,
+void make_spread ( int w , int h , float d ,
+                   float sigma , float threshold ,
                    std::vector < zimt::xel_t < float , 3 > > & trg )
 {
   float wgt = 1.0 / ( w * h ) ;
@@ -460,11 +461,30 @@ void make_spread ( int w , int h , float d , float sigma ,
     }
   }
 
+  double th_sum = 0.0 ;
+  bool renormalize = false ;
+
   if ( sigma != 0.0 )
   {
     for ( auto & v : trg )
     {
       v[2] /= sum ;
+      if ( v[2] >= threshold )
+      {        
+        th_sum += v[2] ;
+      }
+      else
+      {
+        renormalize = true ;
+        v[2] = 0.0f ;
+      }
+    }
+    if ( renormalize )
+    {
+      for ( auto & v : trg )
+      {
+        v[2] /= th_sum ;
+      }
     }
   }
 
@@ -485,6 +505,22 @@ void make_spread ( int w , int h , float d , float sigma ,
     else
     {
       std::cout << "using box filter for twining" << std::endl ;
+    }
+  }
+
+  if ( renormalize )
+  {
+    auto help = trg ;
+    trg.clear() ;
+    for ( auto v : help )
+    {
+      if ( v[2] > 0.0f )
+        trg.push_back ( v ) ;
+    }
+    if ( verbose )
+    {
+      std::cout << "twining filter taps after after thresholding: "
+                << trg.size() << std::endl ;
     }
   }
 }
@@ -2319,7 +2355,7 @@ void latlon_to_ir ( const zimt::view_t < 2 , pix_t<nchannels> > & latlon ,
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
     make_spread ( twine , twine ,
                   sf.px_to_model * twine_width ,
-                  twine_sigma , twine_v ) ;
+                    twine_sigma , twine_threshold , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
 
@@ -2690,7 +2726,7 @@ void cubemap_to_latlon ( std::unique_ptr < ImageInput > & inp ,
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
     make_spread ( twine , twine ,
                   sf.px_to_model * twine_width ,
-                  twine_sigma , twine_v ) ;
+                    twine_sigma , twine_threshold , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
 
@@ -2825,7 +2861,8 @@ void latlon_to_cubemap ( const std::string & latlon ,
         std::cout << "applying a twine of " << twine << std::endl ;
 
       std::vector < zimt::xel_t < float , 3 > > twine_v ;
-      make_spread ( twine , twine , twine_width , twine_sigma , twine_v ) ;
+      make_spread ( twine , twine , twine_width ,
+                    twine_sigma , twine_threshold , twine_v ) ;
 
       twine_t < nchannels > twined_act ( act , twine_v ) ;
 
@@ -2898,6 +2935,9 @@ int main ( int argc , const char ** argv )
   ap.arg("--twine_sigma TWINE_SIGMA")
     .help("use a truncated gaussian for the twining filter (default: don't)")
     .metavar("TWINE_SIGMA");
+  ap.arg("--twine_threshold TWINE_THRESHOLD")
+    .help("discard twining filter taps below this threshold")
+    .metavar("TWINE_THRESHOLD");
   ap.arg("--face_fov FOV")
     .help("field of view of the cube faces of a cubemap input (in degrees)")
     .metavar("FOV");
@@ -2934,6 +2974,7 @@ int main ( int argc , const char ** argv )
   tile_width = ap["tile_width"].get<int>(64);
   twine_width = ap["twine_width"].get<float>(1.0);
   twine_sigma = ap["twine_sigma"].get<float>(0.0);
+  twine_threshold = ap["twine_threshold"].get<float>(0.0);
   face_fov = ap["face_fov"].get<float>(90.0);
   face_fov *= M_PI / 180.0 ;
 

@@ -138,7 +138,7 @@ target_link_libraries(${_project_name} pthread ${required_libraries})
 #      "-O3 -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
 
 set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
-      "-O3 ${SIMD_LIBRARY}")
+      "-O3 -Wno-enum-compare ${SIMD_LIBRARY}")
 
 # install the binary
 
