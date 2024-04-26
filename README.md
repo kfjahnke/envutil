@@ -84,7 +84,11 @@ cube face image with a frame of additional pixels, producing a vertical concaten
 of six square images with as large or larger field of view than the cubemap's
 representation on disk. The IR is also sized to be a multiple of a given tile
 width, to make it easy to mipmap it. To save the IR to an image file, use this
-option.
+option. The IR image can serve as input to envutil, but you need to tell envutil
+the field of view, which is typically larger than ninety degrees. Since you
+already have the frame of support and a size which is a multiple of the tile
+size, you'd pass --min_support 0 and --tile_size 1 - unless you want to change
+the values.
 
 ## --ts_options OPTIONS  pass comma-separates k=v list of options to OIIO's texture system
 
@@ -225,7 +229,7 @@ see if I can find similar code 'out there'. What I am sure of is that my
 implementation is fast due to the use of multithreaded horizontal SIMD code
 through the entire processing chain, so I think it's an attractive offer. I'd
 welcome external evaluation of the results and a discussion of the methods;
-please don't hesitate to open issues on the issue tracker if you's like to
+please don't hesitate to open issues on the issue tracker if you'd like to
 discuss or report back!
 
 There seems to be ambiguity of what constitutes a 'correct' cube face image with

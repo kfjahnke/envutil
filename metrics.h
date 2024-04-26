@@ -36,7 +36,7 @@
 /*                                                                      */
 /************************************************************************/
 
-#include "zimt/xel.h"
+#include "common.h"
 
 // this structure is used to calculate the metrics of a sixfold_t.
 // These values depend on four input values: the tile size, the
