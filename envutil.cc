@@ -2659,7 +2659,9 @@ void latlon_to_cubemap ( const std::string & latlon ,
       std::string base = cubemap.substr ( 0 , point_pos ) ;
       std::string ext ( ".lux" ) ;
       std::ofstream ofs ( base + ext ) ;
+      ofs << "# lux cubemap script file made with envutil" << std::endl ;
       ofs << "projection=cubemap" << std::endl ;
+      ofs << "cubeface_fov=" << 180.0 / M_PI * sf.face_fov << std::endl ;
       ofs << "cube_right=" << filename6[0] << std::endl ;
       ofs << "cube_left=" << filename6[1] << std::endl ;
       ofs << "cube_top=" << filename6[2] << std::endl ;
