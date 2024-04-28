@@ -37,7 +37,9 @@
 /************************************************************************/
 
 // This header has all the geometrical transformations used to convert
-// between lat/lon and cubemap coordinates.
+// between lat/lon and cubemap coordinates. Then it proceeds to give
+// conversions from coordinates pertaining to the IR image to 3D 'ray'
+// coordinates, both in lux and openEXR convention.
 
 #include "common.h"
 
@@ -213,9 +215,12 @@ struct ray_to_ll_t
 // not a conditional, it's just a handy way of putting the code
 // into a single function without having to write partial template
 // specializations for the six possible face indices.
+// currently unused.
+
+/*
 
 template < face_index_t F , int nchannels >
-struct ir_to_ray
+struct in_face_to_ray
 : public zimt::unary_functor < v2_t , v3_t , LANES >
 {
   // incoming, we have a 2D in-face coordinate in model space
@@ -275,33 +280,37 @@ struct ir_to_ray
   }
 } ;
 
+*/
+
 // this functor converts incoming 2D coordinates pertaining
-// to the entire IR array to 3D ray coordinates. This is
-// the general form - if the face index is known beforehand,
-// instantiate the template above for a more specific functor.
-// We expect the incoming coordinates to be centered - the
-// origin is at the center of the entire IR image (!).
+// to the entire IR array to 3D ray coordinates in lux convention.
 // This functor can serve to populate the IR image: set up a
 // functor yielding model space coordinates pertaining to pixels
 // in the IR image, pass these model space coordinates to this
-// functor, receiving ray coordinates, then glean pixel values
+// functor, receive ray coordinates, then glean pixel values
 // for the given ray by evaluating some functor taking ray
 // coordinates and yielding pixels.
-// The functor takes a single argument: the 'section size'.
-// This is equal to the IR image's width, expressed in model
+// The functor takes two arguments: first the 'section size':
+// this is equal to the IR image's width, expressed in model
 // space units. If the IR image does not have additional support
 // and holds cube face images of precisely ninety degrees fov,
 // the value would be 2.0 precisely. With added support, it's
-// slightly larger.
+// slightly larger. The second argument is the distance, in model
+// space units, from the upper left corner of a section to the
+// cube face image's center. If the cube face image has even width,
+// this is precisely half the section size, but with odd width,
+// this isn't possible, hence the extra argument.
 
 template < int nchannels >
-struct ir_to_ray_gen
+struct ir_to_ray
 : public zimt::unary_functor < v2_t , v3_t , LANES >
 {
-  const double section_size ;
+  const double section_md ;
+  const double refc ;
 
-  ir_to_ray_gen ( double _section_size )
-  : section_size ( _section_size )
+  ir_to_ray ( double _section_md , double _refc )
+  : section_md ( _section_md ) ,
+    refc ( _refc )
   { }
 
   // incoming, we have 2D model space coordinates, with the origin
@@ -316,16 +325,16 @@ struct ir_to_ray_gen
     // up so that a simple division of the y coordinate yields the
     // corresponding section index.
 
-    i_v section ( crd2[1] / section_size ) ;
+    i_v section ( crd2[1] / section_md ) ;
 
     // The incoming coordinates are relative to the upper left
     // corner of the IR image. Now we move to in-face coordinates,
     // which are centered on the cube face we're dealing with.
 
-    crd2[1] -= section * section_size ;
-    crd2    -= section_size / 2.0 ;
+    crd2[1] -= section * section_md ;
+    crd2    -= refc ;
 
-    // the numerical constants can also yield the 'dominant' axis
+    // the section number can also yield the 'dominant' axis
     // by dividing the value by two (another property which is
     // deliberate):
 
@@ -396,17 +405,19 @@ struct ir_to_ray_gen
 // which are the negative of zimt's right and down).
 
 template < int nchannels >
-struct ir_to_exr_gen
+struct ir_to_exr
 : public zimt::unary_functor < v2_t , v3_t , LANES >
 {
-  const double section_size ;
+  const double section_md ;
+  const double refc ;
 
-  ir_to_exr_gen ( double _section_size )
-  : section_size ( _section_size )
+  ir_to_exr ( double _section_md , double _refc )
+  : section_md ( _section_md ) ,
+    refc ( _refc )
   { }
 
   // incoming, we have 2D model space coordinates, with the origin
-  // at the (total!) IR image's center.
+  // at the (total!) IR image's upper left corner.
 
   template < typename I , typename O >
   void eval ( const I & _crd2 , O & crd3 ) const
@@ -417,16 +428,16 @@ struct ir_to_exr_gen
     // up so that a simple division of the y coordinate yields the
     // corresponding section index.
 
-    i_v section ( crd2[1] / section_size ) ;
+    i_v section ( crd2[1] / section_md ) ;
 
     // The incoming coordinates are relative to the upper left
     // corner of the IR image. Now we move to in-face coordinates,
     // which are centered on the cube face we're dealing with.
 
-    crd2[1] -= section * section_size ;
-    crd2    -= section_size / 2.0 ;
+    crd2[1] -= section * section_md ;
+    crd2    -= refc ;
 
-    // the numerical constants can also yield the 'dominant' axis
+    // the section number can also yield the 'dominant' axis
     // by dividing the value by two (another property which is
     // deliberate):
 

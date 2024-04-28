@@ -171,7 +171,6 @@
 
 using namespace OIIO ;
 
-
 // some globals, which will be set via argparse in main
 
 #include <regex>
@@ -179,12 +178,14 @@ using namespace OIIO ;
 
 static bool verbose = false;
 static bool ctc = false ;
-static bool help    = false;
+static bool help    = false ;
+static bool store6 = false ;
+static bool store6_lux = false ;
 static std::string metamatch;
 static std::regex field_re;
 std::string input , output , save_ir , ts_options ;
-int extent , support_min , tile_width ;
-int itp , twine , twine_width ;
+int extent , support_min_px , tile_px ;
+int itp , twine , twine_px ;
 double face_fov , twine_sigma , twine_threshold ;
 
 // helper function to save a zimt array to an image file. I am
@@ -216,6 +217,34 @@ void save_array ( const std::string & filename ,
   out->close();
 }
 
+void six_names ( const std::string & name ,
+                 std::vector < std::string > & name6 )
+{
+  auto point_pos = name.find_last_of ( "." ) ;
+  assert ( point_pos != std::string::npos ) ;
+  std::string base = name.substr ( 0 , point_pos ) ;
+  std::string ext = name.substr ( point_pos ) ;
+  name6.clear() ;
+  if ( store6_lux )
+  {
+    name6.push_back ( base + "_right" + ext ) ;
+    name6.push_back ( base + "_left" + ext ) ;
+    name6.push_back ( base + "_top" + ext ) ;
+    name6.push_back ( base + "_bottom" + ext ) ;
+    name6.push_back ( base + "_back" + ext ) ;
+    name6.push_back ( base + "_front" + ext ) ;
+  }
+  else
+  {
+    name6.push_back ( base + "_left" + ext ) ;
+    name6.push_back ( base + "_right" + ext ) ;
+    name6.push_back ( base + "_top" + ext ) ;
+    name6.push_back ( base + "_bottom" + ext ) ;
+    name6.push_back ( base + "_front" + ext ) ;
+    name6.push_back ( base + "_back" + ext ) ;
+  }
+}
+
 // as an augmentation which also can reduce alisasing
 // if certain criteria are met, we introduce class twine_t.
 // The signal is evaluated several times in the close vicinity
@@ -237,9 +266,9 @@ void save_array ( const std::string & filename ,
 // form of filter, which can locate the contributing pick-ups at
 // arbitrary distance from the central ('un-twined') target
 // coordinate and with arbitrary weights. This is not exploited
-// here. Likely candidates would be circular patterns and gaussians.
+// here. Likely candidates would be e.g. circular patterns.
 
-template < int nchannels >
+template < std::size_t nchannels >
 struct twine_t
 : public zimt::unary_functor
            < v2_t , zimt::xel_t < float , nchannels > , LANES >
@@ -392,7 +421,7 @@ void make_spread ( int w , int h , float d ,
 // somewhat arbitrary - I associate 'front' with the center of
 // a full spherical image and 'left' with the first image in the
 // cubemap. Note, again, that openEXR's 'own' cubemap format
-// uses slightly larger cube faces than what I use here.
+// may use slightly larger cube faces than what I use here.
 // The sixfold_t object also combines the six images in one
 // array, but it adds a frame of additional 'support' pixels
 // around each square image to allow for interpolation with
@@ -410,32 +439,17 @@ void make_spread ( int w , int h , float d ,
 // simple bilinear interpolation directly from the IR image.
 // The template argument 'nchannels' is the number of channels
 // in the image. We accept up to four in main - RGBA should
-// come in with associated alpha.
+// come in with associated alpha, so that we can formulate
+// arithmetic with pixel values generically.
 
-template < int nchannels >
+template < std::size_t nchannels >
 struct sixfold_t
+: public metrics_t
 {
   // shorthand for pixels and SIMDized pixels
 
   typedef zimt::xel_t < float , nchannels > px_t ;
   typedef zimt::simdized_type < px_t , LANES > px_v ;
-
-  // we keep a separate object holding the metrics. This object
-  // is quick to compute and light-weight, so we can generate one
-  // and use it to inform const members in the sixfold_t.
-
-  const metrics_t metrics ;
-
-  // These references will bind to members of the metrics object.
-  // This is merely for cenvenience.
-
-  const std::size_t & face_width ;
-  const std::size_t & section_width ;
-  const std::size_t & tile_width ;
-  const std::size_t & frame_width ;
-  const double & px_to_model ;
-  const double & model_to_px ;
-  const bool & discrete90 ;
 
   // pointers to an OIIO texture system and an OIIO texture handle.
   // These are only used if the pick-up is done using OIIO's
@@ -453,44 +467,45 @@ struct sixfold_t
   // We can only create a zimt::array_t if we know it's extent.
   // So we use a static function calculating the size via a
   // metrics object. The calculation is more involved than what
-  // we want to pack into an initializer expression.
+  // we want to pack into an initializer expression. sixfold_t
+  // inherits from metrics_t, but we can't exploit that in a
+  // static member, but it's lightweight.
 
-  static shape_type get_store_shape ( std::size_t face_width ,
+  static shape_type get_store_shape ( std::size_t face_px ,
                                       double face_fov ,
-                                      std::size_t support_min ,
-                                      std::size_t tile_width )
+                                      std::size_t support_min_px ,
+                                      std::size_t tile_px )
   {
-    metrics_t metrics ( face_width , face_fov , support_min , tile_width ) ;
-    shape_type shape { metrics.section_width , 6 * metrics.section_width } ;
+    metrics_t metrics ( face_px , face_fov , support_min_px , tile_px ) ;
+    shape_type shape { metrics.section_px , 6 * metrics.section_px } ;
     return shape ;
   }
 
-  // Note how, for now, we don't exploit all the possibilities in
-  // the metrics_t object - like cube face images with more than
-  // ninety degrees fov - but limit the scope to incoming 'proper'
-  // cubemaps with cube face images spanning precisely ninety degrees.
-
-  sixfold_t ( std::size_t _face_width ,
-              std::size_t _support_min = 4UL ,
-              std::size_t _tile_width = 64UL ,
+  sixfold_t ( std::size_t _face_px ,
+              std::size_t _support_min_px = 4UL ,
+              std::size_t _tile_px = 64UL ,
               double _face_fov = M_PI_2 )
-  : metrics ( _face_width , _face_fov , _support_min , _tile_width ) ,
-    face_width ( metrics.face_width ) ,
-    tile_width ( metrics.tile_width ) ,
-    section_width ( metrics.section_width ) ,
-    frame_width ( metrics.frame_width ) ,
-    px_to_model ( metrics.px_to_model ) ,
-    model_to_px ( metrics.model_to_px ) ,
-    discrete90 ( metrics.discrete90 ) ,
-    store ( get_store_shape ( _face_width , _face_fov ,
-                              _support_min , _tile_width ) ) ,
+  : metrics_t ( _face_px , _face_fov , _support_min_px , _tile_px ) ,
+    store ( get_store_shape ( _face_px , _face_fov ,
+                              _support_min_px , _tile_px ) ) ,
     ts ( nullptr ) ,
     th ( nullptr )
   {
+    // let the user know the field of view of IR sections. This
+    // is only possible if the cube face images have even size,
+    // otherwise the cube face image's center can't coincide
+    // with a section's center - unless the section is also
+    // odd-sized, which only occurs when the tile size is one.
+
     if ( verbose )
-      std::cout << "IR sections have "
-                << metrics.outer_fov * 180.0 / M_PI
-                << " degrees fov" << std::endl ;
+    {
+      if ( left_frame_px != right_frame_px )
+        std::cout << "cube face is not centered in IR" << std::endl ;
+      else
+        std::cout << "IR sections have "
+                  << atan ( section_md / 2.0 ) * 360.0 / M_PI
+                  << " degrees fov" << std::endl ;
+    }
   }
 
   // We can use the fall-back bilinear interpolation to pick up
@@ -524,19 +539,19 @@ struct sixfold_t
     // the calling code should already have looked at the image and
     // gleaned the face width, but here we check again:
 
-    assert ( xres == face_width ) ;
-    assert ( yres == 6 * face_width ) ;
+    assert ( xres == face_px ) ;
+    assert ( yres == 6 * face_px ) ;
 
     // find the location of the first cube face's upper left corner
     // in the 'store' array. The frame of additional support around
     // the cube face image is filled in later on.
 
     px_t * p_ul = store.data() ;
-    p_ul += ( frame_width * store.strides ) . sum() ;
+    p_ul += ( left_frame_px * store.strides ) . sum() ;
 
     // what's the offset to the same location in the next section?
 
-    std::ptrdiff_t offset = section_width * section_width ;
+    std::ptrdiff_t offset = section_px * section_px ;
 
     // read the six cube face images from the 1:6 stripe into the
     // appropriate slots in the sixfold_t object's 'store' array.
@@ -559,7 +574,7 @@ struct sixfold_t
         //                               stride_t xstride = AutoStride,
         //                               stride_t ystride = AutoStride)
       
-        // note how we read face_width scanlines in one go, using
+        // note how we read face_px scanlines in one go, using
         // appropriate strides to place the image data inside the
         // larger 'store' array, converting to float as we go along.
         // The channels are capped at nchannels. We ask OIIO to
@@ -569,7 +584,7 @@ struct sixfold_t
       
         auto success =
         inp->read_scanlines ( 0 , 0 ,
-                              face * face_width , (face+1) * face_width ,
+                              face * face_px , (face+1) * face_px ,
                               0 , 0 , nchannels ,
                               TypeDesc::FLOAT , p_trg ,
                               nchannels * 4 ,
@@ -585,15 +600,15 @@ struct sixfold_t
       // top of each other' populating the third spatial dimension
 
       zimt::array_t < 3 , px_t >
-        buffer ( { face_width , face_width , 6UL } ) ;
+        buffer ( { face_px , face_px , 6UL } ) ;
       
       // and a view to the store with the same shape, but strides to
       // match the metrics of the target memory area in the store
         
       zimt::view_t < 3 , px_t >
         target ( p_ul ,
-                { 1L , long(section_width) , long(offset) } ,
-                { face_width , face_width , 6UL } ) ;
+                { 1L , long(section_px) , long(offset) } ,
+                { face_px , face_px , 6UL } ) ;
       
       inp->read_image ( 0 , 0 , 0 , nchannels ,
                         TypeDesc::FLOAT ,
@@ -602,6 +617,62 @@ struct sixfold_t
       // zimt handles the data transfer from the buffer to the view
 
       target.copy_data ( buffer ) ;
+    }
+  }
+
+  void load ( const std::vector < std::string > & filename6 )
+  {
+    // make sure there are six file names
+
+    assert ( filename6.size() == 6 ) ;
+
+    // find the location of the first cube face's upper left corner
+    // in the 'store' array. The frame of additional support around
+    // the cube face image is filled in later on.
+
+    px_t * p_ul = store.data() ;
+    p_ul += ( left_frame_px * store.strides ) . sum() ;
+
+    // what's the offset to the same location in the next section?
+
+    std::ptrdiff_t offset = section_px * section_px ;
+
+    // set up a buffer for a single cube face image
+
+    zimt::array_t < 2 , px_t >
+      buffer ( { face_px , face_px } ) ;
+
+    // read the six cube face images into the appropriate slots in
+    // the sixfold_t object's 'store' array. We're a bit sloppy here:
+    // we might special-case for scanline-based images and read them
+    // directly to the IR image, but this way we can even accept a
+    // mixed set as long as all images are equally sized.
+
+    for ( std::size_t face = 0 ; face < 6 ; face++ )
+    {
+      auto inp = ImageInput::open ( filename6[face] ) ;
+      assert ( inp != nullptr ) ;
+
+      const ImageSpec &spec = inp->spec() ;
+      std::size_t w = spec.width ;
+      std::size_t h = spec.height ;
+
+      assert ( w == h ) ;
+      assert ( w == face_px ) ;
+
+      // 'target' is the view to the pixels in the IR image we
+      // want to acquire:
+
+      zimt::view_t < 2 , px_t >
+        target ( p_ul + face * offset ,
+                 store.strides , { face_px , face_px } ) ;
+
+      inp->read_image ( 0 , 0 , 0 , nchannels ,
+                        TypeDesc::FLOAT ,
+                        buffer.data() ) ;
+
+      target.copy_data ( buffer ) ;
+      inp->close() ;
     }
   }
 
@@ -614,11 +685,11 @@ struct sixfold_t
 
   void store_cubemap ( const std::string & filename ) const
   {
-    assert ( metrics.discrete90 ) ;
+    assert ( discrete90 ) ;
 
-    auto inner_width = section_width - 2 * frame_width ;
-    const int xres = inner_width ;
-    const int yres = 6 * inner_width ;
+    auto inner_px = section_px - ( left_frame_px + right_frame_px ) ;
+    const int xres = inner_px ;
+    const int yres = 6 * inner_px ;
 
     std::unique_ptr<ImageOutput> out
       = ImageOutput::create ( filename.c_str() ) ;
@@ -629,8 +700,8 @@ struct sixfold_t
     out->open ( filename.c_str() , spec ) ;
 
     auto p_base = store.data() ;
-    p_base += ( frame_width * store.strides ) . sum() ;
-    auto p_offset = section_width * section_width ;
+    p_base += ( left_frame_px * store.strides ) . sum() ;
+    auto p_offset = section_px * section_px ;
 
     for ( int face = 0 ; face < 6 ; face++ )
     {
@@ -641,8 +712,8 @@ struct sixfold_t
       //                                stride_t ystride = AutoStride )
 
       auto success =
-      out->write_scanlines (   face * inner_width ,
-                             ( face + 1 ) * inner_width ,
+      out->write_scanlines (   face * inner_px ,
+                             ( face + 1 ) * inner_px ,
                                0 ,
                                TypeDesc::FLOAT ,
                                p_base + face * p_offset ,
@@ -655,6 +726,50 @@ struct sixfold_t
     out->close() ;
   }
 
+  void store_cubemap ( const std::vector < std::string > & filename6 ) const
+  {
+    assert ( discrete90 ) ;
+
+    auto inner_px = section_px - ( left_frame_px + right_frame_px ) ;
+    const int xres = inner_px ;
+    const int yres = inner_px ;
+
+    auto p_base = store.data() ;
+    p_base += ( left_frame_px * store.strides ) . sum() ;
+    auto p_offset = section_px * section_px ;
+
+  if ( verbose )
+    std::cout << "store_cubemap: size 6 * " << xres << " X " << yres << std::endl ;
+
+    for ( int face = 0 ; face < 6 ; face++ )
+    {
+      std::unique_ptr<ImageOutput> out
+        = ImageOutput::create ( filename6[face].c_str() ) ;
+      assert ( out != nullptr ) ;
+
+      ImageSpec spec ( xres , yres , nchannels , TypeDesc::HALF ) ;
+      out->open ( filename6[face].c_str() , spec ) ;
+
+      // virtual bool write_scanlines ( int ybegin , int yend , int z ,
+      //                                TypeDesc format ,
+      //                                const void * data ,
+      //                                stride_t xstride = AutoStride ,
+      //                                stride_t ystride = AutoStride )
+
+      auto success =
+      out->write_scanlines (   0 ,
+                               inner_px ,
+                               0 ,
+                               TypeDesc::FLOAT ,
+                               p_base + face * p_offset ,
+                               store.strides[0] * nchannels * 4 ,
+                               store.strides[1] * nchannels * 4 ) ;
+
+      assert ( success ) ;
+      out->close() ;
+    }
+  }
+
   // this is coded further down because it needs additional
   // functors. It generates a cubemap with the given width from
   // the data in the internal representation. If the central
@@ -665,6 +780,10 @@ struct sixfold_t
   // bilinear interpolation.
 
   void gen_cubemap ( const std::string & filename ,
+                     const std::size_t & width ,
+                     const int degree = 1 ) const ;
+
+  void gen_cubemap ( const std::vector < std::string > & filename6 ,
                      const std::size_t & width ,
                      const int degree = 1 ) const ;
 
@@ -912,7 +1031,7 @@ struct sixfold_t
                           const int & degree ) const
   {
     crd2_v pickup ;
-    metrics.get_pickup_coordinate ( face , in_face , pickup ) ;
+    get_pickup_coordinate ( face , in_face , pickup ) ;
 
     if ( degree == 0 )
     {
@@ -1036,7 +1155,7 @@ struct sixfold_t
                               // const float *s, const float *t,
                               // const float *dsdx, const float *dtdx,
                               // const float *dsdy, const float *dtdy,
-                              // int nchannels,
+                              // std::size_t nchannels,
                               // float *result,
                               // float *dresultds = nullptr,
                               // float *dresultdt = nullptr)
@@ -1100,15 +1219,15 @@ struct sixfold_t
                           const f_v & dtdy ,
                           TextureOptBatch & bo ) const
   {
-    crd2_v pickup ;
+    crd2_v pickup_tx ;
 
     // obtain the pickup coordinate in texture units (in [0,1])
 
-    metrics.get_pickup_coordinate_tx ( face , in_face , pickup ) ;
+    get_pickup_coordinate_tx ( face , in_face , pickup_tx ) ;
 
     // use OIIO to get the pixel value
 
-    get_filtered_px ( pickup , px , dsdx , dtdx , dsdy , dtdy , bo) ;
+    get_filtered_px ( pickup_tx , px , dsdx , dtdx , dsdy , dtdy , bo ) ;
   }
 
   // After the cube faces have been read from disk, they are surrounded
@@ -1133,14 +1252,14 @@ struct sixfold_t
     {
       // get a pointer to the upper left of the cube face 'proper'
 
-      auto * p_frame = p_base + face * section_width * store.strides[1]
-                              + frame_width * store.strides[1]
-                              + frame_width * store.strides[0] ;
+      auto * p_frame = p_base + face * section_px * store.strides[1]
+                              + left_frame_px * store.strides[1]
+                              + left_frame_px * store.strides[0] ;
 
       // get a zimt view to the current cube face
 
       zimt::view_t < 2 , px_t > cubeface
-        ( p_frame , store.strides , { face_width , face_width } ) ;
+        ( p_frame , store.strides , { face_px , face_px } ) ;
 
       // we use 2D discrete coordinates
 
@@ -1148,25 +1267,25 @@ struct sixfold_t
 
       // mirror the horizontal edges
 
-      for ( int x = -1 ; x <= int ( face_width ) ; x++ )
+      for ( int x = -1 ; x <= int ( face_px ) ; x++ )
       {
         ix_t src { x ,  0 } ;
         ix_t trg { x , -1 } ;
         cubeface [ trg ] = cubeface [ src ] ;
-        src [ 1 ] = face_width - 1 ;
-        trg [ 1 ] = face_width ;
+        src [ 1 ] = face_px - 1 ;
+        trg [ 1 ] = face_px ;
         cubeface [ trg ] = cubeface [ src ] ;
       }
 
       // and the vertical edges
 
-      for ( int y = -1 ; y <= int ( face_width ) ; y++ )
+      for ( int y = -1 ; y <= int ( face_px ) ; y++ )
       {
         ix_t src {  0 , y } ;
         ix_t trg { -1 , y } ;
         cubeface [ trg ] = cubeface [ src ] ;
-        src [ 0 ] = face_width - 1 ;
-        trg [ 0 ] = face_width ;
+        src [ 0 ] = face_px - 1 ;
+        trg [ 0 ] = face_px ;
         cubeface [ trg ] = cubeface [ src ] ;
       }
     }
@@ -1307,7 +1426,7 @@ struct sixfold_t
   void fill_support ( int degree )
 
   {
-    if ( frame_width == 0 )
+    if ( left_frame_px == 0 && right_frame_px == 0 )
       return ;
 
     auto * p_base = store.data() ;
@@ -1320,7 +1439,7 @@ struct sixfold_t
     
       // get a pointer to the upper left of the section of the IR
 
-      auto * p_frame = p_base + face * section_width * store.strides[1] ;
+      auto * p_frame = p_base + face * section_px * store.strides[1] ;
       
       // we form a view to the current section of the array in the
       // sixfold_t object. The shape of this view is the 'notional
@@ -1328,7 +1447,7 @@ struct sixfold_t
 
       zimt::view_t < 2 , px_t >
         section ( p_frame , store.strides ,
-                { section_width , section_width } ) ;
+                { section_px , section_px } ) ;
 
       auto & shp = section.shape ;
 
@@ -1348,39 +1467,51 @@ struct sixfold_t
       // sampling mathematics entirely in int until the stage
       // where we do the unavoidable division to project the
       // ray onto a plane. Without the doubling, we'd have to
-      // start out at ( section_width -1 ) / 2, which can't be
+      // start out at ( section_px -1 ) / 2, which can't be
       // expressed precisely in int.
 
-      auto ishift = section_width - 1 ;
+      auto ishift = section_px - 1 ;
       zimt::linspace_t < int , 2 , 2 , LANES > ls ( -ishift , 2 ) ;
 
       zimt::storer < float , nchannels , 2 , LANES > st ( section ) ;
       
       // fill in the stripe above the cube face
 
-      bill.lower_limit = { 0 , 0 } ;
-      bill.upper_limit = { long(section_width) , long(frame_width) } ;
-      zimt::process ( shp , ls , fill_frame , st , bill ) ;
+      if ( left_frame_px > 0 )
+      {
+        bill.lower_limit = { 0 , 0 } ;
+        bill.upper_limit = { long(section_px) , long(left_frame_px) } ;
+        zimt::process ( shp , ls , fill_frame , st , bill ) ;
+      }
 
       // fill in the stripe below the cube face
 
-      bill.lower_limit = { 0 , long(frame_width + face_width) } ;
-      bill.upper_limit = { long(section_width) , long(section_width) } ;
-      zimt::process ( shp , ls , fill_frame , st , bill ) ;
+      if ( right_frame_px > 0 )
+      {
+        bill.lower_limit = { 0 , long(section_px - right_frame_px) } ;
+        bill.upper_limit = { long(section_px) , long(section_px) } ;
+        zimt::process ( shp , ls , fill_frame , st , bill ) ;
+      }
 
       // fill in the stripe to the left of the cube face
 
-      bill.lower_limit = { 0 , long(frame_width) } ;
-      bill.upper_limit = { long(frame_width) ,
-                          long(section_width) - long(frame_width) } ;
-      zimt::process ( shp , ls , fill_frame , st , bill ) ;
+      if ( left_frame_px > 0 )
+      {
+        bill.lower_limit = { 0 , long(left_frame_px) } ;
+        bill.upper_limit = { long(left_frame_px) ,
+                            long(section_px) - long(right_frame_px) } ;
+        zimt::process ( shp , ls , fill_frame , st , bill ) ;
+      }
 
       // fill in the stripe to the right of the cube face
 
-      bill.lower_limit = { long(frame_width + face_width) ,
-                          long(frame_width) } ;
-      bill.upper_limit = { long(section_width) ,
-                          long(section_width) - long(frame_width) } ;
+      if ( right_frame_px > 0 )
+      {
+        bill.lower_limit = { long(left_frame_px + face_px) ,
+                             long(left_frame_px) } ;
+        bill.upper_limit = { long(section_px) ,
+                             long(section_px) - long(right_frame_px) } ;
+      }
 
       zimt::process ( shp , ls , fill_frame , st , bill ) ;
     }
@@ -1389,7 +1520,7 @@ struct sixfold_t
 
 // this functor takes float 2D in-face coordinates and yields pixels.
 
-template < int nchannels >
+template < std::size_t nchannels >
 struct fill_ir_t
 : public zimt::unary_functor
     < v2_t , zimt::xel_t < float , nchannels > , LANES >
@@ -1418,7 +1549,7 @@ struct fill_ir_t
   }
 } ;
 
-template < int nchannels >
+template < std::size_t nchannels >
 void sixfold_t < nchannels > :: gen_cubemap
   ( const std::string & filename ,
     const std::size_t & width ,
@@ -1426,9 +1557,12 @@ void sixfold_t < nchannels > :: gen_cubemap
 {
   // if the IR already has the data handy, we use store_cubemap
 
-  if (    metrics.discrete90
-       && ( width == section_width - 2 * frame_width ) )
+  if (    discrete90
+       && ( section_px == ( left_frame_px + width + right_frame_px ) )
+     )
   {
+    if ( verbose )
+      std::cout << "using store_cubemap" << std::endl ;
     store_cubemap ( filename ) ;
     return ;
   }
@@ -1437,6 +1571,9 @@ void sixfold_t < nchannels > :: gen_cubemap
 
   const int xres = width ;
   const int yres = 6 * width ;
+
+  if ( verbose )
+    std::cout << "gen_cubemap: size " << xres << " X " << yres << std::endl ;
 
   std::unique_ptr<ImageOutput> out
     = ImageOutput::create ( filename.c_str() ) ;
@@ -1456,8 +1593,8 @@ void sixfold_t < nchannels > :: gen_cubemap
   {
     // set up the sample step width and the starting point
 
-    double delta = 2.0 / double ( width ) ;
-    double start = -1.0 + delta / 2.0 ;
+    double delta = px_to_model ;
+    double start = px_to_model / 2.0 - radius_md ;
 
     // set up a linspace as data source and a storer as data sink
 
@@ -1496,6 +1633,77 @@ void sixfold_t < nchannels > :: gen_cubemap
   out->close() ;
 }
 
+template < std::size_t nchannels >
+void sixfold_t < nchannels > :: gen_cubemap
+  ( const std::vector < std::string > & filename6 ,
+    const std::size_t & width ,
+    const int degree ) const
+{
+  // if the IR already has the data handy, we use store_cubemap
+
+  if (    discrete90
+       && ( section_px == ( left_frame_px + width + right_frame_px ) )
+     )
+  {
+    if ( verbose )
+      std::cout << "using store_cubemap" << std::endl ;
+    store_cubemap ( filename6 ) ;
+    return ;
+  }
+
+  // otherwise we have to calculate the data by interpolation
+
+  const int xres = width ;
+  const int yres = width ;
+
+  if ( verbose )
+    std::cout << "gen_cubemap: size 6 * " << xres << " X " << yres << std::endl ;
+
+  for ( int face = 0 ; face < 6 ; face++ )
+  {
+    std::unique_ptr<ImageOutput> out
+      = ImageOutput::create ( filename6[face].c_str() ) ;
+
+    assert ( out ) ;
+
+    ImageSpec spec ( xres , yres , nchannels , TypeDesc::HALF ) ;
+    out->open ( filename6[face].c_str() , spec ) ;
+
+    // set up an array for a single cube face
+
+    zimt::array_t < 2 , px_t > section ( { width , width } ) ;
+
+    // set up the sample step width and the starting point
+
+    double delta = px_to_model ;
+    double start = px_to_model / 2.0 - radius_md ;
+
+    // set up a linspace as data source and a storer as data sink
+
+    zimt::linspace_t < float , 2 , 2 , LANES > ls ( start , delta ) ;
+    zimt::storer < float , nchannels , 2 , LANES > st ( section ) ;
+
+    // set up the act functor. We have incoming in-face coordinates
+    // and a fixed face index, and we have fill_ir_t just for that.
+    // We do the filling-in with bilinear interpolation, which is
+    // perfectly adequate for the purpose: the data we generate are
+    // only support, they won't make it into the output.
+
+    fill_ir_t fill_ir ( *this , face , degree ) ;
+
+    // fill the 'section' array with pixel data
+
+    zimt::process ( section.shape , ls , fill_ir , st ) ;
+
+    // write the cube face data to the output file
+
+    auto success = out->write_image ( TypeDesc::FLOAT , section.data() ) ;
+
+    assert ( success ) ;
+    out->close() ;
+  }
+}
+
 // ll_to_px_t is the functor used as 'act' functor for zimt::process
 // to produce pixel values for lat/lon coordinates.
 // This functor accesses the data in the sixfold_t object, yielding
@@ -1512,7 +1720,7 @@ void sixfold_t < nchannels > :: gen_cubemap
 // planes which surround the origin at 1.0 units distance in model
 // space.
 
-template < int nchannels >
+template < std::size_t nchannels >
 struct ll_to_px_t
 : public zimt::unary_functor
    < v2_t , zimt::xel_t < float , nchannels > , LANES >
@@ -1674,7 +1882,7 @@ struct ll_to_px_t
 // this functor is unly suitable for moderate up-scaling, and when
 // down-scaling, 'twining' should be used to avoid aliasing.
 
-template < int nchannels >
+template < std::size_t nchannels >
 struct eval_latlon
 : public zimt::unary_functor
            < v2_t , zimt::xel_t < float , nchannels > , LANES >
@@ -1862,7 +2070,7 @@ struct eval_env
   int width ;
   double px2_to_model ;
   const sixfold_t < nchannels > & sf ;
-  ir_to_exr_gen < nchannels > ir_to_exr ;
+  ir_to_exr < nchannels > to_exr ;
 
   // pull in the c'tor arguments
 
@@ -1873,10 +2081,10 @@ struct eval_env
   : ts ( _ts ) ,
     batch_options ( _batch_options ) ,
     th ( _th ) ,
-    width ( int ( _sf.section_width ) ) ,
+    width ( int ( _sf.section_px ) ) ,
     px2_to_model ( _sf.px_to_model * 0.5 ) ,
     sf ( _sf ) ,
-    ir_to_exr ( _sf.metrics.section_size )
+    to_exr ( _sf.section_md , _sf.refc_md )
    { }
 
   // set up the eval function.
@@ -1924,9 +2132,9 @@ struct eval_env
     
     crd3_v p00r , p10r , p01r ;
     
-    ir_to_exr.eval ( p00 , p00r ) ;
-    ir_to_exr.eval ( p10 , p10r ) ;
-    ir_to_exr.eval ( p01 , p01r ) ;
+    to_exr.eval ( p00 , p00r ) ;
+    to_exr.eval ( p10 , p10r ) ;
+    to_exr.eval ( p01 , p01r ) ;
 
     // with the ray coordinates for the current coordinate and it's
     // two neighbours, we can obtain a reasonable approximation of
@@ -1996,7 +2204,7 @@ struct eval_env
 // cubemap_to_latlon converts a cubemap to a lat/lon environment
 // map, a.k.a full spherical panorama.
 
-template < int nchannels >
+template < std::size_t nchannels >
 void cubemap_to_latlon ( std::unique_ptr < ImageInput > & inp ,
                          std::size_t height ,
                          const std::string & latlon ,
@@ -2019,8 +2227,8 @@ void cubemap_to_latlon ( std::unique_ptr < ImageInput > & inp ,
   // to pull in the image data
 
   sixfold_t<nchannels> sf ( spec.width ,
-                            support_min ,
-                            tile_width ,
+                            support_min_px ,
+                            tile_px ,
                             face_fov ) ;
 
   // load the cube faces into slots in the array in the
@@ -2056,7 +2264,7 @@ void cubemap_to_latlon ( std::unique_ptr < ImageInput > & inp ,
   // side. A sloppy approach would be to initialize the area
   // with, say, medium grey.
 
-  if ( sf.metrics.inherent_support == 0 )
+  if ( sf.inherent_support_px == 0 )
     sf.mirror_around() ;
 
   // to refine the result, we generate support with bilinear
@@ -2199,7 +2407,7 @@ void cubemap_to_latlon ( std::unique_ptr < ImageInput > & inp ,
 
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
     make_spread ( twine , twine ,
-                  sf.px_to_model * twine_width ,
+                  sf.px_to_model * twine_px ,
                     twine_sigma , twine_threshold , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
@@ -2254,7 +2462,7 @@ void cubemap_to_latlon ( std::unique_ptr < ImageInput > & inp ,
   save_array<nchannels> ( latlon , trg , true ) ;
 }
 
-template < int nchannels >
+template < std::size_t nchannels >
 using pix_t = zimt::xel_t < float , nchannels > ;
 
 // this function takes a lat/lon image as it's input and transforms
@@ -2264,7 +2472,7 @@ using pix_t = zimt::xel_t < float , nchannels > ;
 // the lat/lon image we have just created, or if the cubemap is
 // made from a lat/lon image passed in as a file.
 
-template < int nchannels >
+template < std::size_t nchannels >
 void latlon_to_ir ( const zimt::view_t < 2 , pix_t<nchannels> > & latlon ,
                     sixfold_t < nchannels > & sf )
 {
@@ -2293,7 +2501,8 @@ void latlon_to_ir ( const zimt::view_t < 2 , pix_t<nchannels> > & latlon ,
   // this one converts coordinates pertaining to the IR image to
   // 3D ray coordinates.
 
-  ir_to_ray_gen < nchannels > itr ( sf.metrics.section_size ) ;
+  ir_to_ray < nchannels > itr
+    ( sf.section_md , sf.refc_md ) ;
 
   // this one converts 3D ray coordinates to lat/lon values
 
@@ -2321,7 +2530,7 @@ void latlon_to_ir ( const zimt::view_t < 2 , pix_t<nchannels> > & latlon ,
 
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
     make_spread ( twine , twine ,
-                  sf.px_to_model * twine_width ,
+                  sf.px_to_model * twine_px ,
                     twine_sigma , twine_threshold , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
@@ -2342,15 +2551,15 @@ void latlon_to_ir ( const zimt::view_t < 2 , pix_t<nchannels> > & latlon ,
 // interpolator is used: degree 1 uses direct bilinear interpolation,
 // and degree -1 uses OIIO's anisotropic antialiasing filter.
 
-template < int nchannels >
+template < std::size_t nchannels >
 void latlon_to_cubemap ( const std::string & latlon ,
                          std::size_t width ,
                          const std::string & cubemap ,
                          int degree )
 {
   sixfold_t<nchannels> sf ( width ,
-                            support_min ,
-                            tile_width ,
+                            support_min_px ,
+                            tile_px ,
                             face_fov ) ;
 
   if ( degree == 1 )
@@ -2417,7 +2626,7 @@ void latlon_to_cubemap ( const std::string & latlon ,
         std::cout << "applying a twine of " << twine << std::endl ;
 
       std::vector < zimt::xel_t < float , 3 > > twine_v ;
-      make_spread ( twine , twine , twine_width ,
+      make_spread ( twine , twine , twine_px ,
                     twine_sigma , twine_threshold , twine_v ) ;
 
       twine_t < nchannels > twined_act ( act , twine_v ) ;
@@ -2437,10 +2646,33 @@ void latlon_to_cubemap ( const std::string & latlon ,
   if ( verbose )
     std::cout << "saving cubemap to '" << cubemap << "'" << std::endl ;
 
-  if ( sf.discrete90 )
-    sf.store_cubemap ( cubemap ) ;
+  if ( store6 )
+  {
+    std::vector < std::string > filename6 ;
+    six_names ( cubemap , filename6 ) ;
+    sf.gen_cubemap ( filename6 , width , itp ) ;
+    if ( store6_lux )
+    {
+      // write a .lux file
+      auto point_pos = cubemap.find_last_of ( "." ) ;
+      assert ( point_pos != std::string::npos ) ;
+      std::string base = cubemap.substr ( 0 , point_pos ) ;
+      std::string ext ( ".lux" ) ;
+      std::ofstream ofs ( base + ext ) ;
+      ofs << "projection=cubemap" << std::endl ;
+      ofs << "cube_right=" << filename6[0] << std::endl ;
+      ofs << "cube_left=" << filename6[1] << std::endl ;
+      ofs << "cube_top=" << filename6[2] << std::endl ;
+      ofs << "cube_bottom=" << filename6[3] << std::endl ;
+      ofs << "cube_back=" << filename6[4] << std::endl ;
+      ofs << "cube_front=" << filename6[5] << std::endl ;
+      ofs.close() ;
+    }
+  }
   else
-    sf.gen_cubemap ( cubemap , tile_width , itp ) ;
+  {
+    sf.gen_cubemap ( cubemap , width , itp ) ;
+  }
 
   if ( save_ir != std::string() )
   {
@@ -2485,7 +2717,7 @@ int main ( int argc , const char ** argv )
   ap.arg("--twine TWINE")
     .help("use twine*twine oversampling and box filter - best with itp1")
     .metavar("TWINE");
-  ap.arg("--twine_width TWINE_WIDTH")
+  ap.arg("--twine_px TWINE_WIDTH")
     .help("widen the pick-up area of the twining filter")
     .metavar("TWINE_WIDTH");
   ap.arg("--twine_sigma TWINE_SIGMA")
@@ -2497,14 +2729,18 @@ int main ( int argc , const char ** argv )
   ap.arg("--face_fov FOV")
     .help("field of view of the cube faces of a cubemap input (in degrees)")
     .metavar("FOV");
-  ap.arg("--support_min EXTENT")
+  ap.arg("--support_min_px EXTENT")
     .help("minimal additional support around the cube face proper")
     .metavar("EXTENT");
-  ap.arg("--tile_width EXTENT")
+  ap.arg("--tile_px EXTENT")
     .help("tile width for the internal representation image")
     .metavar("EXTENT");
   ap.arg("--ctc", &ctc)
     .help("flag indicating fov is measured between marginal pixel centers");
+  ap.arg("--six", &store6)
+    .help("flag used to specify six separate cube face images");
+  ap.arg("--lux", &store6_lux)
+    .help("store six separate cube face images in lux convention");
     
   if (ap.parse(argc, argv) < 0 ) {
       std::cerr << ap.geterror() << std::endl;
@@ -2526,9 +2762,9 @@ int main ( int argc , const char ** argv )
   extent = ap["extent"].get<int>(0);
   itp = ap["itp"].get<int>(-1);
   twine = ap["twine"].get<int>(1);
-  support_min = ap["support_min"].get<int>(4);
-  tile_width = ap["tile_width"].get<int>(64);
-  twine_width = ap["twine_width"].get<float>(1.0);
+  support_min_px = ap["support_min_px"].get<int>(4);
+  tile_px = ap["tile_px"].get<int>(64);
+  twine_px = ap["twine_px"].get<float>(1.0);
   twine_sigma = ap["twine_sigma"].get<float>(0.0);
   twine_threshold = ap["twine_threshold"].get<float>(0.0);
   face_fov = ap["face_fov"].get<float>(90.0);
@@ -2554,7 +2790,7 @@ int main ( int argc , const char ** argv )
   const ImageSpec &spec = inp->spec() ;
   std::size_t w = spec.width ;
   std::size_t h = spec.height ;
-  int nchannels = spec.nchannels ;
+  std::size_t nchannels = spec.nchannels ;
 
   if ( verbose )
     std::cout << "input has " << nchannels << " channels" << std::endl ;
@@ -2612,9 +2848,9 @@ int main ( int argc , const char ** argv )
 
     if ( ctc )
     {
-      double half_size = tan ( face_fov / 2.0 ) ;
-      half_size *= ( ( w + 1.0 ) / w ) ;
-      face_fov = atan ( half_size ) * 2.0 ;
+      double half_md = tan ( face_fov / 2.0 ) ;
+      half_md *= ( ( w + 1.0 ) / w ) ;
+      face_fov = atan ( half_md ) * 2.0 ;
       if ( verbose )
         std::cout << "ctc is set, adjusted face_fov to "
                   << face_fov << std::endl ;

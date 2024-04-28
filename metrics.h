@@ -73,14 +73,15 @@ struct metrics_t
   // embedded in. We may be able to relax this requirement later
   // on, but as it stands, we rely on it.
 
-  // we use variable names ending in _width to indicate discrete
-  // values in pixel units.
+  // we use variable names ending in _px to indicate discrete
+  // values in pixel units, and variables ending in _md to
+  // indicate floating point values in model space units.
 
   // the face width is the width (and height, both must agree)
   // of all the six square images in the input. This is a given
   // value which is received by the c'tor
 
-  const std::size_t face_width ;
+  const std::size_t face_px ;
 
   // the face field of view is the field of view which the square
   // images correspond to. This is also a given, passed to the c'tor.
@@ -95,40 +96,41 @@ struct metrics_t
 
   const double face_fov ;
 
-  // outer_fov is the field of view corresponding to an entire section,
-  // with the same pixel-edge to pixel-edge semantics as explained
-  // in the initial comment. It is not a given, but calculated during
-  // set-up.
-  
-  double outer_fov ;
-
   // the width of a section must be a multiple of the tile width,
-  // so we have section_width == n_tiles * tile_width. The tile
+  // so we have section_px == n_tiles * tile_px. The tile
   // width is also a given, passed to the c'tor, but n_tiles and
-  // section_width are calculated during set-up.
+  // section_px are calculated during set-up.
 
-  const std::size_t tile_width ;
+  const std::size_t tile_px ;
 
   std::size_t n_tiles ;
-  std::size_t section_width ;
-  std::size_t frame_width ;
+  std::size_t section_px ;
+
+  // size of the frame of pixels which is put around the cube face
+  // image. left_frame_px is also the width of the frame on top
+  // of the cube face image, right_frame_px also for the bottom.
+  // With even face_px, both values are equal, with odd face_px,
+  // they differ by one.
+
+  std::size_t left_frame_px ;
+  std::size_t right_frame_px ;
 
   // the minimal support, in pixel units, is the amount of pixels
-  // we require as addional 'headroom' around the central part which
+  // we require as additional 'headroom' around the central part which
   // covers the 'cube face proper' covering precisely ninety degrees.
   // To make a clear definition: It's the number of pixels from the
   // margin inwards which are wholly outside the 'cube face proper'.
   // The support is the difference between the section width and the
-  // core size truncated to integer. support_min is also a given,
+  // core size, truncated to integer. support_min_px is also a given,
   // passed to the c'tor
 
-  const std::size_t support_min ;
+  const std::size_t support_min_px ;
 
   // this value gives the number of pixels in the cube face image,
   // going inwards from the edge, which are entirely outside the
-  // core.
+  // central ninety degree wide 'cube face proper'.
 
-  std::size_t inherent_support ;
+  std::size_t inherent_support_px ;
 
   // in the metrics_t object, we hold two scaling factors, which
   // can be used to translate between pixel units and 'model space
@@ -154,26 +156,34 @@ struct metrics_t
   zimt::xel_t < double , 2 > model_to_tx ;
   zimt::xel_t < double , 2 > tx_to_model ;
 
-  // section_size is the extent of a section in model space units,
-  // and we have: section_size == section_width * px_to_model.
+  // section_md is the extent of a section in model space units,
+  // and we have: section_md == section_px * px_to_model.
   // Note that the 'size' of the core in model space units is
   // precisely 2.0: it's 2 * tan ( pi/4 ) - so there is no variable
-  // 'core_size' because it's implicit. We don't give a size
+  // 'core_md' because it's implicit. We don't give a size
   // corresponding to the cube face images in the input.
 
-  double section_size ;
-  const double core_size = 2.0 ;
+  double section_md ;
 
-  // ref90 is the distance, in model space units, from the edge of
-  // a section to the core, the 'cube face proper'.
+  // refc_md is the distance, in model space units, from the edge of
+  // a section to the cube face's center.
 
-  double ref90 ;
+  double refc_md ;
 
-  // discrete90 is a flag which indicates whether the core has discrete
-  // extent (in pixel units), so that ref90, converted to pixel units,
-  // is a whole number - within floating point precision.
+  // ref90_md is the distance, in model space units, from the edge of
+  // a section to the core, the 'cube face proper'. This is redundant;
+  // it's refc_md - 1.
+
+  double ref90_md ;
+
+  // discrete90 is a flag which indicates whether ref90_md is discrete
+  // (in pixel units) - within floating point precision.
 
   bool discrete90 ;
+
+  double overscan_md ;
+  double radius_md ;
+  double diameter_md ;
 
   // the c'tor only needs one argument: the size of an individual
   // cube face image. This is the size covering the entire image,
@@ -185,21 +195,17 @@ struct metrics_t
   // of 64 is a common choice, allowing for a good many levels of
   // mip-mapping with simple 4:1 pixel binning.
 
-  metrics_t ( std::size_t _face_width ,
+  metrics_t ( std::size_t _face_px ,
               double _face_fov = M_PI_2 ,
-              std::size_t _support_min = 4UL ,
-              std::size_t _tile_width = 64UL
+              std::size_t _support_min_px = 4UL ,
+              std::size_t _tile_px = 64UL
             )
-  : face_width ( _face_width ) ,
+  : face_px ( _face_px ) ,
     face_fov ( _face_fov ) ,
-    support_min ( _support_min ) ,
-    tile_width ( _tile_width )
+    support_min_px ( _support_min_px ) ,
+    tile_px ( _tile_px )
   {
     // first make sure that certain minimal requirements are met
-
-    // we want even face size for now TODO can we use odd sizes?
-
-    assert ( ( face_width & 1 ) == 0 ) ;
 
     // the cube face images must have at least 90 degrees fov
 
@@ -207,11 +213,11 @@ struct metrics_t
 
     // the tile width must be at least one
 
-    assert ( tile_width > 0 ) ;
+    assert ( tile_px > 0 ) ;
 
     // the tile width must be a power of two
 
-    assert ( ( tile_width & ( tile_width - 1 ) ) == 0 ) ;
+    assert ( ( tile_px & ( tile_px - 1 ) ) == 0 ) ;
 
     // given the face image's field of view, how much support does
     // the face image already contain? We start out by calculating
@@ -221,130 +227,136 @@ struct metrics_t
     // field of view. If the cube face images cover precisely ninety
     // degrees, we leave the values as they are initialized here:
 
-    double overscan = 0.0 ;
-    double diameter = 2.0 ;
-    inherent_support = 0 ;
-
-    // discrete90 is true if the core is represented by a discrete
-    // number of pixels
-
-    discrete90 = true ;
+    overscan_md = 0.0 ;
+    radius_md = 1.0 ;
+    diameter_md = 2.0 ;
+    inherent_support_px = 0 ;
 
     // calculate the diameter in model space units. The diameter
-    // for a ninety degree face image would be precisely 2, and
+    // for a ninety degree face image would be precisely 2, but
     // if the partial image has larger field of view, it will be
     // larger.
 
     if ( face_fov > M_PI_2 )
     {
-      diameter = 2.0 * tan ( face_fov / 2.0 ) ;
-      discrete90 = false ;
-      // this is very unlikely:
-      if ( fabs ( diameter - std::nearbyint ( diameter ) ) < .0000001 )
-        discrete90 = true ;
+      radius_md = tan ( face_fov / 2.0 ) ;
+      diameter_md = 2.0 * radius_md ;
+      overscan_md = radius_md - 1.0 ;
     }
 
     // calculate scaling factors from model space units to pixel
-    // units and from pixel units to model space units.
+    // units and from pixel units to model space units. This factor
+    // is crucial: it depends on the width of the cube face image
+    // and it's field of view. 'draping' the image to model space
+    // maps it to a plane at unit distance from the origin, so
+    // that vectors to the 'draped' pixels correspond with
+    // directional vectors to the scene points the pixels represent.
+    // An alternative approach would be to hold the sample step
+    // constant - e.g. 1.0 - and 'drape' the image so far from
+    // the origin that the same correspondence would hold true.
+    // A plane at unit distance has the advantage of one component
+    // of a 3D coordinate on it being precisely 1.0.
 
-    model_to_px = double ( face_width ) / diameter ;
-    px_to_model = diameter / double ( face_width ) ;
+    model_to_px = double ( face_px ) / diameter_md ;
+    px_to_model = diameter_md / double ( face_px ) ;
 
-    // The overscan is the distance, in model space units, from
-    // the cube face image's edge to the edge of it's central
-    // section, holding the ninety degrees wide cube face proper.
-    // it's the same as (diameter / 2 - 1). Note that this value
-    // may not coincide with a discrete number of pixels for
-    // cube face images with more than ninety degrees fov.
-    // We have a boolean 'discrete90' which indicates whether
-    // the central 'ninety degrees proper' section coincides
-    // with a discrete size.
+    // The diameter, expressed in pixels - is just the cube face
+    // image's width, and it's a discrete value. The 'cuber face
+    // proper' - the section covering precisely ninety degrees,
+    // may correspond to a discrete value or not, but what's
+    // more important, is whether it's edges map to discrete
+    // value, so that we can simply copy this section out when
+    // we store the cubemap to a file. We can find out about
+    // this property by looking at the overscan: obviously,
+    // if the overscan corresponds to a discrete number of
+    // pixels, so does the central section.
+    // if we truncate the overscan - expressed in pixel units
+    // - to an integer, we get the number of pixels which the
+    // cube face image covers but which are wholly outside of
+    // the central ninety degree 'cube face proper', which is
+    // our definition of the 'inherent support'.
 
-    if ( face_fov > M_PI_2 )
-    {      
-      overscan = tan ( face_fov / 2.0 ) - 1.0 ;
+    double px_overscan = model_to_px * overscan_md ;
+    inherent_support_px = std::trunc ( px_overscan ) ;
 
-      // how wide is the overscan, expressed in pixel units?
-
-      double px_overscan = model_to_px * overscan ;
-
-      // truncate to integer to receive the inherent support in
-      // pixel units. If this value is as large or larger than the
-      // required support, we needn't add any additional space.
-
-      inherent_support = int ( px_overscan ) ;
+    if ( px_overscan - std::trunc ( px_overscan ) < 0.0000001 )
+    {
+      discrete90 = true ;
+    }
+    else
+    {
+      discrete90 = false ;
     }
 
-    // if there is more inherent support than the minimal support
-    // required, we don't need to provide additional support. If
-    // the inherent support is too small, we do need additional
+    // if there is at least as much inherent support as the required
+    // minimal support, we don't need to provide additional support.
+    // If the inherent support is too small, we do need additional
     // support.
   
-    std::size_t additional_support ;
+    std::size_t additional_support_px = 0 ;
 
-    if ( inherent_support >= support_min )
-      additional_support = 0 ;
-    else
-      additional_support = support_min - inherent_support ;
+    if ( inherent_support_px < support_min_px )
+    {
+      additional_support_px = support_min_px - inherent_support_px ;
+    }
 
     // given the additional support we need - if any - how many tiles
     // are needed to contain a cube face image and it's support?
 
-    std::size_t px_min = face_width + 2 * additional_support ;
+    std::size_t px_min = face_px + 2 * additional_support_px ;
 
     // if the user passes a tile size of one, n_tiles will end up
     // equal to px_min.
 
-    n_tiles = px_min / tile_width ;
-    if ( n_tiles * tile_width < px_min )
+    n_tiles = px_min / tile_px ;
+    if ( n_tiles * tile_px < px_min )
       n_tiles++ ;
 
     // this gives us the 'outer width': the size, in pixels, which
     // the required number of tiles will occupy, and the frame size,
     // the number of pixels from the edge of the IR section to
     // the first pixel originating from the cube face image.
+    // Note that left_frame_px and right_frame_px will differ by
+    // one for odd cube face sizes - for even sizes, they will be
+    // equal. If they differ, which of the two we select for the
+    // left or right value is arbitrary.
 
-    section_width = n_tiles * tile_width ;
-    frame_width = ( section_width - face_width ) / 2UL ;
+    section_px = n_tiles * tile_px ;
+    std::size_t frame_total = section_px - face_px ;
+
+    left_frame_px = frame_total / 2 ;
+    right_frame_px = frame_total - left_frame_px ;
 
     // paranoid
 
-    assert ( ( 2UL * frame_width + face_width ) == section_width ) ;
+    assert (    ( left_frame_px + right_frame_px + face_px )
+             == section_px ) ;
+
+    // we also want the section's extent in model space units:
+
+    section_md = px_to_model * section_px ;
 
     // the central part of each partial image, which covers
     // precisely ninety degrees - the cube face proper - is at
     // a specific distance from the edge of the total section.
     // we know that it's precisely 1.0 from the cube face image's
-    // center in model space units. So first we convert the
-    // 'outer width' to model space units
+    // center in model space units, so we calculate that first:
 
-    section_size = px_to_model * section_width ;
+    double refc_px =   double ( left_frame_px )
+                     + double ( face_px ) / 2.0 ;
 
-    // then subtract 2.0 - the space occupied by the central
-    // section of the partial image - the 'cube face proper',
-    // spanning ninety degrees - and divide by two:
+    refc_md = px_to_model * refc_px ;
+    ref90_md = refc_md - 1.0 ;
 
-    ref90 = ( section_size - 2.0 ) / 2.0 ;
+    // we have the section's extent in model space units, so now we
+    // can also provide the conversion factor to texture units, which
+    // is anisotropic because the texture is not square.
 
-    // outer_fov: the field of view covered by the complete
-    // 1/6 section of the IR. To fill the entire section with
-    // image data from some other source, a rectilinear image
-    // with precisely this field of view has to be placed in
-    // the corresponding section. This is the same code as
-    // for the filling-in of the cubemap with ninety-degree
-    // cube faces, only the per-cubeface fov value has to be
-    // adapted. If the source is e.g. a full spherical, the
-    // resulting sixfold will be very close to what can be
-    // 'regenerated' with code in this program from a cubemap
-    // with 90-degree faces.
+    model_to_tx[0] = 1.0 / section_md ;
+    model_to_tx[1] = 1.0 / ( 6.0 * section_md ) ;
 
-    outer_fov = 2.0 * atan ( section_size / 2.0 ) ;
-
-    model_to_tx[0] = 1.0 / section_size ;
-    model_to_tx[1] = 1.0 / ( 6.0 * section_size ) ;
-
-    tx_to_model[0] = section_size ;
-    tx_to_model[1] = 6.0 * section_size ;
+    tx_to_model[0] = section_md ;
+    tx_to_model[1] = 6.0 * section_md ;
   }
 
   // get_pickup_coordinate receives the in-face coordinate and
@@ -370,12 +382,11 @@ struct metrics_t
                                crd_t & target ) const
   {
     target =    in_face_coordinate // in (-1,1)
-              + 1.0                // now in (0,2)
-              + ref90 ;            // distance from section UL
+              + refc_md ;             // center of the cube face
 
     // we could add the per-face offset here, but see below:
 
-    // target[1] += face_index * section_size ;
+    // target[1] += face_index * section_md ;
 
     // move from model space units to pixel units. This yields us
     // a coordinate in pixel units pertaining to the section.
@@ -386,7 +397,7 @@ struct metrics_t
     // pixel units makes the calculation more precise, because
     // we can derive the offset from integer values.
 
-    target[1] += f_v ( face_index * int(section_width) ) ;
+    target[1] += f_v ( face_index * int(section_px) ) ;
 
     // Subtract 0.5 - we look at pixels as small squares with an
     // extent of 1 pixel unit, and an incoming coordinate which
@@ -400,12 +411,12 @@ struct metrics_t
     // Note that the output is now in the range (-0.5, width-0.5)
     // and using this with interpolators needing support may
     // access pixels outside the 'ninety degrees proper'.
-    // We provide support to cater for that, but its'
+    // We usually provide support to cater for that, but its'
     // good to keep the fact in mind. Even nearest-neighbour
     // pickup might fall outside the 'ninety degrees proper'
     // due to small imprecisions and subsequent rounding.
 
-    target -= .5 ;
+    target -= .5f ;
   }
 
   // variant to get the pick-up coordinate in model space units
@@ -416,12 +427,11 @@ struct metrics_t
                                   crd_t & target ) const
   {
     target =    in_face_coordinate // in (-1,1)
-              + 1.0                // now in (0,2)
-              + ref90 ;            // distance from section UL
+              + refc_md ;          // center of the cube face
 
     // we add the per-face offset and we're done.
 
-    target[1] += face_index * section_size ;
+    target[1] += face_index * section_md ;
   }
 
   // variant of get_pickup_coordinate which yields the pickup
@@ -429,14 +439,13 @@ struct metrics_t
 
   template < typename face_index_t , typename crd_t >
   void get_pickup_coordinate_tx ( const face_index_t & face_index ,
-                                  const crd_t & in_face ,
+                                  const crd_t & in_face_coordinate ,
                                   crd_t & target ) const
   {
-    target =    in_face // in (-1,1)
-              + 1.0                // now in (0,2)
-              + ref90 ;            // distance from section UL
+    target =    in_face_coordinate // in (-1,1)
+              + refc_md ;          // center of the cube face
 
-    target[1] += face_index * section_size ;
+    target[1] += face_index * section_md ;
 
     // move from model space units to pixel units. This yields us
     // a coordinate in pixel units pertaining to the section.
