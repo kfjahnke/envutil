@@ -653,6 +653,10 @@ struct sixfold_t
       auto inp = ImageInput::open ( filename6[face] ) ;
       assert ( inp != nullptr ) ;
 
+      if ( verbose )
+        std::cout << "load cube face image " << filename6[face]
+                  << std::endl ;
+
       const ImageSpec &spec = inp->spec() ;
       std::size_t w = spec.width ;
       std::size_t h = spec.height ;
@@ -2205,36 +2209,63 @@ struct eval_env
 // map, a.k.a full spherical panorama.
 
 template < std::size_t nchannels >
-void cubemap_to_latlon ( std::unique_ptr < ImageInput > & inp ,
+void cubemap_to_latlon ( const std::string & input ,
                          std::size_t height ,
                          const std::string & latlon ,
                          int degree )
 {
-  // we expect an image with 1:6 aspect ratio. We don't check
-  // for metadata specific to environments - it can be anything,
-  // but the aspect ratio must be correct.
+  std::size_t w ;
+  std::size_t h ;
+  int xres ;
+  std::vector < std::string > filename6 ;
 
+  auto inp = ImageInput::open ( input ) ;
+
+  if ( inp == nullptr && store6 )
+  {
+    // no such image. if store6 is set, we may have a cubemap made
+    // up of separate images
+
+    six_names ( input , filename6 ) ;
+    inp = ImageInput::open ( filename6[0] ) ;
+  }
+
+  assert ( inp ) ;
   const ImageSpec &spec = inp->spec() ;
-  int xres = spec.width ;
-  int yres = spec.height ;
+  xres = spec.width ;
+  w = spec.width ;
+  h = spec.height ;
 
   if ( verbose )
-    std::cout << "cube face width: " << spec.width << std::endl ;
-
-  assert ( spec.width * 6 == spec.height ) ;
+    std::cout << "input cube face width: " << w << std::endl ;
 
   // we set up the sixfold_t object, 'preparing the ground'
   // to pull in the image data
 
-  sixfold_t<nchannels> sf ( spec.width ,
+  sixfold_t<nchannels> sf ( w ,
                             support_min_px ,
                             tile_px ,
                             face_fov ) ;
 
-  // load the cube faces into slots in the array in the
-  // sixfold_t object
+  if ( filename6.size() == 6 )
+  {
+    assert ( w == h ) ;
 
-  sf.load ( inp ) ;
+    // load the cube faces into slots in the array in the
+    // sixfold_t object
+
+    sf.load ( filename6 ) ;
+  }
+  else
+  {
+    assert ( w * 6 == h ) ;
+
+    if ( verbose )
+      std::cout << "load cubemap image " << input << std::endl ;
+
+    sf.load ( inp ) ;
+    inp->close() ;
+  }
 
   // now we build up the 'support'. The square images for the
   // cube faces are cut off at the ninety-degree point, and to
@@ -2739,7 +2770,7 @@ int main ( int argc , const char ** argv )
     .metavar("EXTENT");
   ap.arg("--ctc", &ctc)
     .help("flag indicating fov is measured between marginal pixel centers");
-  ap.arg("--six", &store6)
+  ap.arg("--store6", &store6)
     .help("flag used to specify six separate cube face images");
   ap.arg("--lux", &store6_lux)
     .help("store six separate cube face images in lux convention");
@@ -2787,20 +2818,34 @@ int main ( int argc , const char ** argv )
 
   auto inp = ImageInput::open ( input ) ;
 
+  std::size_t w ;
+  std::size_t h ;
+  std::size_t nchannels ;
+  std::vector < std::string > filename6 ;
+
+  if ( inp == nullptr && store6 )
+  {
+    // no such image. if store6 is set, we may have a cubemap made
+    // up of separate images
+
+    six_names ( input , filename6 ) ;
+    inp = ImageInput::open ( filename6[0] ) ;
+  }
   assert ( inp ) ;
+  OIIO::geterror() ;
 
   const ImageSpec &spec = inp->spec() ;
-  std::size_t w = spec.width ;
-  std::size_t h = spec.height ;
-  std::size_t nchannels = spec.nchannels ;
+  w = spec.width ;
+  h = spec.height ;
+  nchannels = spec.nchannels ;
+
+  inp->close() ;
 
   if ( verbose )
     std::cout << "input has " << nchannels << " channels" << std::endl ;
 
   if ( w == 2 * h )
   {
-    inp->close() ;
-
     if ( verbose )
       std::cout << "input has 2:1 aspect ratio, assuming latlon"
                 << std::endl ;
@@ -2834,10 +2879,13 @@ int main ( int argc , const char ** argv )
       exit ( EXIT_FAILURE ) ;
     }
   }
-  else if ( h == 6 * w )
+  else if ( h == 6 * w || filename6.size() == 6 )
   {
-    if ( verbose )
+    if ( verbose && h == 6 * w )
       std::cout << "input has 1:6 aspect ratio, assuming cubemap"
+                << std::endl ;
+    else
+      std::cout << "expecting six separate cube face images"
                 << std::endl ;
 
     // the 'ctc' flag indicates that the field of view of the
@@ -2869,15 +2917,15 @@ int main ( int argc , const char ** argv )
 
     if ( nchannels >= 4 )
     {
-      cubemap_to_latlon<4> ( inp , extent , output , itp ) ;
+      cubemap_to_latlon<4> ( input , extent , output , itp ) ;
     }
     else if ( nchannels == 3 )
     {
-      cubemap_to_latlon<3> ( inp , extent , output , itp ) ;
+      cubemap_to_latlon<3> ( input , extent , output , itp ) ;
     }
     else if ( nchannels == 1 )
     {
-      cubemap_to_latlon<1> ( inp , extent , output , itp ) ;
+      cubemap_to_latlon<1> ( input , extent , output , itp ) ;
     }
     else
     {
