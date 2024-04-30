@@ -58,6 +58,8 @@ envutil --help gives a summary of command line options:
         --tile_width EXTENT   tile width for the internal representation image
         --ctc                 flag indicating fov is measured between marginal
                                 pixel centers
+        --6                   use six separate cube face images
+        --lux                 use cube face images named in lux convention
     
 The specific conversion will depend on the input (given with --input ...).
 If you pass a lat/lon environment map, it will be converted to a cubemap, and
@@ -157,10 +159,42 @@ Also best left at the default of 64.
 
 ## --ctc                 flag indicating fov is measured between marginal pixel centers
 
-Some cubemaps have marginal pixels which coincide geometrically with the virtual cube's
-edges. For such cubemaps, set this flag. The default is to consider the pixels evenly
-distributed so that the marginal samples are half a sampling step from the virtual cube's
-(and the cube face image's) edge.
+The standard way of measuring the field of view of images in envutil is to consider
+pixels as small square areas of constant colour with an extent of one pixel unit.
+If an image is W pixels wide, a field of view of D degrees is taken to coincide
+with the angle between rays to the left margin of the leftmost pixel and the right
+margin of the rightmost pixel (same for top and botttom). If you pass --ctc, D will
+instead coincide with the angle between rays to the centers of the marginal pixels.
+So usually, we have D = atan ( f * W / 2 ), with --ctc D = atan ( f * ( W - 1 ) / 2 )
+This is hard to see, but some cubemaps seem to use this convention, and using them
+without --ctc will lead to subtle errors. Internally, envutil uses the first notion,
+and simply recalculates the field of view to be used internally to the slightly
+larger value which results form the edge-to-edge notion.
+
+## --6                   use six separate cube face images
+
+This flag pertains both to input and output and tells envutil to expect or produce
+six separate cube face images. The images have to follow a naming scheme: all six
+file names are derived from a common name template. This template is split into
+base name and extension, the the base name is suffixed with an underscore followed
+by the view direction (left, right, front, back, top, bottom). Note that no file
+by the name of the template name is used for output - if such a file exists, this
+does not matter to envutil. For input, if such a file exists, envutil will try
+and open it as input, because envutil looks at the input to figure out which
+conversion is wanted, so the file's presence will prevent the processing of
+the six separate cube face images. Also see the next option.
+
+## --lux                 use cube face images named in lux convention
+
+In lux (as of this writing) front and back, and left and right are swapped, so
+lux effectively 'looks' to a view rotated by 180 degrees around the vertical.
+To create a lux cubemap script file, this has to be taken into account, and
+to process cube face images made for processing with lux it's also essential:
+otherwise, the top and bottom images won't agree with the rest. Note that
+lux currently does not produce entirely flawless views with cube face
+images of precisely ninety degrees. These comments hold true for lux up
+to 1.2.2 - I intend to change lux to follow openEXR convention, and
+eventually to use code from this program for better cubemap handling.
 
 # Technical Notes
 

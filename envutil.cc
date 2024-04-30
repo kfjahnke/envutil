@@ -2770,10 +2770,10 @@ int main ( int argc , const char ** argv )
     .metavar("EXTENT");
   ap.arg("--ctc", &ctc)
     .help("flag indicating fov is measured between marginal pixel centers");
-  ap.arg("--store6", &store6)
-    .help("flag used to specify six separate cube face images");
+  ap.arg("--6", &store6)
+    .help("use six separate cube face images");
   ap.arg("--lux", &store6_lux)
-    .help("store six separate cube face images in lux convention");
+    .help("use cube face images named in lux convention");
     
   if (ap.parse(argc, argv) < 0 ) {
       std::cerr << ap.geterror() << std::endl;
@@ -2832,7 +2832,6 @@ int main ( int argc , const char ** argv )
     inp = ImageInput::open ( filename6[0] ) ;
   }
   assert ( inp ) ;
-  OIIO::geterror() ;
 
   const ImageSpec &spec = inp->spec() ;
   w = spec.width ;
@@ -2881,12 +2880,15 @@ int main ( int argc , const char ** argv )
   }
   else if ( h == 6 * w || filename6.size() == 6 )
   {
-    if ( verbose && h == 6 * w )
-      std::cout << "input has 1:6 aspect ratio, assuming cubemap"
+    if ( verbose )
+    {
+      if ( h == 6 * w )
+        std::cout << "input has 1:6 aspect ratio, assuming cubemap"
                 << std::endl ;
-    else
-      std::cout << "expecting six separate cube face images"
-                << std::endl ;
+      else
+        std::cout << "expecting six separate cube face images"
+                  << std::endl ;
+    }
 
     // the 'ctc' flag indicates that the field of view of the
     // incoming cube face images is given referring to the angle
@@ -2941,6 +2943,8 @@ int main ( int argc , const char ** argv )
   }
   if ( verbose )
     std::cout << "conversion complete. exiting." << std::endl ;
+  OIIO::geterror() ;
+  OIIO::shutdown() ;
   exit ( EXIT_SUCCESS ) ;
 }
 
