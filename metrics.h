@@ -105,6 +105,7 @@ struct metrics_t
 
   std::size_t n_tiles ;
   std::size_t section_px ;
+  std::size_t offset_px ;
 
   // size of the frame of pixels which is put around the cube face
   // image. left_frame_px is also the width of the frame on top
@@ -322,6 +323,11 @@ struct metrics_t
     // left or right value is arbitrary.
 
     section_px = n_tiles * tile_px ;
+
+    // what's the offset to the same location in the next section?
+
+    offset_px = section_px * section_px ;
+
     std::size_t frame_total = section_px - face_px ;
 
     left_frame_px = frame_total / 2 ;
@@ -377,12 +383,12 @@ struct metrics_t
   // but it's not discrete.
 
   template < typename face_index_t , typename crd_t >
-  void get_pickup_coordinate ( const face_index_t & face_index ,
-                               const crd_t & in_face_coordinate ,
-                               crd_t & target ) const
+  void get_pickup_coordinate_px ( const face_index_t & face_index ,
+                                  const crd_t & in_face_coordinate ,
+                                  crd_t & target ) const
   {
     target =    in_face_coordinate // in (-1,1)
-              + refc_md ;             // center of the cube face
+              + refc_md ;          // center of the cube face
 
     // we could add the per-face offset here, but see below:
 

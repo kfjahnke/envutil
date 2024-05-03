@@ -157,19 +157,18 @@ This is a technical value, probably best to leave it at it's default of 4.
 
 Also best left at the default of 64.
 
-## --ctc                 flag indicating fov is measured between marginal pixel centers
+## --ctc  flag indicating cube face fov is measured between marginal pixel centers
 
-The standard way of measuring the field of view of images in envutil is to consider
-pixels as small square areas of constant colour with an extent of one pixel unit.
-If an image is W pixels wide, a field of view of D degrees is taken to coincide
-with the angle between rays to the left margin of the leftmost pixel and the right
-margin of the rightmost pixel (same for top and botttom). If you pass --ctc, D will
-instead coincide with the angle between rays to the centers of the marginal pixels.
-So usually, we have D = atan ( f * W / 2 ), with --ctc D = atan ( f * ( W - 1 ) / 2 )
-This is hard to see, but some cubemaps seem to use this convention, and using them
-without --ctc will lead to subtle errors. Internally, envutil uses the first notion,
-and simply recalculates the field of view to be used internally to the slightly
-larger value which results form the edge-to-edge notion.
+The standard way of measuring the field of view of cube face images in envutil is
+to consider pixels as small square areas of constant colour with an extent of one
+pixel unit. If an image is W pixels wide, a field of view of D degrees is taken to
+coincide with the angle between rays to the left margin of the leftmost pixel and
+the right margin of the rightmost pixel (same for top and botttom). If you pass
+--ctc, D will instead coincide with the angle between rays to the centers of the
+marginal pixels.
+So usually, we have D = atan ( f * W / 2 ), with --ctc D = atan ( f * ( W - 1 ) / 2 ) This is hard to see, but some cubemaps seem to use this convention, and using them without --ctc will lead to subtle errors. Internally, envutil uses the first notion, and simply recalculates the field of view to be used internally to the slightly larger value which results form the edge-to-edge notion. Note that --ctc does not affect
+the processing of lat/lon environment maps - I may add a separate option for that.
+lat/lon environment maps are processed with edge-to-edge semantics.
 
 ## --6                   use six separate cube face images
 
@@ -192,9 +191,11 @@ To create a lux cubemap script file, this has to be taken into account, and
 to process cube face images made for processing with lux it's also essential:
 otherwise, the top and bottom images won't agree with the rest. Note that
 lux currently does not produce entirely flawless views with cube face
-images of precisely ninety degrees. These comments hold true for lux up
-to 1.2.2 - I intend to change lux to follow openEXR convention, and
-eventually to use code from this program for better cubemap handling.
+images of precisely ninety degrees. Just a little bit of extra foc is enough;
+you might use --ctc to the effect.
+The comments about the directions holds true for lux up to 1.2.2 - I intend
+to change lux to follow openEXR convention, and eventually to use code from
+this program for better (and faster) cubemap handling.
 
 # Technical Notes
 

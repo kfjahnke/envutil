@@ -500,3 +500,227 @@ struct ir_to_exr
   }
 } ;
 
+// given a 3D 'ray' coordinate, find the corresponding cube face
+// and the in-face coordinate - note the two references which take
+// the result values. The incoming 'ray' coordinate does not have
+// to be normalized. The resulting in-face coordinates are in the
+// range of [-1,1] - in 'model space units' pertaining to planes
+// 'draped' at unit distance from the origin and perpendicular
+// to one of the axes. This function is coded as pure SIMD code,
+// we don't need it for scalars.
+
+void ray_to_cubeface ( const crd3_v & c ,
+                        i_v & face ,
+                        crd2_v & in_face )
+{
+  // form three masks with relations of the numerical values of
+  // the 'ray' coordinate. These are sufficient to find out which
+  // component has the largest absolute value (the 'dominant' one,
+  // along the 'dominant' axis)
+
+  auto m1 = ( abs ( c[RIGHT] ) >= abs ( c[DOWN] ) ) ;
+  auto m2 = ( abs ( c[RIGHT] ) >= abs ( c[FORWARD] ) ) ;
+  auto m3 = ( abs ( c[DOWN] )  >= abs ( c[FORWARD] ) ) ;
+
+  // form a mask which is true where a specific axis is 'dominant'.
+  // We start out looking at the x axis: where the numerical value
+  // along the x axis (pointing right) is larger than the other two,
+  // 'dom' will be true.
+
+  auto dom = m1 & m2 ;
+
+  // Now we can assign face indexes, stored in f. If the coordinate
+  // value is negative along the dominant axis, we're looking at
+  // the face opposite and assign a face index one higher. Note
+  // how this SIMD code does the job for LANES coordinates in
+  // parallel, avoiding conditionals and using masking instead.
+  // we also find in-face coordinates:
+  // we divide the two non-dominant coordinate values by the
+  // dominant one. One of the axes comes out just right when
+  // dividing by the absolute value - e.g. the vertical axis
+  // points downwards for all the four cube faces around
+  // the center. The other axis is divided by the 'major'
+  // coordinate value as-is; the resulting coordinate runs
+  // one way for positive major values and backwards for
+  // negative ones. Note that we might capture the absolute
+  // values (which we've used before) in variables, but the
+  // compiler will recognize the common subexpressions and
+  // do it for us. While it's generally preferable to avoid
+  // conditionals in inner-loop code, I use conditionals here
+  // because most of the time all coordinates will 'land' in
+  // the same cube face, so for two cases, the rather expensive
+  // code to calculate the face index and in-face coordinate
+  // can be omitted. TODO: One might test whether omitting the
+  // conditionals is actually slower.
+
+  if ( any_of ( dom ) )
+  {
+    // extract in-face coordinates for the right and left cube
+    // face. the derivation of the x coordinate uses opposites for
+    // the two faces, the direction of the y coordinate is equal.
+    // Note that some lanes in c[RIGHT] may be zero and result in
+    // an Inf result, but these will never be the ones which end
+    // up in the result, because only those where c[RIGHT] is
+    // 'dominant' will 'make it through', and where c[RIGHT] is
+    // dominant, it's certainly not zero. But we rely on the
+    // system not to throw a division-by-zero exception, which
+    // would spoil our scheme.
+
+    face = CM_RIGHT ;
+    face ( dom & ( c[RIGHT] < 0 ) ) = CM_LEFT ;
+
+    in_face[0] ( dom ) = - c[FORWARD] / c[RIGHT] ;
+    in_face[1] ( dom ) = c[DOWN] / abs ( c[RIGHT] ) ;
+  }
+
+  // now set dom true where the y axis (pointing down) has the
+  // largest numerical value
+
+  dom = ( ! m1 ) & m3 ; 
+
+  if ( any_of ( dom ) )
+  {
+    // same for the top and bottom cube faces - here the x coordinate
+    // corresponds to the right 3D axis, the y coordinate depends on
+    // which of the faces we're looking at (hence no abs)
+    // the top and bottom images could each be oriented in four
+    // different ways. The orientation I expect in this program
+    // is openEXR's cubemap format, where the top and bottom
+    // image align with the 'back' image (the last one down).
+    // For lux conventions (the top and bottom image aligning
+    // with the 'front' cube face) swap the signs in both expressions.
+
+    face ( dom ) = CM_BOTTOM ;
+    face ( dom & ( c[DOWN] < 0 ) ) = CM_TOP ;
+
+    // lux convention:
+    // in_face[0] ( dom ) =   c[RIGHT] / abs ( c[DOWN] ) ;
+    // in_face[1] ( dom ) = - c[FORWARD] / c[DOWN] ;
+
+    in_face[0] ( dom ) = - c[RIGHT] / abs ( c[DOWN] ) ;
+    in_face[1] ( dom ) =   c[FORWARD] / c[DOWN] ;
+
+  }
+
+  // set dom true where the z axis (pointing forward) has the
+  // largest numerical value
+  
+  dom = ( ! m2 ) & ( ! m3 ) ;
+
+  if ( any_of ( dom ) )
+  {
+    // finally the front and back faces
+
+    face ( dom ) = CM_FRONT ;
+    face ( dom & ( c[FORWARD] < 0 ) ) = CM_BACK ;
+
+    in_face[0] ( dom ) = c[RIGHT] / c[FORWARD] ;
+    in_face[1] ( dom ) = c[DOWN] / abs ( c[FORWARD] ) ;
+  }
+}
+
+// variant which takes a given face vector. This is used to
+// approximate the first derivative, which is done by subtracting
+// the result of the coordinate transformation of incoming
+// coordinates which were offset by one sampling step in either
+// canonical direction. We have to look at the same cube face,
+// to avoid the possibility that the cube face changes between
+// the calculation of the result for the actual cordinate and
+// it's offsetted neighbours, which would likely result in a
+// large discontinuity in the in-face coordinate, spoiling the
+// result.
+// So, incoming, we have a 3D ray coordinate and a set of cube
+// face indices, and we'll get in-face coordinates as output.
+
+void ray_to_cubeface_fixed ( const crd3_v & c ,
+                              const i_v & face ,
+                              crd2_v & in_face )
+{
+  // form a mask which is true where a specific axis is 'dominant'.
+  // since we have the face indices already, this is simple: it's
+  // the face indices shifted to the right to remove their least
+  // significant bit, which codes for the sign along the dominant
+  // axis.
+
+  auto dom_v = face >> 1 ;
+
+  // we divide the two non-dominant coordinate values by the
+  // dominant one. One of the axes comes out just right when
+  // dividing by the absolute value - e.g. the vertical axis
+  // points downwards for all the four cube faces around
+  // the center. The other axis is divided by the 'major'
+  // coordinate value as-is; the resulting coordinate runs
+  // one way for positive major values and backwards for
+  // negative ones. Note that we might capture the absolute
+  // values (which we've used before) in variables, but the
+  // compiler will recognize the common subexpressions and
+  // do it for us. While it's generally preferable to avoid
+  // conditionals in inner-loop code, I use conditionals here
+  // because most of the time all coordinates will 'land' in
+  // the same cube face, so for two cases, the rather expensive
+  // code to calculate the face index and in-face coordinate
+  // can be omitted. TODO: One might test whether omitting the
+  // conditionals is actually slower.
+
+  auto dom = ( dom_v == 0 ) ;
+  if ( any_of ( dom ) )
+  {
+    // extract in-face coordinates for the right and left cube
+    // face. the derivation of the x coordinate uses opposites for
+    // the two faces, the direction of the y coordinate is equal.
+    // Note that some lanes in c[RIGHT] may be zero and result in
+    // an Inf result, but these will never be the ones which end
+    // up in the result, because only those where c[RIGHT] is
+    // 'dominant' will 'make it through', and where c[RIGHT] is
+    // dominant, it's certainly not zero. But we rely on the
+    // system not to throw a division-by-zero exception, which
+    // would spoil our scheme.
+    // Since we know the face value already, all we need here is
+    // the deivision by the dominant component.
+
+    in_face[0] ( dom ) = - c[FORWARD] / c[RIGHT] ;
+    in_face[1] ( dom ) = c[DOWN] / abs ( c[RIGHT] ) ;
+  }
+
+  // now set dom true where the y axis (pointing down) has the
+  // largest numerical value
+
+  dom = ( dom_v == 1 ) ; 
+
+  if ( any_of ( dom ) )
+  {
+    // same for the top and bottom cube faces - here the x coordinate
+    // corresponds to the right 3D axis, the y coordinate depends on
+    // which of the faces we're looking at (hence no abs)
+    // the top and bottom images could each be oriented in four
+    // different ways. The orientation I expect in this program
+    // is openEXR's cubemap format, where the top and bottom
+    // image align with the 'back' image (the last one down).
+    // For lux conventions (the top and bottom image aligning
+    // with the 'front' cube face) swap the signs in both expressions.
+
+    // lux convention:
+    // in_face[0] ( dom ) =   c[RIGHT] / abs ( c[DOWN] ) ;
+    // in_face[1] ( dom ) = - c[FORWARD] / c[DOWN] ;
+
+    in_face[0] ( dom ) = - c[RIGHT] / abs ( c[DOWN] ) ;
+    in_face[1] ( dom ) =   c[FORWARD] / c[DOWN] ;
+
+  }
+
+  // set dom true where the z axis (pointing forward) has the
+  // largest numerical value
+  
+  dom = ( dom_v == 2 ) ;
+
+  if ( any_of ( dom ) )
+  {
+    // finally the front and back faces
+
+    in_face[0] ( dom ) = c[RIGHT] / c[FORWARD] ;
+    in_face[1] ( dom ) = c[DOWN] / abs ( c[FORWARD] ) ;
+  }
+}
+
+
+
