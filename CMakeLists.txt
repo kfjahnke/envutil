@@ -28,6 +28,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# You need some dependencies: OpenImageIO and Imath.
+
 # To build, try this for starters (ninja instead of make should also work):
 
 # mkdir build
@@ -94,11 +96,14 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_CXX_STANDARD 17)
 message(STATUS "***** using C++17 standard")
 
-if ( NOT APPLE )
-  find_package ( OpenImageIO CONFIG REQUIRED )
-  if ( OpenImageIO_FOUND )
-    message ( STATUS "find_package: OpenImageIO = true" )
-  endif()
+find_package ( OpenImageIO CONFIG REQUIRED )
+if ( OpenImageIO_FOUND )
+  message ( STATUS "find_package: OpenImageIO = true" )
+endif()
+
+find_package ( Imath CONFIG REQUIRED )
+if ( OpenImageIO_FOUND )
+  message ( STATUS "find_package: Imath = true" )
 endif()
 
 # highway has added code to find it with cmake config mode with
