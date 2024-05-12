@@ -36,6 +36,9 @@
 /*                                                                      */
 /************************************************************************/
 
+#ifndef GEOMETRY_H
+#define GEOMETRY_H
+
 // This header has all the geometrical transformations used to convert
 // between lat/lon and cubemap coordinates. Then it proceeds to give
 // conversions from coordinates pertaining to the IR image to 3D 'ray'
@@ -108,9 +111,16 @@ enum { EXR_LEFT , EXR_UP , EXR_FORWARD } ;
 // We're using an implicit radius of 1.0 for the conversion from
 // spherical to cartesian coordinates, so the output has unit length.
 
+template < typename T = float , std::size_t L = LANES >
 struct ll_to_ray_t
-: public zimt::unary_functor < v2_t , v3_t , LANES >
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > ,
+      zimt::xel_t < T , 3 > ,
+      L
+    >
 {
+  typedef zimt::simdized_type < T , L > f_v ;
+
   template < typename in_type , typename out_type >
   void eval ( const in_type & in ,
               out_type & out ) const
@@ -133,20 +143,20 @@ struct ll_to_ray_t
     // downwards from the view straight ahead.
     // The code benefits from using sincos, where available.
 
-    #if defined USE_HWY or defined USE_VC
+    // #if defined USE_HWY or defined USE_VC
 
       f_v sinlat , coslat , sinlon , coslon ;
       sincos ( lat , sinlat , coslat ) ;
       sincos ( lon , sinlon , coslon ) ;
 
-    #else
-
-      f_v sinlat = sin ( lat ) ;
-      f_v coslat = cos ( lat ) ;
-      f_v sinlon = sin ( lon ) ;
-      f_v coslon = cos ( lon ) ;
-
-    #endif
+    // #else
+    // 
+    //   f_v sinlat = sin ( lat ) ;
+    //   f_v coslat = cos ( lat ) ;
+    //   f_v sinlon = sin ( lon ) ;
+    //   f_v coslon = cos ( lon ) ;
+    // 
+    // #endif
 
     // the x component, pointing to the right in lux, is zero at
     // longitude zero, which is affected by the sine term. The
@@ -217,9 +227,7 @@ struct ray_to_ll_t
 // specializations for the six possible face indices.
 // currently unused.
 
-/*
-
-template < face_index_t F , int nchannels >
+template < face_index_t F >
 struct in_face_to_ray
 : public zimt::unary_functor < v2_t , v3_t , LANES >
 {
@@ -280,8 +288,6 @@ struct in_face_to_ray
   }
 } ;
 
-*/
-
 // this functor converts incoming 2D coordinates pertaining
 // to the entire IR array to 3D ray coordinates in lux convention.
 // This functor can serve to populate the IR image: set up a
@@ -301,16 +307,15 @@ struct in_face_to_ray
 // this is precisely half the section size, but with odd width,
 // this isn't possible, hence the extra argument.
 
-template < int nchannels >
 struct ir_to_ray
 : public zimt::unary_functor < v2_t , v3_t , LANES >
 {
   const double section_md ;
-  const double refc ;
+  const double refc_md ;
 
-  ir_to_ray ( double _section_md , double _refc )
+  ir_to_ray ( double _section_md , double _refc_md )
   : section_md ( _section_md ) ,
-    refc ( _refc )
+    refc_md ( _refc_md )
   { }
 
   // incoming, we have 2D model space coordinates, with the origin
@@ -332,7 +337,7 @@ struct ir_to_ray
     // which are centered on the cube face we're dealing with.
 
     crd2[1] -= section * section_md ;
-    crd2    -= refc ;
+    crd2    -= refc_md ;
 
     // the section number can also yield the 'dominant' axis
     // by dividing the value by two (another property which is
@@ -404,16 +409,15 @@ struct ir_to_ray
 // inverted where necessary (namely for the left and up direction,
 // which are the negative of zimt's right and down).
 
-template < int nchannels >
 struct ir_to_exr
 : public zimt::unary_functor < v2_t , v3_t , LANES >
 {
   const double section_md ;
-  const double refc ;
+  const double refc_md ;
 
-  ir_to_exr ( double _section_md , double _refc )
+  ir_to_exr ( double _section_md , double _refc_md )
   : section_md ( _section_md ) ,
-    refc ( _refc )
+    refc_md ( _refc_md )
   { }
 
   // incoming, we have 2D model space coordinates, with the origin
@@ -435,7 +439,7 @@ struct ir_to_exr
     // which are centered on the cube face we're dealing with.
 
     crd2[1] -= section * section_md ;
-    crd2    -= refc ;
+    crd2    -= refc_md ;
 
     // the section number can also yield the 'dominant' axis
     // by dividing the value by two (another property which is
@@ -510,8 +514,8 @@ struct ir_to_exr
 // we don't need it for scalars.
 
 void ray_to_cubeface ( const crd3_v & c ,
-                        i_v & face ,
-                        crd2_v & in_face )
+                       i_v & face ,
+                       crd2_v & in_face )
 {
   // form three masks with relations of the numerical values of
   // the 'ray' coordinate. These are sufficient to find out which
@@ -633,8 +637,8 @@ void ray_to_cubeface ( const crd3_v & c ,
 // face indices, and we'll get in-face coordinates as output.
 
 void ray_to_cubeface_fixed ( const crd3_v & c ,
-                              const i_v & face ,
-                              crd2_v & in_face )
+                             const i_v & face ,
+                             crd2_v & in_face )
 {
   // form a mask which is true where a specific axis is 'dominant'.
   // since we have the face indices already, this is simple: it's
@@ -722,5 +726,92 @@ void ray_to_cubeface_fixed ( const crd3_v & c ,
   }
 }
 
+// this functor converts incoming 3D ray coordinates to 2D
+// coordinates pertaining to the IR image (in model space units)
+// Similar code is used in sixfold_t - here, we have a stand-alone
+// version which only needs two values from the metrics_t object.
+// This functor is the inversion of ir_to_ray, which needs the
+// same two values only. With this pair, we can slot the conversions
+// into lux' rendering code.
 
+struct ray_to_ir
+: public zimt::unary_functor < v3_t , v2_t , LANES >
+{
+  // to obtain IR coordinates, we need the width of a 'section'
+  // of the IR image in model space units and the distance to
+  // the center of the cube face images from the left/top margin:
 
+  float section_md ;
+  float refc_md ;
+
+  ray_to_ir ( const float & _section_md ,
+              const float & _refc_md )
+  : section_md ( _section_md ) ,
+    refc_md ( _refc_md )
+  { }
+
+  template < typename I , typename O >
+  void eval ( const I & c , O & ir_c ) const
+  {
+    // first, we glean the face indices and in-face coordinates
+
+    i_v face ;
+
+    ray_to_cubeface ( c , face , ir_c ) ;
+
+    ir_c += refc_md ;
+
+    // for the vertical, we add the face index times the section
+    // size (in model space units)
+
+    ir_c[1] += face * section_md ;
+  }
+} ;
+
+// when doing geometrical transformations of images, the coordinate
+// transformations can often be expressed as the chaining of two
+// functors: one transforming the incoming coordinate to a 3D ray,
+// and a second one transforming the 3D ray to another 2D coordinate.
+// struct plane_to_plane odders just such a construct, optionally
+// with a 3D-to-3D operation inserted in between, e.g. a 3D rotation.
+// This is pure SIMDized code, there is no scalar overload.
+
+template < typename T , std::size_t L >
+struct plane_to_plane
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 2 > , L >
+{
+  typedef zimt::simdized_type < zimt::xel_t < T , 2 > , L > crd2_v ;
+  typedef zimt::simdized_type < zimt::xel_t < T , 3 > , L > crd3_v ;
+  std::function < void ( const crd2_v & , crd2_v & ) > tf ;
+
+  template < typename FA , typename FB >
+  plane_to_plane ( FA fa , FB fb )
+  {
+    tf = [=] ( const crd2_v & in , crd2_v & out )
+    {
+      crd3_v intermediate ;
+      fa.eval ( in , intermediate ) ;
+      fb.eval ( intermediate , out ) ;
+    } ;
+  }
+
+  template < typename FA , typename F3 , typename FB >
+  plane_to_plane ( FA fa , F3  f3 , FB fb )
+  {
+    tf = [=] ( const crd2_v & in , crd2_v & out )
+    {
+      crd3_v intermediate ;
+      fa.eval ( in , intermediate ) ;
+      f3.eval ( intermediate , intermediate ) ;
+      fb.eval ( intermediate , out ) ;
+    } ;
+  }
+
+  void eval ( const crd2_v & in , crd2_v & out )
+  {
+    tf ( in , out ) ;
+  }
+} ;
+
+#endif // #ifndef GEOMETRY_H

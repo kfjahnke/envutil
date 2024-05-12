@@ -163,18 +163,29 @@
 
 #include <array>
 #include <filesystem>
-#include "zimt/zimt.h"
+#include <regex>
+
 #include <OpenImageIO/texture.h>
 #include <OpenImageIO/filesystem.h>
+#include <OpenImageIO/argparse.h>
+
+// using namespace OIIO ;
+using OIIO::ImageInput ;
+using OIIO::ImageOutput ;
+using OIIO::TypeDesc ;
+using OIIO::ImageSpec ;
+using OIIO::TextureOptBatch ;
+using OIIO::TextureSystem ;
+using OIIO::Tex::RunMaskOn ;
+using OIIO::ustring ;
+using OIIO::ArgParse ;
+using OIIO::Filesystem::convert_native_arguments ;
+
+#include "common.h"
 #include "metrics.h"
 #include "geometry.h"
 
-using namespace OIIO ;
-
 // some globals, which will be set via argparse in main
-
-#include <regex>
-#include <OpenImageIO/argparse.h>
 
 static bool verbose = false;
 static bool ctc = false ;
@@ -976,7 +987,7 @@ struct sixfold_t
     dtdy.store ( scratch + 5 * LANES ) ;
 
     bool result =
-    ts->texture ( th , nullptr , batch_options , Tex::RunMaskOn ,
+    ts->texture ( th , nullptr , batch_options ,RunMaskOn ,
                   scratch , scratch + LANES ,
                   scratch + 2 * LANES , scratch + 3 * LANES ,
                   scratch + 4 * LANES , scratch + 5 * LANES ,
@@ -993,7 +1004,7 @@ struct sixfold_t
     // these pointers to OIIO directly.
 
     bool result =
-    ts->texture ( th , nullptr , batch_options , Tex::RunMaskOn ,
+    ts->texture ( th , nullptr , batch_options , RunMaskOn ,
                   pickup[0].data() , pickup[1].data() ,
                   dsdx.data() , dtdx.data() ,
                   dsdy.data() , dtdy.data() ,
@@ -1502,7 +1513,7 @@ struct eval_latlon
            < v2_t , zimt::xel_t < float , nchannels > , LANES >
 {
   typedef zimt::xel_t < float , nchannels > px_t ;
-  typedef zimt::simdized_type < px_t , 16 > px_v ;
+  typedef zimt::simdized_type < px_t , LANES > px_v ;
 
   // latlon contains a view to an image in 2:1 aspect ratio in
   // spherical projection.
@@ -1696,7 +1707,7 @@ struct eval_env
   int width ;
   double px2_to_model ;
   const sixfold_t < nchannels > & sf ;
-  ir_to_exr < nchannels > to_exr ;
+  ir_to_exr to_exr ;
 
   // pull in the c'tor arguments
 
@@ -1795,7 +1806,7 @@ struct eval_env
     dt.store ( scratch + nchannels * LANES ) ;
 
     ts->environment ( th , nullptr, batch_options ,
-                      Tex::RunMaskOn ,
+                      RunMaskOn ,
                       scratch ,
                       scratch + nchannels * LANES ,
                       scratch + 2 * nchannels * LANES ,
@@ -1812,7 +1823,7 @@ struct eval_env
     // same.
 
     ts->environment ( th , nullptr, batch_options ,
-                      Tex::RunMaskOn ,
+                      RunMaskOn ,
                       p00r[0].data() ,
                       ds[0].data() ,
                       dt[0].data() ,
@@ -2154,8 +2165,7 @@ void latlon_to_ir ( const zimt::view_t < 2 , pix_t<nchannels> > & latlon ,
   // this one converts coordinates pertaining to the IR image to
   // 3D ray coordinates.
 
-  ir_to_ray < nchannels > itr
-    ( sf.section_md , sf.refc_md ) ;
+  ir_to_ray itr ( sf.section_md , sf.refc_md ) ;
 
   // this one converts 3D ray coordinates to lat/lon values
 
@@ -2345,7 +2355,7 @@ int main ( int argc , const char ** argv )
   // This is a convenient way to glean arguments on all supported
   // platforms - getopt isn't available everywhere.
 
-  Filesystem::convert_native_arguments(argc, (const char**)argv);
+  convert_native_arguments(argc, (const char**)argv);
   ArgParse ap;
   ap.intro("envutil -- convert between lat/lon and cubemap format\n")
     .usage("envutil [options] --input INPUT --output OUTPUT");

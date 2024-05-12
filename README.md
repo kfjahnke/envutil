@@ -22,7 +22,7 @@ To build, try this:
 
     mkdir build
     cd build
-    cmake [options] ...
+    cmake [options] ..
     make
 
 this should produce a binary named 'envutil' or 'envutil.exe'.
@@ -76,8 +76,13 @@ too dark.
 ## --input INPUT         input file name (mandatory)
 
 Any image file which has 2:1 aspect ratio will be accepted as lat/lon environment
-map, and any image file with 1:6 aspect ratio will be accepted as a cubemap. The
-only requirement for cubemaps is that their width should be even.
+map, and any image file with 1:6 aspect ratio will be accepted as a cubemap.
+See --6 for a way to load a cubemap from six separate cube face image files. 
+
+## --output OUTPUT       output file name (mandatory)
+
+The output will be stored under this name. See --6 for a way to store cubemaps
+to six separate cube face image files.
 
 ## --save_ir INTERNAL    save IR image to this file
 
@@ -90,7 +95,9 @@ option. The IR image can serve as input to envutil, but you need to tell envutil
 the field of view, which is typically larger than ninety degrees. Since you
 already have the frame of support and a size which is a multiple of the tile
 size, you'd pass --min_support 0 and --tile_size 1 - unless you want to change
-the values.
+the values. Using an IR file as input will only work for even cube face image sizes.
+For those, when you run envutil with -v, it will give you the fov for the IR
+image.
 
 ## --ts_options OPTIONS  pass comma-separates k=v list of options to OIIO's texture system
 
@@ -102,13 +109,16 @@ we needn't really pass any texture system argumets.
 This value is for the output. The extent of the input is gleaned from the file.
 If you don't pass an extent, envutil will pick a 'sensible' value: if the source
 is a lat/lon environment, it will pick a multiple of 64 which is just larger than
-4/pi times the lat/lon input's width, to make up for the distortions of the
-rectilinear projection towards the edges. For the reverse conversion, it will
-use four times the cubemap's width, which results in at least equal resolution.
+1/pi times the lat/lon input's width, to make up for the distortions of the
+rectilinear projection towards the edges - the extent is chosen so that the
+resolution in the center of the cube faces is the same as the lat/lon image's
+at the equator. For the reverse conversion, it will use twice the cubemap's
+width, which also results in at least equal resolution.
 
 ## --itp ITP             interpolator: 1 for direct bilinear, -1 for OIIO's anisotropic
 
-So far, there are these two interpolators. the 'direct blinear' is very fast and it's often good enough if the resolution of source and target don't differ much. If aliasing
+So far, there are these two interpolators. the 'direct blinear' is very fast and it's
+often good enough if the resolution of source and target don't differ much. If aliasing
 is an issue and good quality is required, OIIO's anisotropic is recommended. This is
 slow and tends to come out quite soft, losing some detail. I offer 'twining' with the
 next option, which can improve the quality of the result when the direct bilinear
@@ -144,10 +154,16 @@ If you don't pass --twine_sigma, emvutil will use a simple box filter to combine
 
 If you pass twine_sigma, marginal twining kernel values may become quite small and using them as filter taps makes no sense. Pass a threshold here to suppress kernel values below the threshold. This is mainly to reduce processing time. Use -v to display the kernel and see which kernel values 'survive' the thresholding.
 
-## --face_fov FOV        field of view of the cube faces of a cubemap input (in degrees)
+## --face_fov FOV        field of view of the cube faces (in degrees)
 
-If an input cubemap has other than ninety degrees field of view per cubeface image, pass
-this value here.
+Normally, the cube face images in a cubemap have ninety degrees field of view.
+But you can pass a larger value here. If the cubemap is the input, passing
+face_fov specifies that this is not a 'standard' cubemap with ninety degrees
+field of view, but that it contains images with the given field of view.
+If the cubemap is made (like, from the lat/lon environment map) and you
+pass face_fov, the output cubemap will have this nonstandard field of view.
+Writing cubemaps, envutil will try and set appropriate metadata. Please
+refer to the 'ctc' argument as well!
 
 ## --support_min EXTENT  minimal additional support around the cube face proper
 
@@ -176,7 +192,7 @@ This flag pertains both to input and output and tells envutil to expect or produ
 six separate cube face images. The images have to follow a naming scheme: all six
 file names are derived from a common name template. This template is split into
 base name and extension, the the base name is suffixed with an underscore followed
-by the view direction (left, right, front, back, top, bottom). Note that no file
+by the view direction (left, right, top, bottom, front, back). Note that no file
 by the name of the template name is used for output - if such a file exists, this
 does not matter to envutil. For input, if such a file exists, envutil will try
 and open it as input, because envutil looks at the input to figure out which
@@ -202,7 +218,7 @@ this program for better (and faster) cubemap handling.
 One problem with cubemaps is that they are normally stored as concatenations of
 six square images with precisely ninety degrees fov (field of view). This makes
 access to pixels near the edges tricky - if the interpolator used for the purpose
-needs support, marginal pixels don't have them all around, and it has to be gleaned
+needs support, marginal pixels don't have it all around, and it has to be gleaned
 from adjoining cube faces, reprojecting content to provide the support. envutil
 uses an internal representation (IR for short) of the cubemap which holds six
 square images with a fov slightly larger than ninety degrees, where the part
@@ -244,7 +260,7 @@ though, the coordinates are processed one after the other (albeit with use of
 vertical SIMDization for the single-coordinate lookups). This is one of the reasons
 why this process isn't very fast. OIIO's method of inspecting the derivatives has
 the advantage of being perfectly general, and the lookup can decide for each pixel
-whether it needs to be interpolated or antialiased.
+whether it needs to be interpolated or antialiased - and how much.
 
 In contrast, using bilinear interpolation (--itp 1) is very fast, but it's not
 adequate for all situations - especially not if there are large differences in

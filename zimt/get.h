@@ -686,7 +686,7 @@ struct join_t
 // there, but the 'act' functor should not have a notion of
 // which axis is 'hot', but rather take the entire simdized
 // datum it receives as input 'at face value', so doing the
-// transformation there would involve all channels, whereas
+// transformation there would involve all axes, whereas
 // linspace_t is aware of the 'hot' axis and can produce the
 // simdized data more efficiently, by only modifying the
 // component of the simdized datum pertaining to the hot axis.

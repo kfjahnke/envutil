@@ -431,36 +431,36 @@ struct std_simd_type
   // TODO: odd: with clang++, sin and cos don't perform as expected;
   // using a loop does the trick:
 
-#ifdef __clang__
-
-  friend std_simd_type cos ( std_simd_type arg )
-  {
-    std_simd_type result ;
-    for ( std::size_t i = 0 ; i < size() ; i++ )
-      result[i] = std::cos ( arg[i] ) ;
-    return result ;
-  }
-
-  friend std_simd_type sin ( std_simd_type arg )
-  {
-    std_simd_type result ;
-    for ( std::size_t i = 0 ; i < size() ; i++ )
-      result[i] = std::sin ( arg[i] ) ;
-    return result ;
-  }
-
-#else
+// #ifdef __clang__
+// 
+//   friend std_simd_type cos ( std_simd_type arg )
+//   {
+//     std_simd_type result ;
+//     for ( std::size_t i = 0 ; i < size() ; i++ )
+//       result[i] = std::cos ( arg[i] ) ;
+//     return result ;
+//   }
+// 
+//   friend std_simd_type sin ( std_simd_type arg )
+//   {
+//     std_simd_type result ;
+//     for ( std::size_t i = 0 ; i < size() ; i++ )
+//       result[i] = std::sin ( arg[i] ) ;
+//     return result ;
+//   }
+// 
+// #else
 
   BROADCAST_STD_FUNC(sin)
   BROADCAST_STD_FUNC(cos)
 
-#endif
+// #endif
 
   #undef BROADCAST_STD_FUNC
 
   #define BROADCAST_STD_FUNC2(FUNC) \
     friend std_simd_type FUNC ( std_simd_type arg1 , \
-                            std_simd_type arg2 ) \
+                                std_simd_type arg2 ) \
     { \
       return FUNC ( arg1.to_base() , arg2.to_base() ) ; \
     }
@@ -477,8 +477,8 @@ struct std_simd_type
 
   #define BROADCAST_STD_FUNC3(FUNC) \
     friend std_simd_type FUNC ( std_simd_type arg1 , \
-                            std_simd_type arg2 , \
-                            std_simd_type arg3 ) \
+                                std_simd_type arg2 , \
+                                std_simd_type arg3 ) \
     { \
       return FUNC ( arg1.to_base() , arg2.to_base() , arg3.to_base() ) ; \
     }
@@ -486,6 +486,16 @@ struct std_simd_type
   BROADCAST_STD_FUNC3(fma)
 
   #undef BROADCAST_STD_FUNC3
+
+  // AFAICT std::simd doesn't offer sincos
+
+  friend void sincos ( const std_simd_type & x ,
+                       std_simd_type & s ,
+                       std_simd_type & c )
+  {
+    s = sin ( x ) ;
+    c = cos ( x ) ;
+  }
 
   // macros used for the parameter 'CONSTRAINT' in the definitions
   // further down. Some operations are only allowed for integral types
