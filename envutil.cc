@@ -1357,7 +1357,7 @@ struct ll_to_px_t
 
   // infrastructure
   
-  const ll_to_ray_t ll_to_ray ;
+  const ll_to_ray_t < float , LANES > ll_to_ray ;
 
   // for lookup with OIIO's texture system, we need batch options.
   // I'd keep them in the code which actually uses them, but the

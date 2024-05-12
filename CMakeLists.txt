@@ -108,39 +108,41 @@ endif()
 option(USE_GOADING "USE SIMD EMULATION WITH SMALL LOOPS" OFF)
 
 if ( NOT USE_GOADING )
-  # find_package ( HWY CONFIG )
-  # if ( HWY_FOUND )
-  #   message ( STATUS "find_package: HWY_FOUND = true" )
-  #   set ( required_libraries ${required_libraries} hwy )
-  #   set ( SIMD_LIBRARY "-D USE_HWY" )
-  # else()
-  #   find_package ( VC )
-  #   if ( VC_FOUND )
-  #     message ( STATUS "find_package: VC_FOUND = true" )
-  #     set ( required_libraries ${required_libraries} Vc )
-  #     set ( SIMD_LIBRARY "-D USE_VC" )
-  #   else()
+  find_package ( HWY CONFIG )
+  if ( HWY_FOUND )
+    message ( STATUS "find_package: HWY_FOUND = true" )
+    set ( required_libraries ${required_libraries} hwy )
+    set ( SIMD_LIBRARY "-D USE_HWY" )
+  else()
+    find_package ( VC )
+    if ( VC_FOUND )
+      message ( STATUS "find_package: VC_FOUND = true" )
+      set ( required_libraries ${required_libraries} Vc )
+      set ( SIMD_LIBRARY "-D USE_VC" )
+    else()
       set ( SIMD_LIBRARY "-D USE_STDSIMD" )
-  #   endif()
-  # endif()
+    endif()
+  endif()
 endif()
 
 set( required_libraries
       ${required_libraries} OpenImageIO OpenImageIO_Util )
 
 add_executable(${_project_name} envutil.cc)
+add_executable(stepper stepper.cc)
 
 target_link_libraries(${_project_name} pthread ${required_libraries})
+target_link_libraries(stepper pthread ${required_libraries})
 
 # TODO: currently, optimization with -Ofast does not work
 
 # note: compiler options for AVX2:
 #      "-O3 -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
 
-set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
-      "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
-      # "-O3 -Wno-enum-compare ${SIMD_LIBRARY}")
+set_source_files_properties ( envutil.cc stepper.cc PROPERTIES COMPILE_FLAGS
+      # "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
+      "-O3 -Wno-enum-compare ${SIMD_LIBRARY}")
 
-# install the binary
+# install the binaries
 
-install(TARGETS ${_project_name} DESTINATION bin)
+install(TARGETS ${_project_name} stepper DESTINATION bin)
