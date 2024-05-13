@@ -101,6 +101,32 @@ enum { EXR_LEFT , EXR_UP , EXR_FORWARD } ;
 // the cubemap comes out right this way, so I assume that their text
 // is correct and the drawing is wrong.
 
+typedef enum
+{
+  SPHERICAL ,
+  CYLINDRICAL ,
+  RECTILINEAR ,
+  STEREOGRAPHIC ,
+  FISHEYE ,
+  CUBEMAP ,
+  PRJ_NONE
+}  projection_t ;
+
+const char * const projection_name[]
+{
+  "spherical" ,
+  "cylindrical" ,
+  "rectilinear" ,
+  "stereographic" ,
+  "fisheye" ,
+  "cubemap"
+} ;
+
+struct extent_type
+{
+  double x0 , x1 , y0 , y1 ;
+} ;
+
 // coordinate transformations, coded as templates in zimt 'act'
 // functor style, returning the result via a reference argument
 

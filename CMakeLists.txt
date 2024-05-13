@@ -135,19 +135,21 @@ set( required_libraries
 
 add_executable(${_project_name} envutil.cc)
 add_executable(stepper stepper.cc)
+add_executable(extract extract.cc)
 
 target_link_libraries(${_project_name} pthread ${required_libraries})
 target_link_libraries(stepper pthread ${required_libraries})
+target_link_libraries(extract pthread ${required_libraries})
 
 # TODO: currently, optimization with -Ofast does not work
 
 # note: compiler options for AVX2:
 #      "-O3 -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
 
-set_source_files_properties ( envutil.cc stepper.cc PROPERTIES COMPILE_FLAGS
+set_source_files_properties ( envutil.cc extract.cc PROPERTIES COMPILE_FLAGS
       # "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
       "-O3 -Wno-enum-compare ${SIMD_LIBRARY}")
 
-# install the binaries
+# install the 'useful' binaries (stepper is only a demo)
 
-install(TARGETS ${_project_name} stepper DESTINATION bin)
+install(TARGETS ${_project_name} extract DESTINATION bin)

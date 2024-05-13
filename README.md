@@ -2,10 +2,11 @@
 
 utility to convert between lat/lon and cubemap environment maps
 
-This is a stnd-alone repository for envutil, which started out as a demo program
+This is a stand-alone repository for envutil, which started out as a demo program
 for my library [zimt](https://github.com/kfjahnke/zimt). The program has grown
 beyond the limits of what I think is sensible for a demo program, and I also
-think it's a useful tool.
+think it's a useful tool. There is now a second useful program in this repository,
+called 'extract'. It will also be built and installed by the cmake script. See further down for documentation.
 
 The program is built with CMake.
 
@@ -25,7 +26,7 @@ To build, try this:
     cmake [options] ..
     make
 
-this should produce a binary named 'envutil' or 'envutil.exe'.
+this should produce a binary named 'envutil' or 'envutil.exe', same for 'extract'.
 
 envutil --help gives a summary of command line options:
 
@@ -35,31 +36,31 @@ envutil --help gives a summary of command line options:
 
     Usage: envutil [options] --input INPUT --output OUTPUT
 
-        --help                Print help message
+    ## --help                Print help message
         -v                    Verbose output
-        --input INPUT         input file name (mandatory)
-        --output OUTPUT       output file name (mandatory)
-        --save_ir INTERNAL    save IR image to this file
-        --ts_options OPTIONS  pass comma-separates k=v list of options to
+    ## --input INPUT         input file name (mandatory)
+    ## --output OUTPUT       output file name (mandatory)
+    ## --save_ir INTERNAL    save IR image to this file
+    ## --ts_options OPTIONS  pass comma-separates k=v list of options to
                                 OIIO's texture system
-        --extent EXTENT       width of the cubemap / height of the envmap
-        --itp ITP             interpolator: 1 for direct bilinear, -1 for
+    ## --extent EXTENT       width of the cubemap / height of the envmap
+    ## --itp ITP             interpolator: 1 for direct bilinear, -1 for
                                 OIIO's anisotropic
-        --twine TWINE         use twine*twine oversampling and box filter -
+    ## --twine TWINE         use twine*twine oversampling and box filter -
                                 best with itp1
-        --twine_width TWINE_WIDTH  widen the pick-up area of the twining filter
-        --twine_sigma TWINE_SIGMA  use a truncated gaussian for the twining
+    ## --twine_width TWINE_WIDTH  widen the pick-up area of the twining filter
+    ## --twine_sigma TWINE_SIGMA  use a truncated gaussian for the twining
                                          filter (default: don't)
-        --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
-        --face_fov FOV        field of view of the cube faces of a cubemap
+    ## --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
+    ## --face_fov FOV        field of view of the cube faces of a cubemap
                                 input (in degrees)
-        --support_min EXTENT  minimal additional support around the cube face
+    ## --support_min EXTENT  minimal additional support around the cube face
                                 proper
-        --tile_width EXTENT   tile width for the internal representation image
-        --ctc                 flag indicating fov is measured between marginal
+    ## --tile_width EXTENT   tile width for the internal representation image
+    ## --ctc                 flag indicating fov is measured between marginal
                                 pixel centers
-        --6                   use six separate cube face images
-        --lux                 use cube face images named in lux convention
+    ## --6                   use six separate cube face images
+    ## --lux                 use cube face images named in lux convention
     
 The specific conversion will depend on the input (given with --input ...).
 If you pass a lat/lon environment map, it will be converted to a cubemap, and
@@ -293,3 +294,77 @@ each edge in the image it joins up with in the cube. If you process such cubemap
 with envutil, pass --ctc (which stands for center-to-center). Otherwise, there will
 be subtle errors along the cube face edges which can easily go unnoticed. Make sure
 you figure out which 'flavour' your cubemaps are.
+
+# extract utility to extract an image from an environment.
+
+This program takes a 2:1 lat/lon environment or a 1:6 cubemap image as input and
+produces output in the specified orientation, projection, field of view and extent. The program is new and will still need some tweaking, but it's
+already functional.
+This started out as a simple demo for 'steppers' (stepper.cc is still there with
+the initial code), but I thought that, with a bit of additional parameterization,
+it would make a useful tool. For the time being, it only uses bilinear
+interpolation, so the resolution of the output should be close to the input's.
+The output projection can be one of "spherical", "cylindrical", "rectilinear",
+"stereographic", "fisheye" or "cubemap". The geometrical extent of the output is
+set up most conveniently by passing --hfov, the horizontal field of view of the
+output. The x0, x1, y0, and y1 parameters allow passing specific extent values
+(in model space units), which should rarely be necessary. To specify a 3D
+rotation, pass Euler angles yaw, pitch and roll - they default to zero: no
+rotation. The size of the output is given by --width and --height. You must pass
+an output filename with --output; --input specifies the environment image.
+Currently, the output is always plain RGB, alpha is ignored.
+
+## --input INPUT         input file name (mandatory)
+
+Any image file which has 2:1 aspect ratio will be accepted as lat/lon environment
+map, and any image file with 1:6 aspect ratio will be accepted as a cubemap.
+See --6 for a way to load a cubemap from six separate cube face image files. 
+
+## --output OUTPUT       output file name (mandatory)
+
+The output will be stored under this name. See --6 for a way to store cubemaps
+to six separate cube face image files.
+
+## --width EXTENT    width of the output
+
+in pixel units. For cubemaps, this should be precisely six times the height.
+
+## --height EXTENT   height of the output
+
+in pixel units.
+
+## --projection PRJ  target projection
+
+Pass on of the supported output projections: "spherical", "cylindrical",
+"rectilinear", "stereographic", "fisheye" or "cubemap". The default is
+"rectilinear".
+
+## --hfov ANGLE      horiziontal field of view of the output (in degrees)
+
+For cubemap output, you want precisely 90 degrees - or a bit more, if your
+cubemap processing software can handle such cubemaps. The 'natural' limit for
+rectilinear images is 180 degrees, but this does not produce 'sensible' output.
+Same for stereographic images. spherical, cylindrical and fisheye output can
+have any field of view - the environment image will be periodized for hfov
+larger than 360 degrees.
+
+## --yaw ANGLE       yaw of the virtual camera (in degrees)
+## --pitch ANGLE     pitch of the virtual camera (in degrees)
+## --roll ANGLE      roll of the virtual camera (in degrees)
+
+These three angles are applied to the 'virtual camera' taking the extracted
+view. They default to zero. It's okay to pass just one or two.
+
+## --x0 EXTENT       low end of the horizontal range
+## --x1 EXTENT       high end of the horizontal range
+## --y0 EXTENT       low end of the vertical range
+## --y1 EXTENT       high end of the vertical range
+
+These are special values which can be used to specify the extent, in model space
+units, of the output. This requires some understanding of the inner workings of
+this program - if you use -v, the verbose output will tell you for each extraction
+which extent values are generated from a field of view parameter, given a specific
+projection. This can help you figure out specific values you may want to pass,
+e.g. to produce anisotropic output.
+
+

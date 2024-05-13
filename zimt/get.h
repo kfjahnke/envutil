@@ -966,6 +966,8 @@ class grok_get_t
 
 public:
 
+  grok_get_t() = default ;
+
   template < typename grokkee_t >
   grok_get_t ( const grokkee_t & grokkee )
   : grok_t ( grokkee )
