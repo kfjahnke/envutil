@@ -50,8 +50,11 @@ bool verbose = true ;
 // simple, so this is a stripped-down version of what's used in
 // envutil - we omit using OIIO's 'environment' function and
 // also the use of 'twining'.
-// The corresponding code for bilinear pick-up from a cubemap
-// is in the adapted version of 'sixfold_t' given in environment.h
+// It may be a good idea, though, to extend this code to encompass
+// all functionality used in envutil - it's handy to have a common
+// 'environment' object without having to worry about the precise
+// nature of it's representation. This might be extended, e.g. to
+// dual fisheye format.
 
 template < std::size_t nchannels >
 struct eval_latlon
@@ -209,11 +212,10 @@ struct eval_latlon
   }
 } ;
 
-// the 'environment' template codes objects which can serve as 'act'
-// functor in zimt::process. It's coded as a zimt::unary_functor
-// taking 3D 'ray' coordinates and producing pixels with C channels.
-// struct repix is used to convert the output to the desired number
-// of channels.
+// functor to convert between pixels with different channel count.
+// currently the only case occuring in this program is the very first
+// one: the output will be the same as the input and the code is
+// optimized away. This object is not well-tested.
 
 template < typename T , std::size_t A , std::size_t B , std::size_t L >
 struct repix
@@ -883,6 +885,8 @@ struct sixfold_t
   }
 } ; // end of struct sixfold_t
 
+// functor to obtain pixel values for ray coordinates from a cubemap
+
 template < std::size_t nchannels >
 struct cbm_to_px_t
 : public zimt::unary_functor
@@ -919,6 +923,12 @@ struct cbm_to_px_t
   }
 
 } ;
+
+// the 'environment' template codes objects which can serve as 'act'
+// functor in zimt::process. It's coded as a zimt::unary_functor
+// taking 3D 'ray' coordinates and producing pixels with C channels.
+// struct repix is used to convert the output to the desired number
+// of channels.
 
 template < typename T , typename U , std::size_t C , std::size_t L >
 class environment
@@ -970,7 +980,6 @@ public:
         bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
                                         TypeDesc::FLOAT , pa4->data() ) ;
         assert ( success ) ;
-        std::cout << "set env 4" << std::endl ;
 
         env =   ray_to_ll_t()
               + eval_latlon < 4 > ( *pa4 )
@@ -985,7 +994,6 @@ public:
         bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
                                         TypeDesc::FLOAT , pa3->data() ) ;
         assert ( success ) ;
-        std::cout << "set env 3" << std::endl ;
 
         env =   ray_to_ll_t()
               + eval_latlon < 3 > ( *pa3 )

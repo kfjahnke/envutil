@@ -167,6 +167,15 @@ void save_array ( const std::string & filename ,
   out->close();
 }
 
+// a large part of the code in this file is dedicated to processing
+// command line arguments. We use OpenImageIO's ArgParse object, which
+// is similar to python's argparse. The result of gleaning the arguments
+// is held in member variables of the 'args' object. If any command line
+// arguments aren't acceptable, the program will terminate with an
+// exception. Beyond simply parsing the arguments, the code in this
+// object does some calculations to process the arguments further and
+// provide more palatable values to the program.
+
 #include <regex>
 #include <OpenImageIO/filesystem.h>
 #include <OpenImageIO/argparse.h>
@@ -182,11 +191,13 @@ struct arguments
   std::string prj_str ;
   double x0 , x1 , y0 , y1 ;
   double hfov ;
-  int width , height ;
+  std::size_t width , height ;
   std::string input ;
   std::string output ;
   std::string metamatch ;
   std::regex field_re ;
+  std::size_t env_width , env_height ;
+  std::size_t nchannels ;
 
   double get_vfov()
   {
@@ -301,7 +312,7 @@ struct arguments
     convert_native_arguments(argc, (const char**)argv);
     ArgParse ap;
     ap.intro("stepper: extract image from an environment\n")
-      .usage("envutil [options] --input INPUT --output OUTPUT");
+      .usage("extract [options] --input INPUT --output OUTPUT");
     ap.arg("-v", &verbose)
       .help("Verbose output");
     ap.arg("--input INPUT")
@@ -396,18 +407,48 @@ struct arguments
     assert ( x0 < x1 ) ;
     assert ( y0 < y1 ) ;
 
-    std::cout << "input: " << input << std::endl ;
-    std::cout << "output: " << output << std::endl ;
-    std::cout << "projection: " << prj_str << std::endl ;
-    std::cout << "width: " << width
-              << " height: " << height << std::endl ;
-    if ( hfov > 0.0 )
+    // some member variables in the args object are gleaned from
+    // the input image:
+
+    auto inp = ImageInput::open ( input ) ;
+    assert ( inp ) ;
+
+    const ImageSpec &spec = inp->spec() ;
+
+    env_width = spec.width ;
+    env_height = spec.height ;
+    nchannels = spec.nchannels ;
+
+    assert (    env_width == env_height * 2
+             || env_height == env_width * 6 ) ;
+
+    inp->close() ;
+
+    if ( verbose )
     {
-      std::cout << "hfov: " << hfov << std::endl ;
-      std::cout << "extent gleaned from hfov:" << std::endl ;
+      std::cout << "input: " << input << std::endl ;
+      std::cout << "input width: " << env_width << std::endl ;
+      std::cout << "input height: " << env_height << std::endl ;
+      std::cout << "input has " << nchannels << " channels" << std::endl ;
+    
+      std::cout << "output: " << output << std::endl ;
+      std::cout << "output projection: " << prj_str << std::endl ;
+      std::cout << "width: " << width
+                << " height: " << height << std::endl ;
+
+      if ( hfov > 0.0 )
+      {
+        std::cout << "hfov: " << hfov << std::endl ;
+        std::cout << "extent gleaned from hfov:" << std::endl ;
+      }
+      else
+      {
+        std::cout << "extent gleaned from command line arguments:"
+                  << std::endl ;
+      }
+      std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
+      std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
     }
-    std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
-    std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
   }
 } ;
 
@@ -415,52 +456,65 @@ struct arguments
 
 #include "environment.h"
 
-int main ( int argc , const char ** argv )
+template < std::size_t nchannels >
+void work ( const arguments & args ,
+            zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
 {
-  // // obtain environment image data
-  // 
-  // if ( argc <= 1 )
-  // {
-  //   std::cerr << "pass a 2:1 lat/lon or 1:6 cubemap image" << std::endl ;
-  // }
+  // set up the environment object yielding content. This serves as
+  // the 'act' functor for zimt::process
 
-  arguments args ( argc , argv ) ;
-
-  auto inp = ImageInput::open ( args.input ) ;
-  assert ( inp ) ;
-
-  std::size_t w ;
-  std::size_t h ;
-  std::size_t nchannels ;
-
-  const ImageSpec &spec = inp->spec() ;
-
-  w = spec.width ;
-  h = spec.height ;
-  nchannels = spec.nchannels ;
-
-  assert ( w == h * 2 || h == w * 6 ) ;
-
-  inp->close() ;
+  environment < float , float , nchannels , 16 > env ( args.input ) ;
 
   // for simplicity's sake, only produce RGB output
 
-  typedef zimt::xel_t < float , 3 > px_t ;
+  typedef zimt::xel_t < float , nchannels > px_t ;
 
   zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
 
   // set up zimt::storers to populate the target arrays with
   // zimt::process
 
-  zimt::storer < float , 3 , 2 , 16 > cstor ( trg ) ;
+  zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
 
-  // orthonormal system for the view
+  // use the get, act and put components with zimt::process
+  // to produce the target images and store them to disk
+
+  if ( args.verbose )
+    std::cout << "producing output" << std::endl ;
+
+  zimt::process ( trg.shape , get_ray , env , cstor ) ;
+
+  if ( args.verbose )
+    std::cout << "saving output image: " << args.output << std::endl ;
+
+  save_array < nchannels > ( args.output , trg ) ;
+
+  if ( args.verbose )
+    std::cout << "done." << std::endl ;
+}
+
+int main ( int argc , const char ** argv )
+{
+  // process command line arguments - the result is held in a bunch
+  // of member variables in the 'args' object, to be passed around
+  // conveniently.
+
+  arguments args ( argc , argv ) ;
+
+  // orthonormal system of basis vectors the view
 
   crd3_t xx { 1.0 , 0.0 , 0.0 } ;
   crd3_t yy { 0.0 , 1.0 , 0.0 } ;
   crd3_t zz { 0.0 , 0.0 , 1.0 } ;
 
-  double m_pi_4 = M_PI / 4.0 ;
+  // the three vectors are rotated with the given yaw, pitch
+  // and roll, and later passed on the to 'steppers', the objects
+  // which provide 3D 'ray' coordinates. They incorporate the
+  // rotated basis in their ray generation, resulting in
+  // appropriately oriented ray coordinates which can be formed
+  // more efficiently in the steppers - first calculating the
+  // rays and then rotating the rays in a second step takes
+  // more CPU cycles.
 
   rotate_3d < float , 16 > r3 ( args.roll , args.pitch , args.yaw ) ;
   
@@ -469,60 +523,71 @@ int main ( int argc , const char ** argv )
   zz = r3 ( zz ) ;
 
   // set up the steppers. note the extents of the 2D manifold
-  // given in model space uits.
+  // given in model space uits. These objects will deliver 3D
+  // 'ray' coordinates as input to the 'act' functor. Not how
+  // each projection has it's distinct type of stepper, but
+  // they are all assigned to a common type, a 'grok_get_t'.
+  // This uses type erasure and captures the functionality
+  // in std::functions, and the resulting object is only
+  // characterized by it's input and output type and lane
+  // count.
 
-  zimt::grok_get_t < float , 3 , 2 , 16 > get_data ;
+  zimt::grok_get_t < float , 3 , 2 , 16 > get_ray ;
 
   switch ( args.projection )
   {
     case RECTILINEAR :
-      get_data = rectilinear_stepper < float , 16 >
+      get_ray = rectilinear_stepper < float , 16 >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case FISHEYE :
-      get_data = fisheye_stepper < float , 16 >
+      get_ray = fisheye_stepper < float , 16 >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case STEREOGRAPHIC :
-      get_data = stereographic_stepper < float , 16 >
+      get_ray = stereographic_stepper < float , 16 >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case SPHERICAL :
-      get_data = spherical_stepper < float , 16 >
+      get_ray = spherical_stepper < float , 16 >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case CYLINDRICAL :
-      get_data = cylindrical_stepper < float , 16 >
+      get_ray = cylindrical_stepper < float , 16 >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case CUBEMAP :
-      get_data = cubemap_stepper < float , 16 >
+      get_ray = cubemap_stepper < float , 16 >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
     default:
       break ;
   }
 
-  // set up the environment object yielding content. This serves as
-  // the 'act' functor for zimt::process
+  // the code to set up and extract data from the environment
+  // depends on the number of channels. That's passed as a template
+  // argument, so here we have a case switch over 'nchannels' which
+  // dispatches to the appropriate instantiations.
 
-  environment < float , float , 3 , 16 > env ( args.input ) ;
-
-  // use the get, act and put components with zimt::process
-  // to produce the target images and store them to disk
-
-  if ( args.verbose )
-    std::cout << "producing output" << std::endl ;
-  zimt::process ( trg.shape , get_data , env , cstor ) ;
-  if ( args.verbose )
-    std::cout << "saving output image: " << args.output << std::endl ;
-  save_array < 3 > ( args.output , trg ) ;
-  if ( args.verbose )
-    std::cout << "done." << std::endl ;
+  switch ( args.nchannels )
+  {
+    case 1:
+      work < 1 > ( args , get_ray ) ;
+      break ;
+    case 2:
+      work < 2 > ( args , get_ray ) ;
+      break ;
+    case 3:
+      work < 3 > ( args , get_ray ) ;
+      break ;
+    case 4:
+      work < 4 > ( args , get_ray ) ;
+      break ;
+  }
 }
     
