@@ -1,6 +1,7 @@
-# envutil
+# This repository has the code for [envutil](#envutil) and [extract](#extract)
 
-utility to convert between lat/lon and cubemap environment maps
+# envutil
+# utility to convert between lat/lon and cubemap environment maps
 
 This is a stand-alone repository for envutil, which started out as a demo program
 for my library [zimt](https://github.com/kfjahnke/zimt). The program has grown
@@ -295,7 +296,8 @@ with envutil, pass --ctc (which stands for center-to-center). Otherwise, there w
 be subtle errors along the cube face edges which can easily go unnoticed. Make sure
 you figure out which 'flavour' your cubemaps are.
 
-# extract utility to extract an image from an environment.
+# extract
+# utility to extract a reprojected image from an environment.
 
 This program takes a 2:1 lat/lon environment or a 1:6 cubemap image as input and
 produces output in the specified orientation, projection, field of view and extent. The program is new and will still need some tweaking, but it's
