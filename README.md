@@ -314,7 +314,6 @@ output. The x0, x1, y0, and y1 parameters allow passing specific extent values
 rotation, pass Euler angles yaw, pitch and roll - they default to zero: no
 rotation. The size of the output is given by --width and --height. You must pass
 an output filename with --output; --input specifies the environment image.
-Currently, the output is always plain RGB, alpha is ignored.
 
 ## --input INPUT         input file name (mandatory)
 
