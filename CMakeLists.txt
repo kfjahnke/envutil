@@ -119,7 +119,7 @@ if ( NOT USE_GOADING )
     set ( required_libraries ${required_libraries} hwy )
     set ( SIMD_LIBRARY "-D USE_HWY" )
   else()
-    find_package ( VC )
+    find_package ( Vc )
     if ( VC_FOUND )
       message ( STATUS "find_package: VC_FOUND = true" )
       set ( required_libraries ${required_libraries} Vc )
@@ -147,8 +147,8 @@ target_link_libraries(extract pthread ${required_libraries})
 #      "-O3 -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
 
 set_source_files_properties ( envutil.cc extract.cc PROPERTIES COMPILE_FLAGS
-      "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
-      # "-O3 -Wno-enum-compare ${SIMD_LIBRARY}")
+      # "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
+      "-O3 -Wno-enum-compare ${SIMD_LIBRARY}")
 
 # install the 'useful' binaries (stepper is only a demo)
 

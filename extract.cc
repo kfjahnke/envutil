@@ -458,37 +458,35 @@ struct arguments
 
 template < std::size_t nchannels >
 void work ( const arguments & args ,
-            zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
+            zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
 {
   // set up the environment object yielding content. This serves as
   // the 'act' functor for zimt::process
 
   environment < float , float , nchannels , 16 > env ( args.input ) ;
 
-  // for simplicity's sake, only produce RGB output
-
   typedef zimt::xel_t < float , nchannels > px_t ;
-
+  
   zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
-
+  
   // set up zimt::storers to populate the target arrays with
   // zimt::process
-
+  
   zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
-
+  
   // use the get, act and put components with zimt::process
   // to produce the target images and store them to disk
-
+  
   if ( args.verbose )
     std::cout << "producing output" << std::endl ;
-
+  
   zimt::process ( trg.shape , get_ray , env , cstor ) ;
-
+  
   if ( args.verbose )
     std::cout << "saving output image: " << args.output << std::endl ;
-
+  
   save_array < nchannels > ( args.output , trg ) ;
-
+  
   if ( args.verbose )
     std::cout << "done." << std::endl ;
 }
@@ -532,39 +530,58 @@ int main ( int argc , const char ** argv )
   // characterized by it's input and output type and lane
   // count.
 
-  zimt::grok_get_t < float , 3 , 2 , 16 > get_ray ;
+  // zimt::grok_get_t < float , 3 , 2 , 16 > get_ray ;
+  zimt::grok_get_t < float , 9 , 2 , 16 > get_ray ;
 
   switch ( args.projection )
   {
     case RECTILINEAR :
-      get_ray = rectilinear_stepper < float , 16 >
+      get_ray = deriv_stepper < float , 16 , rectilinear_stepper >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      // get_ray = rectilinear_stepper < float , 16 >
+      //             ( xx , yy , zz , args.width , args.height ,
+      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case FISHEYE :
-      get_ray = fisheye_stepper < float , 16 >
+      get_ray = deriv_stepper < float , 16 , fisheye_stepper >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      // get_ray = fisheye_stepper < float , 16 >
+      //             ( xx , yy , zz , args.width , args.height ,
+      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case STEREOGRAPHIC :
-      get_ray = stereographic_stepper < float , 16 >
+      get_ray = deriv_stepper < float , 16 , stereographic_stepper >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      // get_ray = stereographic_stepper < float , 16 >
+      //             ( xx , yy , zz , args.width , args.height ,
+      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case SPHERICAL :
-      get_ray = spherical_stepper < float , 16 >
+      get_ray = deriv_stepper < float , 16 , spherical_stepper >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      // get_ray = spherical_stepper < float , 16 >
+      //             ( xx , yy , zz , args.width , args.height ,
+      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case CYLINDRICAL :
-      get_ray = cylindrical_stepper < float , 16 >
+      get_ray = deriv_stepper < float , 16 , cylindrical_stepper >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      // get_ray = cylindrical_stepper < float , 16 >
+      //             ( xx , yy , zz , args.width , args.height ,
+      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
       break ;
     case CUBEMAP :
-      get_ray = cubemap_stepper < float , 16 >
+      get_ray = deriv_stepper < float , 16 , cubemap_stepper >
                   ( xx , yy , zz , args.width , args.height ,
                     args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      // get_ray = cubemap_stepper < float , 16 >
+      //             ( xx , yy , zz , args.width , args.height ,
+      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
     default:
       break ;
   }

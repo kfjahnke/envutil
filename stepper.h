@@ -55,13 +55,15 @@
 // Adding this feature comes at little additional cost compared to
 // what an implementation without rotation would use, but increases
 // the usefulness. The alternative - using steppers without built-in
-// rotation and starting the 'act' functor by a rotation - e.g. with
+// rotation and starting the 'act' functor with a rotation - e.g. with
 // a rotational quaternion - is slower, because the rotation has to be
 // applied to every ray coordinate, and this takes quite a few CPU
 // cycles. The built-in rotation used here can exploit certain
 // invariants and mathematical tricks which make it more efficient.
 // The intended use is for extraction of partial images from
 // environments, reprojection, panorama viewing and the likes.
+// A concrete program using this code is 'extract.cc' in this repo.
+
 // I have finally grasped the principle how to avoid rotating
 // coordinates at all: if one first calculates the 3D ray for the
 // 'archetypal' unrotated 2D manifold, it's three components are
@@ -79,7 +81,12 @@
 // of the 2D archetype in question. An alternative would be to use
 // texture coordinates, but to work with texture coordinates, we'd
 // have to move to model space units for the internal caclculations,
-// so 'feeding' model space units is more efficient.
+// so 'feeding' model space units is more efficient. extract.cc
+// can accept a horizontal field of view on the command line and
+// calculates the extent's limits from t. This should be the most
+// common way to go - the extent values produced in this way are
+// symmetrical and isotropic. Here, in the implementation, we
+// process the extent values, because they allow more flexibility.
 
 #include "zimt/zimt.h"
 #include "geometry.h"
@@ -314,7 +321,8 @@ public:
                       T _a0 = - M_PI ,
                       T _a1 = M_PI ,
                       T _b0 = - M_PI_2 ,
-                      T _b1 = M_PI_2 )
+                      T _b1 = M_PI_2 ,
+                      int _dy = 0 )
   : xx ( _xx ) ,
     yy ( _yy ) ,
     zz ( _zz ) ,
@@ -447,7 +455,8 @@ public:
                         T _a0 ,
                         T _a1 ,
                         T _b0 ,
-                        T _b1
+                        T _b1 ,
+                        int _dy = 0 
                        )
   : xx ( _xx ) ,
     yy ( _yy ) ,
@@ -559,7 +568,8 @@ public:
                         T _a0 ,
                         T _a1 ,
                         T _b0 ,
-                        T _b1
+                        T _b1 ,
+                        int _dy = 0 
                        )
   : xx ( _xx ) ,
     yy ( _yy ) ,
@@ -661,7 +671,8 @@ struct fisheye_stepper
                     T _a0 ,
                     T _a1 ,
                     T _b0 ,
-                    T _b1
+                    T _b1 ,
+                    int _dy = 0 
                   )
   : xx ( _xx ) ,
     yy ( _yy ) ,
@@ -782,7 +793,8 @@ struct stereographic_stepper
                     T _a0 ,
                     T _a1 ,
                     T _b0 ,
-                    T _b1
+                    T _b1 ,
+                    int _dy = 0 
                   )
   : xx ( _xx ) ,
     yy ( _yy ) ,
@@ -877,6 +889,7 @@ class cubemap_stepper
   using base_t::planar ;
   using base_t::init ;
   using base_t::increase ;
+  using base_t::width ;
 
   // we have three 3D vectors of unit length. The are orthogonal and
   // can be produced e.g. by applying a rotational quaternion to the
@@ -885,6 +898,8 @@ class cubemap_stepper
   const crd3_t xx ; 
   const crd3_t yy ;
   const crd3_t zz ;
+  const int dy ;
+  int face ;
 
   // some helper variables, used for efficiency.
 
@@ -899,14 +914,16 @@ public:
                     T _a0 ,
                     T _a1 ,
                     T _b0 ,
-                    T _b1
+                    T _b1 ,
+                    int _dy = 0
                   )
   : xx ( _xx ) ,
     yy ( _yy ) ,
     zz ( _zz ) ,
     base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ) ,
     section_md ( _a1 - _a0 ) ,
-    refc_md ( ( _a1 - _a0 ) / 2.0 )
+    refc_md ( ( _a1 - _a0 ) / 2.0 ) ,
+    dy ( _dy )
   { }
 
   // init is used to initialize the vectorized value to the value
@@ -920,6 +937,18 @@ public:
 
     init ( crd ) ;
 
+    // when using derivative_stepper, two additional steppers are
+    // employed: one where the coordinate is shifted by one to the
+    // right and one where it's shifted by one downwards. In the
+    // cubemap stepper, this would result in the latter value being
+    // calculated with a different face index if
+    // crd[1] % ( width - 1 ) is zero. The 'dy' term is to counteract
+    // this problem. It's passed to the c'tor and the face index is
+    // calculated with the correct crd[1].
+
+    face = ( crd[1] + dy ) / width ;
+    assert ( face >= 0 && face <= 5 ) ;
+
     // when traversing a line of a cubemap image, the cube face
     // remains the same. The variation is along the planar
     // horizontal, which, for the given cube face, is collinear
@@ -929,17 +958,8 @@ public:
     // up, the code to produce the rays is as simple as for the
     // rectilinear case. The set-up is quite complex, though.
 
-    // with incoming centered coordinates, the face index is:
-
-    int face = std::trunc (   ( planar[1][0] + 3 * section_md )
-                            / section_md ) ;
-    if ( face > 5 )
-      face = 5 ;
-    else if ( face < 0 )
-      face = 0 ;
-
-    // this gives us p1, the in-face coordinate derived from
-    // the planar y coordinate in planar[1]
+    // find p1, the in-face coordinate derived from the planar
+    // y coordinate in planar[1]
 
     auto p1 = planar[1] + ( 3 - face ) * section_md - refc_md ;
 
@@ -1018,3 +1038,110 @@ public:
   }
 } ;
 
+// variant of stepper which yields the coordiate and the
+// derivatives for a a canonical step in x and y direction
+
+template < typename T ,     // fundamental type
+           std::size_t L ,  // lane count
+           template < typename , size_t > class S >
+struct deriv_stepper
+{
+  typedef zimt::xel_t < T , 3 > crd3_t ;
+  typedef zimt::simdized_type < crd3_t , L > crd3_v ;
+  typedef zimt::xel_t < T , 9 > crd9_t ;
+  typedef zimt::simdized_type < crd9_t , L > crd9_v ;
+  typedef zimt::xel_t < T , 2 > crd2_t ;
+  typedef zimt::simdized_type < crd2_t , L > crd2_v ;
+  typedef zimt::simdized_type < T , L > f_v ;
+  typedef zimt::xel_t < long , 2 > crd_t ;
+  typedef zimt::simdized_type < crd_t , L > crd_v ;
+  typedef typename crd_v::value_type crd_ele_v ;
+
+  S < T , L > r00 ; // yields current ray coordinate
+  S < T , L > r10 ; // yields ray coordinates with x += 1
+  S < T , L > r01 ; // yields ray coordinates with y -= 1
+
+  deriv_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
+                  std::size_t _width ,
+                  std::size_t _height ,
+                  T _a0 ,
+                  T _a1 ,
+                  T _b0 ,
+                  T _b1
+                )
+  : r00 ( _xx , _yy , _zz , _width , _height ,
+          _a0 , _a1 , _b0 , _b1 ) ,
+    r10 ( _xx , _yy , _zz , _width , _height ,
+          _a0 , _a1 , _b0 , _b1 ) ,
+
+    // note that we pass a delta of -1. This is needed for the cubemap
+    // stepper only and has no effect for other steppers, the parameter
+    // is in all stepper signatures to make them compatible. The delta
+    // gives the stepper a way to figure out that it's calculating
+    // rays for coordinates which were offsetted by one canonical step
+    // in the vertical, which is essential for the correct function of
+    // the cubemap stepper (to use the same face index for the offsetted
+    // calculation). Other steppers which derive subimages from the
+    // coordinate would follow this pattern (e.g. dual fisheye images
+    // stacked vertically)
+
+    r01 ( _xx , _yy , _zz , _width , _height ,
+          _a0 , _a1 , _b0 , _b1 , -1 )
+    { }
+
+  void init ( crd9_v & trg , const crd_t & crd )
+  {
+    crd3_v trg00 , trg10 , trg01 ;
+    r00.init ( trg00 , crd ) ;
+    r10.init ( trg10 , { crd[0] + 1 , crd[1] } ) ;
+    r01.init ( trg01 , { crd[0] , crd[1] + 1 } ) ;
+    trg[0] = trg00[0] ;
+    trg[1] = -trg00[1] ;
+    trg[2] = -trg00[2] ;
+    trg[3] = trg10[0] - trg00[0] ;
+    trg[4] = - ( trg10[1] - trg00[1] ) ;
+    trg[5] = - ( trg10[2] - trg00[2] ) ;
+    trg[6] = trg01[0] - trg00[0] ;
+    trg[7] = - ( trg01[1] - trg00[1] ) ;
+    trg[8] = - ( trg01[2] - trg00[2] ) ;
+  }
+
+  void increase ( crd9_v & trg )
+  {
+    crd3_v trg00 , trg10 , trg01 ;
+
+    r00.increase ( trg00 ) ;
+    r10.increase ( trg10 ) ;
+    r01.increase ( trg01 ) ;
+
+    trg[0] = trg00[0] ;
+    trg[1] = -trg00[1] ;
+    trg[2] = -trg00[2] ;
+    trg[3] = trg10[0] - trg00[0] ;
+    trg[4] = - ( trg10[1] - trg00[1] ) ;
+    trg[5] = - ( trg10[2] - trg00[2] ) ;
+    trg[6] = trg01[0] - trg00[0] ;
+    trg[7] = - ( trg01[1] - trg00[1] ) ;
+    trg[8] = - ( trg01[2] - trg00[2] ) ;
+  }
+
+  // the capped variants:
+
+  void init ( crd9_v & trg ,
+              const crd_t & crd ,
+              const std::size_t & cap )
+  {
+    init ( trg , crd ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+
+  void increase ( crd9_v & trg ,
+                  const std::size_t & cap ,
+                  const bool & _stuff = true )
+  {
+    increase ( trg ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+} ;

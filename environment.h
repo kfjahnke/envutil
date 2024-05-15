@@ -37,6 +37,7 @@
 /************************************************************************/
 
 #include <OpenImageIO/imageio.h>
+#include <OpenImageIO/texture.h>
 
 using OIIO::ImageInput ;
 using OIIO::TypeDesc ;
@@ -209,6 +210,102 @@ struct eval_latlon
 
     out  = wl[1] * ( wl[0] * pxul + wr[0] * pxur ) ;
     out += wr[1] * ( wl[0] * pxll + wr[0] * pxlr ) ;
+  }
+} ;
+
+template < std::size_t nchannels >
+struct eval_env
+: public zimt::unary_functor
+   < zimt::xel_t < float , 9 > ,
+     zimt::xel_t < float , nchannels > ,
+     LANES >
+{
+  OIIO::TextureSystem * ts ;
+  OIIO::TextureOptBatch batch_options ;
+  OIIO::TextureSystem::TextureHandle * th ;
+
+  // pull in the c'tor arguments
+
+  eval_env ( const std::string & filename )
+  : ts ( OIIO::TextureSystem::create() ) ,
+    batch_options()
+  {
+    for ( int i = 0 ; i < 16 ; i++ )
+      batch_options.swidth[i] = batch_options.twidth[i] = 0 ;
+    
+    for ( int i = 0 ; i < 16 ; i++ )
+      batch_options.sblur[i] = batch_options.tblur[i] = 0 ;
+
+    typedef decltype ( batch_options.interpmode ) the_t ;
+    batch_options.interpmode = the_t(OIIO::TextureOpt::InterpBilinear) ;
+    
+    OIIO::ustring uenvironment ( filename.c_str() ) ;
+    th = ts->get_texture_handle ( uenvironment ) ;
+  }
+
+  // set up the eval function.
+
+  template < typename I , typename O >
+  void eval ( const I & crd9 , O & px )
+  {
+    crd3_v c3 { crd9[0] , crd9[1] , crd9[2] } ;
+    crd3_v ds { crd9[3] , crd9[4] , crd9[5] } ;
+    crd3_v dt { crd9[6] , crd9[7] , crd9[8] } ;
+
+    // now we can call 'environment', but depending on the SIMD
+    // back-end, we provide the pointers which 'environemnt' needs
+    // in different ways. The first form would in fact work for all
+    // back-ends, but the second form is more concise. Note that,
+    // as of this writing, the OIIO code accepts the batched arguments
+    // but then proceeds to loop over them with single-point lookups,
+    // which kind of defeats the purpose of a SIMDized pipeline. But
+    // 'on this side' we're doing 'proper SIMD', and hope that OIIO
+    // will also eventually provide it.
+
+#if defined USE_VC or defined USE_STDSIMD
+
+    // to interface with zimt's Vc and std::simd backends, we need to
+    // extract the data from the SIMDized objects and re-package the
+    // ouptut as a SIMDized object. The compiler will likely optimize
+    // this away and work the entire operation in registers, so let's
+    // call this a 'semantic manoevre'.
+
+    float scratch [ 4 * nchannels * LANES ] ;
+
+    c3.store ( scratch ) ;
+    ds.store ( scratch + nchannels * LANES ) ;
+    dt.store ( scratch + nchannels * LANES ) ;
+
+    ts->environment ( th , nullptr, batch_options ,
+                      OIIO::Tex::RunMaskOn ,
+                      scratch ,
+                      scratch + nchannels * LANES ,
+                      scratch + 2 * nchannels * LANES ,
+                      nchannels ,
+                      scratch + 3 * nchannels * LANES ) ;
+
+    px.load ( scratch + 3 * nchannels * LANES ) ;
+
+#else
+
+    // the highway and zimt's own backend have an internal representation
+    // as a C vector of fundamentals, so we van use data() on them, making
+    // the code even simpler - though the code above would work just the
+    // same.
+
+    ts->environment ( th , nullptr, batch_options ,
+                      OIIO::Tex::RunMaskOn ,
+                      c3[0].data() ,
+                      ds[0].data() ,
+                      dt[0].data() ,
+                      nchannels ,
+                      px[0].data() ) ;
+
+#endif
+
+    // and that's us done! the 'environment' function has returned pixel
+    // values, which have been passed as result to the zimt::transform
+    // process invoking this functor.
   }
 } ;
 
@@ -932,7 +1029,7 @@ struct cbm_to_px_t
 
 template < typename T , typename U , std::size_t C , std::size_t L >
 class environment
-: public zimt::unary_functor < zimt::xel_t < T , 3 > ,
+: public zimt::unary_functor < zimt::xel_t < T , 9 > ,
                                zimt::xel_t < U , C > ,
                                L >
 {
@@ -943,7 +1040,7 @@ class environment
 
 public:
   
-  typedef zimt::xel_t < T , 3 > ray_t ;
+  typedef zimt::xel_t < T , 9 > ray_t ;
   typedef zimt::xel_t < U , C > px_t ;
   typedef zimt::xel_t < std::size_t , 2 > shape_type ;
 
@@ -981,9 +1078,10 @@ public:
                                         TypeDesc::FLOAT , pa4->data() ) ;
         assert ( success ) ;
 
-        env =   ray_to_ll_t()
-              + eval_latlon < 4 > ( *pa4 )
-              + repix < U , 4 , C , L > () ;
+        env = zimt::grok_type < ray_t , px_t , L > ( eval_env < C > ( filename ) ) ;
+        // env =   ray_to_ll_t()
+        //       + eval_latlon < 4 > ( *pa4 )
+        //       + repix < U , 4 , C , L > () ;
       }
       else if ( nchannels == 3 )
       {
@@ -995,9 +1093,10 @@ public:
                                         TypeDesc::FLOAT , pa3->data() ) ;
         assert ( success ) ;
 
-        env =   ray_to_ll_t()
-              + eval_latlon < 3 > ( *pa3 )
-              + repix < U , 3 , C , L > () ;
+        env = zimt::grok_type < ray_t , px_t , L > ( eval_env < C > ( filename ) ) ;
+        // env =   ray_to_ll_t()
+        //       + eval_latlon < 3 > ( *pa3 )
+        //       + repix < U , 3 , C , L > () ;
       }
       else if ( nchannels == 2 )
       {
@@ -1009,9 +1108,10 @@ public:
                                         TypeDesc::FLOAT , pa2->data() ) ;
         assert ( success ) ;
       
-        env =   ray_to_ll_t()
-              + eval_latlon < 2 > ( *pa2 )
-              + repix < U , 2 , C , L > () ;
+        env = zimt::grok_type < ray_t , px_t , L > ( eval_env < C > ( filename ) ) ;
+        // env =   ray_to_ll_t()
+        //       + eval_latlon < 2 > ( *pa2 )
+        //       + repix < U , 2 , C , L > () ;
       }
       else
       {
@@ -1023,67 +1123,68 @@ public:
                                         TypeDesc::FLOAT , pa1->data() ) ;
         assert ( success ) ;
       
-        env =   ray_to_ll_t()
-              + eval_latlon < 1 > ( *pa1 )
-              + repix < U , 1 , C , L > () ;
+        env = zimt::grok_type < ray_t , px_t , L > ( eval_env < C > ( filename ) ) ;
+        // env =   ray_to_ll_t()
+        //       + eval_latlon < 1 > ( *pa1 )
+        //       + repix < U , 1 , C , L > () ;
       }
     }
-    else if ( h == 6 * w )
-    {
-      if ( verbose )
-      {
-        std::cout << "input has 1:6 aspect ratio, assuming cubemap"
-                  << std::endl ;
-      }
-      if ( nchannels >= 4 )
-      {
-        sixfold_t<4> sf ( w ) ;
-        sf.load ( inp ) ;
-        inp->close() ;
-        sf.mirror_around() ;
-        sf.fill_support ( 1 ) ;
-        std::cout << "cbm set env 4" << std::endl ;
-
-        env =   cbm_to_px_t < 4 > ( sf )
-              + repix < U , 4 , C , L > () ;
-      }
-      else if ( nchannels == 3 )
-      {
-        sixfold_t<3> sf ( w ) ;
-        sf.load ( inp ) ;
-        inp->close() ;
-        sf.mirror_around() ;
-        sf.fill_support ( 1 ) ;
-        std::cout << "cbm set env 3" << std::endl ;
-
-        env =   cbm_to_px_t < 3 > ( sf )
-              + repix < U , 3 , C , L > () ;
-      }
-      else if ( nchannels == 2 )
-      {
-        sixfold_t<2> sf ( w ) ;
-        sf.load ( inp ) ;
-        inp->close() ;
-        sf.mirror_around() ;
-        sf.fill_support ( 1 ) ;
-        std::cout << "cbm set env 2" << std::endl ;
-
-        env =   cbm_to_px_t < 2 > ( sf )
-              + repix < U , 2 , C , L > () ;
-      }
-      else
-      {
-        sixfold_t<1> sf ( w ) ;
-        sf.load ( inp ) ;
-        inp->close() ;
-        sf.mirror_around() ;
-        sf.fill_support ( 1 ) ;
-        std::cout << "cbm set env 1" << std::endl ;
-
-        env =   cbm_to_px_t < 1 > ( sf )
-              + repix < U , 1 , C , L > () ;
-      }
-    }
+//     else if ( h == 6 * w )
+//     {
+//       if ( verbose )
+//       {
+//         std::cout << "input has 1:6 aspect ratio, assuming cubemap"
+//                   << std::endl ;
+//       }
+//       if ( nchannels >= 4 )
+//       {
+//         sixfold_t<4> sf ( w ) ;
+//         sf.load ( inp ) ;
+//         inp->close() ;
+//         sf.mirror_around() ;
+//         sf.fill_support ( 1 ) ;
+//         std::cout << "cbm set env 4" << std::endl ;
+// 
+//         env =   cbm_to_px_t < 4 > ( sf )
+//               + repix < U , 4 , C , L > () ;
+//       }
+//       else if ( nchannels == 3 )
+//       {
+//         sixfold_t<3> sf ( w ) ;
+//         sf.load ( inp ) ;
+//         inp->close() ;
+//         sf.mirror_around() ;
+//         sf.fill_support ( 1 ) ;
+//         std::cout << "cbm set env 3" << std::endl ;
+// 
+//         env =   cbm_to_px_t < 3 > ( sf )
+//               + repix < U , 3 , C , L > () ;
+//       }
+//       else if ( nchannels == 2 )
+//       {
+//         sixfold_t<2> sf ( w ) ;
+//         sf.load ( inp ) ;
+//         inp->close() ;
+//         sf.mirror_around() ;
+//         sf.fill_support ( 1 ) ;
+//         std::cout << "cbm set env 2" << std::endl ;
+// 
+//         env =   cbm_to_px_t < 2 > ( sf )
+//               + repix < U , 2 , C , L > () ;
+//       }
+//       else
+//       {
+//         sixfold_t<1> sf ( w ) ;
+//         sf.load ( inp ) ;
+//         inp->close() ;
+//         sf.mirror_around() ;
+//         sf.fill_support ( 1 ) ;
+//         std::cout << "cbm set env 1" << std::endl ;
+// 
+//         env =   cbm_to_px_t < 1 > ( sf )
+//               + repix < U , 1 , C , L > () ;
+//       }
+//     }
   }
 
   void eval ( const typename zimt::grok_type < ray_t , px_t , L >::in_v & in ,

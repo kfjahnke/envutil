@@ -53,11 +53,11 @@ typedef zimt::xel_t < float , 3 > v3_t ;
 // some SIMDized types we'll use. I use 16 SIMD lanes for now,
 // which is also the lane count currently supported by OIIO.
 
-#ifdef OIIO_TEXTURE_SIMD_BATCH_WIDTH
-#define LANES OIIO_TEXTURE_SIMD_BATCH_WIDTH
-#else
+// #ifdef OIIO_TEXTURE_SIMD_BATCH_WIDTH
+// #define LANES OIIO_TEXTURE_SIMD_BATCH_WIDTH
+// #else
 #define LANES 16
-#endif
+// #endif
 
 typedef zimt::simdized_type < float , LANES > f_v ;
 typedef zimt::simdized_type < int , LANES > i_v ;
