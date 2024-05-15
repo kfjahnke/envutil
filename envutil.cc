@@ -1738,8 +1738,8 @@ struct eval_env
     // zimt::transform without a source argument feeds discrete
     // target coodinates.
 
-    v3i_v crdi3 { 2 * crd2[0] ,
-                  2 * crd2[1] ,
+    v3i_v crdi3 { 2 * crd2[0] + 1 ,
+                  2 * crd2[1] + 1 ,
                   i_v ( 2 * width ) } ;
 
     // to get the right and lower neighbour, we add two (!) to the

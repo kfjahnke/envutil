@@ -231,13 +231,13 @@ struct eval_env
     batch_options()
   {
     for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.swidth[i] = batch_options.twidth[i] = 0 ;
+      batch_options.swidth[i] = batch_options.twidth[i] = 1 ;
     
     for ( int i = 0 ; i < 16 ; i++ )
       batch_options.sblur[i] = batch_options.tblur[i] = 0 ;
 
-    typedef decltype ( batch_options.interpmode ) the_t ;
-    batch_options.interpmode = the_t(OIIO::TextureOpt::InterpBilinear) ;
+    // typedef decltype ( batch_options.interpmode ) the_t ;
+    // batch_options.interpmode = the_t(OIIO::TextureOpt::InterpBilinear) ;
     
     OIIO::ustring uenvironment ( filename.c_str() ) ;
     th = ts->get_texture_handle ( uenvironment ) ;
