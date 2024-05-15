@@ -1740,10 +1740,15 @@ struct eval_env
     // values and only move to float when we need to. This may
     // be considered 'playful' - it's more to demonstrate how
     // zimt::transform without a source argument feeds discrete
-    // target coodinates.
+    // target coodinates. Note the addition of 1: if the incoming
+    // coordinate is (0,0), this moves the x and y component to
+    // 0.5 and 0.5 in 'un-doubled' coordinates, which is the center
+    // of the first pixel. The highest discrete coordinate would be
+    // N-1 (where N is the width or height) and adding 1 results in
+    // the 'un-doubled' coordinate at N-1/2.
 
-    v3i_v crdi3 { 2 * crd2[0] ,
-                  2 * crd2[1] ,
+    v3i_v crdi3 { 2 * crd2[0] + 1 ,
+                  2 * crd2[1] + 1 ,
                   i_v ( 2 * width ) } ;
 
     // to get the right and lower neighbour, we add two (!) to the
