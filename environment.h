@@ -561,7 +561,9 @@ struct sixfold_t
     // gather data pertaining to the pixels at the 'low' coordinate
 
     v2i_v idx { low[0] , low[1] } ;
-    auto ofs = ( idx * store.strides ) . sum() * nchannels ;
+    auto ofs =   ( idx * v2i_v ( store.strides ) ) . sum()
+               * int ( nchannels ) ;
+
     px.gather ( p , ofs ) ;
 
     // and weight them according to distance from the 'low' value
@@ -573,7 +575,8 @@ struct sixfold_t
     // repeat the process for the low coordinate's neighbours
 
     idx[0] += 1 ; ;
-    ofs = ( idx * store.strides ) . sum() * nchannels ;
+    ofs =   ( idx * v2i_v ( store.strides ) ) . sum()
+          * int ( nchannels ) ;
     help.gather ( p , ofs ) ;
     px += help * diff[0] ;
 
@@ -584,12 +587,14 @@ struct sixfold_t
 
     idx[0] -= 1 ; ;
     idx[1] += 1 ; ;
-    ofs = ( idx * store.strides ) . sum() * nchannels ;
+    ofs =   ( idx * v2i_v ( store.strides ) ) . sum()
+          * int ( nchannels ) ;
     px2.gather ( p , ofs ) ;
     px2 *= ( one - diff[0] ) ;
 
     idx[0] += 1 ; ;
-    ofs = ( idx * store.strides ) . sum() * nchannels ;
+    ofs =   ( idx * v2i_v ( store.strides ) ) . sum()
+          * int ( nchannels ) ;
     help.gather ( p , ofs ) ;
     px2 += help * diff[0] ;
 
