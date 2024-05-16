@@ -133,12 +133,12 @@ endif()
 set( required_libraries
       ${required_libraries} OpenImageIO OpenImageIO_Util )
 
-add_executable(${_project_name} envutil.cc)
-add_executable(stepper stepper.cc)
+# add_executable(${_project_name} envutil.cc)
+# add_executable(stepper stepper.cc)
 add_executable(extract extract.cc)
 
-target_link_libraries(${_project_name} pthread ${required_libraries})
-target_link_libraries(stepper pthread ${required_libraries})
+# target_link_libraries(${_project_name} pthread ${required_libraries})
+# target_link_libraries(stepper pthread ${required_libraries})
 target_link_libraries(extract pthread ${required_libraries})
 
 # TODO: currently, optimization with -Ofast does not work
@@ -152,4 +152,4 @@ set_source_files_properties ( envutil.cc extract.cc PROPERTIES COMPILE_FLAGS
 
 # install the 'useful' binaries (stepper is only a demo)
 
-install(TARGETS ${_project_name} extract DESTINATION bin)
+install(TARGETS extract DESTINATION bin)
