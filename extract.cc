@@ -198,6 +198,9 @@ struct arguments
   std::regex field_re ;
   std::size_t env_width , env_height ;
   std::size_t nchannels ;
+  std::string swrap, twrap, mip, interp , tsoptions ;
+  float stwidth , stblur ;
+  bool conservative_filter ;
 
   double get_vfov()
   {
@@ -305,6 +308,8 @@ struct arguments
 
   arguments ( int argc , const char ** argv )
   {
+    conservative_filter = false ;
+
     // we're using OIIO's argparse, since we're using OIIO anyway.
     // This is a convenient way to glean arguments on all supported
     // platforms - getopt isn't available everywhere.
@@ -321,6 +326,29 @@ struct arguments
     ap.arg("--output OUTPUT")
       .help("output file name (mandatory)")
       .metavar("OUTPUT");
+    ap.arg("--tsoptions KVLIST")
+      .help("OIIO TextureSystem Options: coma-separated key=value pairs")
+      .metavar("KVLIST");
+    ap.arg("--swrap WRAP")
+      .help("OIIO Texture System swrap mode")
+      .metavar("WRAP");
+    ap.arg("--twrap WRAP")
+      .help("OIIO Texture System twrap mode")
+      .metavar("WRAP");
+    ap.arg("--mip MIP")
+      .help("OIIO Texture System mip mode")
+      .metavar("MIP");
+    ap.arg("--interp INTERP")
+      .help("OIIO Texture System interp mode")
+      .metavar("INTERP");
+    ap.arg("--stwidth EXTENT")
+      .help("swidth and twidth OIIO Texture Options")
+      .metavar("EXTENT");
+    ap.arg("--stblur EXTENT")
+      .help("sblur and tblur OIIO Texture Options")
+      .metavar("EXTENT");
+    ap.arg("--conservative_filter" , &conservative_filter)
+      .help("OIIO conservative_filter Texture Option");
     ap.arg("--width EXTENT")
       .help("width of the output")
       .metavar("EXTENT");
@@ -368,11 +396,18 @@ struct arguments
   
     input = ap["input"].as_string ( "" ) ;
     output = ap["output"].as_string ( "" ) ;
+    swrap = ap["swrap"].as_string ( "WrapDefault" ) ;
+    twrap = ap["twrap"].as_string ( "WrapDefault" ) ;
+    mip = ap["mip"].as_string ( "MipModeDefault" ) ;
+    interp = ap["interp"].as_string ( "InterpSmartBicubic" ) ;
+    tsoptions = ap["tsoptions"].as_string ( "automip=1" ) ;
     x0 = ap["x0"].get<float> ( 0.0 ) ;
     x1 = ap["x1"].get<float> ( 0.0 ) ;
     y0 = ap["y0"].get<float> ( 0.0 ) ;
     y1 = ap["y1"].get<float> ( 0.0 ) ;
     width = ap["width"].get<int> ( 0 ) ;
+    stwidth = ap["stwidth"].get<float> ( 1 ) ;
+    stblur = ap["stblur"].get<float> ( 0 ) ;
     height = ap["height"].get<int> ( 0 ) ;
     hfov = ap["hfov"].get<float>(0.0);
     if ( hfov != 0.0 )
@@ -463,7 +498,11 @@ void work ( const arguments & args ,
   // set up the environment object yielding content. This serves as
   // the 'act' functor for zimt::process
 
-  environment < float , float , nchannels , 16 > env ( args.input ) ;
+  environment < float , float , nchannels , 16 > env
+   ( args.input , args.swrap , args.twrap ,
+     args.mip , args.interp ,
+     args.stwidth , args.stblur ,
+     args.conservative_filter , args.tsoptions ) ;
 
   typedef zimt::xel_t < float , nchannels > px_t ;
   

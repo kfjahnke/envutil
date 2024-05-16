@@ -213,6 +213,43 @@ struct eval_latlon
   }
 } ;
 
+// some helper code to pass OIIO texture option parameters as
+// strings from the command line
+
+std::map < std::string , OIIO::TextureOpt::Wrap >
+wrap_map
+{
+  { "WrapDefault" , OIIO::TextureOpt::WrapDefault } ,
+  { "WrapBlack" , OIIO::TextureOpt::WrapBlack } ,
+  { "WrapClamp" , OIIO::TextureOpt::WrapClamp } ,
+  { "WrapPeriodic" , OIIO::TextureOpt::WrapPeriodic } ,
+  { "WrapMirror" , OIIO::TextureOpt::WrapMirror } ,
+  { "WrapPeriodicPow2" , OIIO::TextureOpt::WrapPeriodicPow2 } ,
+  { "WrapPeriodicSharedBorder" ,
+      OIIO::TextureOpt::WrapPeriodicSharedBorder }
+} ;
+
+std::map < std::string , OIIO::TextureOpt::MipMode >
+mipmode_map
+{
+  { "MipModeDefault" , OIIO::TextureOpt::MipModeDefault } ,
+  { "MipModeNoMIP" , OIIO::TextureOpt::MipModeNoMIP } ,
+  { "MipModeOneLevel" , OIIO::TextureOpt::MipModeOneLevel } ,
+  { "MipModeTrilinear" , OIIO::TextureOpt::MipModeTrilinear } ,
+  { "MipModeAniso" , OIIO::TextureOpt::MipModeAniso } ,
+  { "MipModeStochasticTrilinear" , OIIO::TextureOpt::MipModeStochasticTrilinear } ,
+  { "MipModeStochasticAniso" , OIIO::TextureOpt::MipModeStochasticAniso }
+} ;
+
+std::map < std::string , OIIO::TextureOpt::InterpMode >
+interpmode_map
+{
+  { "InterpClosest" , OIIO::TextureOpt::InterpClosest } ,
+  { "InterpBilinear" , OIIO::TextureOpt::InterpBilinear } ,
+  { "InterpBicubic" , OIIO::TextureOpt::InterpBicubic } ,
+  { "InterpSmartBicubic" , OIIO::TextureOpt::InterpSmartBicubic }
+} ;
+
 template < std::size_t nchannels >
 struct eval_env
 : public zimt::unary_functor
@@ -226,16 +263,43 @@ struct eval_env
 
   // pull in the c'tor arguments
 
-  eval_env ( const std::string & filename )
-  : ts ( OIIO::TextureSystem::create() ) ,
-    batch_options()
+  eval_env ( const std::string & filename ,
+             const std::string & swrap_mode = "WrapDefault" ,
+             const std::string & twrap_mode = "WrapDefault" ,
+             const std::string & mip_mode = "MipModeDefault" ,
+             const std::string & interp_mode = "InterpSmartBicubic" ,
+             float stwidth = 1 , float stblur = 0 ,
+             bool conservative_filter = true ,
+             const std::string & tsoptions = "automip=1"
+           )
+  : ts ( OIIO::TextureSystem::create() )
   {
+    ts->attribute ( "options" , tsoptions ) ;
+
     for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.swidth[i] = batch_options.twidth[i] = 1 ;
+      batch_options.swidth[i] = batch_options.twidth[i] = stwidth ;
     
     for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.sblur[i] = batch_options.tblur[i] = 0 ;
+      batch_options.sblur[i] = batch_options.tblur[i] = stblur ;
 
+    batch_options.conservative_filter = conservative_filter ;
+
+    auto wrap_it = wrap_map.find ( swrap_mode ) ;
+    assert ( wrap_it != wrap_map.end() ) ;
+    batch_options.swrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+  
+    wrap_it = wrap_map.find ( twrap_mode ) ;
+    assert ( wrap_it != wrap_map.end() ) ;
+    batch_options.twrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+  
+    auto mip_it = mipmode_map.find ( mip_mode ) ;
+    assert ( mip_it != mipmode_map.end() ) ;
+    batch_options.mipmode = OIIO::Tex::MipMode ( mip_it->second ) ;
+  
+    auto interp_it = interpmode_map.find ( interp_mode ) ;
+    assert ( interp_it != interpmode_map.end() ) ;
+    batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
+  
     // typedef decltype ( batch_options.interpmode ) the_t ;
     // batch_options.interpmode = the_t(OIIO::TextureOpt::InterpBilinear) ;
     
@@ -1046,7 +1110,15 @@ public:
 
   zimt::grok_type < ray_t , px_t , L > env ;
 
-  environment ( const std::string & filename )
+  environment ( const std::string & filename ,
+                const std::string & swrap_mode = "WrapDefault" ,
+                const std::string & twrap_mode = "WrapDefault" ,
+                const std::string & mip_mode = "MipModeDefault" ,
+                const std::string & interp_mode
+                  = "InterpSmartBicubic" ,
+                float stwidth = 1 , float stblur = 0 ,
+                bool conservative_filter = true ,
+                const std::string & tsoptions = "automip=1" )
   {
     auto inp = ImageInput::open ( filename ) ;
 
@@ -1078,10 +1150,13 @@ public:
                                         TypeDesc::FLOAT , pa4->data() ) ;
         assert ( success ) ;
 
-        env = zimt::grok_type < ray_t , px_t , L > ( eval_env < C > ( filename ) ) ;
-        // env =   ray_to_ll_t()
-        //       + eval_latlon < 4 > ( *pa4 )
-        //       + repix < U , 4 , C , L > () ;
+        env = zimt::grok_type < ray_t , px_t , L >
+          ( eval_env < C >
+             ( filename , swrap_mode , twrap_mode ,
+               mip_mode , interp_mode ,
+               stwidth , stblur ,
+               conservative_filter , tsoptions )
+          ) ;
       }
       else if ( nchannels == 3 )
       {
@@ -1093,10 +1168,13 @@ public:
                                         TypeDesc::FLOAT , pa3->data() ) ;
         assert ( success ) ;
 
-        env = zimt::grok_type < ray_t , px_t , L > ( eval_env < C > ( filename ) ) ;
-        // env =   ray_to_ll_t()
-        //       + eval_latlon < 3 > ( *pa3 )
-        //       + repix < U , 3 , C , L > () ;
+        env = zimt::grok_type < ray_t , px_t , L >
+         ( eval_env < C >
+             ( filename , swrap_mode , twrap_mode ,
+               mip_mode , interp_mode ,
+               stwidth , stblur ,
+               conservative_filter , tsoptions )
+          ) ;
       }
       else if ( nchannels == 2 )
       {
@@ -1108,10 +1186,13 @@ public:
                                         TypeDesc::FLOAT , pa2->data() ) ;
         assert ( success ) ;
       
-        env = zimt::grok_type < ray_t , px_t , L > ( eval_env < C > ( filename ) ) ;
-        // env =   ray_to_ll_t()
-        //       + eval_latlon < 2 > ( *pa2 )
-        //       + repix < U , 2 , C , L > () ;
+        env = zimt::grok_type < ray_t , px_t , L >
+         ( eval_env < C >
+             ( filename , swrap_mode , twrap_mode ,
+               mip_mode , interp_mode ,
+               stwidth , stblur ,
+               conservative_filter , tsoptions )
+          ) ;
       }
       else
       {
@@ -1123,10 +1204,13 @@ public:
                                         TypeDesc::FLOAT , pa1->data() ) ;
         assert ( success ) ;
       
-        env = zimt::grok_type < ray_t , px_t , L > ( eval_env < C > ( filename ) ) ;
-        // env =   ray_to_ll_t()
-        //       + eval_latlon < 1 > ( *pa1 )
-        //       + repix < U , 1 , C , L > () ;
+        env = zimt::grok_type < ray_t , px_t , L >
+         ( eval_env < C >
+             ( filename , swrap_mode , twrap_mode ,
+               mip_mode , interp_mode ,
+               stwidth , stblur ,
+               conservative_filter , tsoptions )
+          ) ;
       }
     }
 //     else if ( h == 6 * w )
