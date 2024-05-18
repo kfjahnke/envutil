@@ -449,6 +449,9 @@ struct arguments
       std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
       std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
     }
+    yaw *= M_PI / 180.0 ;
+    pitch *= M_PI / 180.0 ;
+    roll *= M_PI / 180.0 ;
   }
 } ;
 
