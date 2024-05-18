@@ -418,6 +418,9 @@ struct arguments
     yaw = ap["yaw"].get<float>(0.0);
     pitch = ap["pitch"].get<float>(0.0);
     roll = ap["roll"].get<float>(0.0);
+    yaw *= M_PI / 180.0 ;
+    pitch *= M_PI / 180.0 ;
+    roll *= M_PI / 180.0 ;
     prj_str = ap["projection"].as_string ( "rectilinear" ) ;
     int prj = 0 ;
     for ( const auto & p : projection_name )
@@ -491,18 +494,60 @@ struct arguments
 
 #include "environment.h"
 
+// 'work' overload to produce source data from a lat/lon environment
+// image using OIIO's 'environment' function
+
 template < std::size_t nchannels >
 void work ( const arguments & args ,
+            const std::unique_ptr<ImageInput> & inp ,
+            const std::size_t & w ,
+            const std::size_t & h ,
             zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
 {
   // set up the environment object yielding content. This serves as
   // the 'act' functor for zimt::process
 
-  environment < float , float , nchannels , 16 > env
-   ( args.input , args.swrap , args.twrap ,
-     args.mip , args.interp ,
-     args.stwidth , args.stblur ,
-     args.conservative_filter , args.tsoptions ) ;
+  latlon < float , float , nchannels , 16 > env
+   ( inp , w , h , nchannels , args ) ;
+
+  typedef zimt::xel_t < float , nchannels > px_t ;
+  
+  zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
+  
+  // set up zimt::storers to populate the target arrays with
+  // zimt::process
+  
+  zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
+  
+  // use the get, act and put components with zimt::process
+  // to produce the target images and store them to disk
+  
+  if ( args.verbose )
+    std::cout << "producing output" << std::endl ;
+  
+  zimt::process ( trg.shape , get_ray , env , cstor ) ;
+  
+  if ( args.verbose )
+    std::cout << "saving output image: " << args.output << std::endl ;
+  
+  save_array < nchannels > ( args.output , trg ) ;
+  
+  if ( args.verbose )
+    std::cout << "done." << std::endl ;
+}
+
+template < std::size_t nchannels >
+void work ( const arguments & args ,
+            const std::unique_ptr<ImageInput> & inp ,
+            const std::size_t & w ,
+            const std::size_t & h ,
+            zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
+{
+  // set up the cubemap object yielding content. This serves as
+  // the 'act' functor for zimt::process
+
+  cubemap < float , float , nchannels , 16 > env
+   ( inp , w , h , nchannels , args ) ;
 
   typedef zimt::xel_t < float , nchannels > px_t ;
   
@@ -569,81 +614,138 @@ int main ( int argc , const char ** argv )
   // characterized by it's input and output type and lane
   // count.
 
-  // zimt::grok_get_t < float , 3 , 2 , 16 > get_ray ;
-  zimt::grok_get_t < float , 9 , 2 , 16 > get_ray ;
+  std::unique_ptr<ImageInput> inp = ImageInput::open ( args.input ) ;
 
-  switch ( args.projection )
+  std::size_t w ;
+  std::size_t h ;
+  std::size_t nchannels ;
+
+  assert ( inp ) ;
+
+  const ImageSpec &spec = inp->spec() ;
+  w = spec.width ;
+  h = spec.height ;
+  nchannels = spec.nchannels ;
+
+  assert ( w == 2 * h || h == 6 * w ) ;
+
+  if ( w == 2 * h )
   {
-    case RECTILINEAR :
-      get_ray = deriv_stepper < float , 16 , rectilinear_stepper >
-                  ( xx , yy , zz , args.width , args.height ,
-                    args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      // get_ray = rectilinear_stepper < float , 16 >
-      //             ( xx , yy , zz , args.width , args.height ,
-      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      break ;
-    case FISHEYE :
-      get_ray = deriv_stepper < float , 16 , fisheye_stepper >
-                  ( xx , yy , zz , args.width , args.height ,
-                    args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      // get_ray = fisheye_stepper < float , 16 >
-      //             ( xx , yy , zz , args.width , args.height ,
-      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      break ;
-    case STEREOGRAPHIC :
-      get_ray = deriv_stepper < float , 16 , stereographic_stepper >
-                  ( xx , yy , zz , args.width , args.height ,
-                    args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      // get_ray = stereographic_stepper < float , 16 >
-      //             ( xx , yy , zz , args.width , args.height ,
-      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      break ;
-    case SPHERICAL :
-      get_ray = deriv_stepper < float , 16 , spherical_stepper >
-                  ( xx , yy , zz , args.width , args.height ,
-                    args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      // get_ray = spherical_stepper < float , 16 >
-      //             ( xx , yy , zz , args.width , args.height ,
-      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      break ;
-    case CYLINDRICAL :
-      get_ray = deriv_stepper < float , 16 , cylindrical_stepper >
-                  ( xx , yy , zz , args.width , args.height ,
-                    args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      // get_ray = cylindrical_stepper < float , 16 >
-      //             ( xx , yy , zz , args.width , args.height ,
-      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      break ;
-    case CUBEMAP :
-      get_ray = deriv_stepper < float , 16 , cubemap_stepper >
-                  ( xx , yy , zz , args.width , args.height ,
-                    args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      // get_ray = cubemap_stepper < float , 16 >
-      //             ( xx , yy , zz , args.width , args.height ,
-      //               args.x0 , args.x1 , args.y0 , args.y1 ) ;
-    default:
-      break ;
+    zimt::grok_get_t < float , 9 , 2 , 16 > get_ray ;
+
+    switch ( args.projection )
+    {
+      case RECTILINEAR :
+        get_ray = deriv_stepper < float , 16 , rectilinear_stepper >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case FISHEYE :
+        get_ray = deriv_stepper < float , 16 , fisheye_stepper >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case STEREOGRAPHIC :
+        get_ray = deriv_stepper < float , 16 , stereographic_stepper >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case SPHERICAL :
+        get_ray = deriv_stepper < float , 16 , spherical_stepper >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case CYLINDRICAL :
+        get_ray = deriv_stepper < float , 16 , cylindrical_stepper >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case CUBEMAP :
+        get_ray = deriv_stepper < float , 16 , cubemap_stepper >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      default:
+        break ;
+    }
+    // the code to set up and extract data from the latlon image
+    // depends on the number of channels. That's passed as a template
+    // argument, so here we have a case switch over 'nchannels' which
+    // dispatches to the appropriate instantiations.
+
+    switch ( args.nchannels )
+    {
+      case 1:
+        work < 1 > ( args , inp , w , h , get_ray ) ;
+        break ;
+      case 2:
+        work < 2 > ( args , inp , w , h , get_ray ) ;
+        break ;
+      case 3:
+        work < 3 > ( args , inp , w , h , get_ray ) ;
+        break ;
+      case 4:
+        work < 4 > ( args , inp , w , h , get_ray ) ;
+        break ;
+    }
+  }
+  else
+  {
+    // TODO: we'd like to access the cubemap via OIIO's 'texture'
+    // function - currently, access is with bilinear interpolation
+    // from the IR image in a sixfold_t
+
+    zimt::grok_get_t < float , 3 , 2 , 16 > get_ray ;
+
+    switch ( args.projection )
+    {
+      case RECTILINEAR :
+        get_ray = rectilinear_stepper < float , 16 >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case FISHEYE :
+        get_ray = fisheye_stepper < float , 16 >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case STEREOGRAPHIC :
+        get_ray = stereographic_stepper < float , 16 >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case SPHERICAL :
+        get_ray = spherical_stepper < float , 16 >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case CYLINDRICAL :
+        get_ray = cylindrical_stepper < float , 16 >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        break ;
+      case CUBEMAP :
+        get_ray = cubemap_stepper < float , 16 >
+                    ( xx , yy , zz , args.width , args.height ,
+                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      default:
+        break ;
+    }
+    switch ( args.nchannels )
+    {
+      case 1:
+        work < 1 > ( args , inp , w , h , get_ray ) ;
+        break ;
+      case 2:
+        work < 2 > ( args , inp , w , h , get_ray ) ;
+        break ;
+      case 3:
+        work < 3 > ( args , inp , w , h , get_ray ) ;
+        break ;
+      case 4:
+        work < 4 > ( args , inp , w , h , get_ray ) ;
+        break ;
+    }
   }
 
-  // the code to set up and extract data from the environment
-  // depends on the number of channels. That's passed as a template
-  // argument, so here we have a case switch over 'nchannels' which
-  // dispatches to the appropriate instantiations.
-
-  switch ( args.nchannels )
-  {
-    case 1:
-      work < 1 > ( args , get_ray ) ;
-      break ;
-    case 2:
-      work < 2 > ( args , get_ray ) ;
-      break ;
-    case 3:
-      work < 3 > ( args , get_ray ) ;
-      break ;
-    case 4:
-      work < 4 > ( args , get_ray ) ;
-      break ;
-  }
 }
     

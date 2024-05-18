@@ -51,11 +51,6 @@ bool verbose = true ;
 // simple, so this is a stripped-down version of what's used in
 // envutil - we omit using OIIO's 'environment' function and
 // also the use of 'twining'.
-// It may be a good idea, though, to extend this code to encompass
-// all functionality used in envutil - it's handy to have a common
-// 'environment' object without having to worry about the precise
-// nature of it's representation. This might be extended, e.g. to
-// dual fisheye format.
 
 template < std::size_t nchannels >
 struct eval_latlon
@@ -263,47 +258,38 @@ struct eval_env
 
   // pull in the c'tor arguments
 
-  eval_env ( const std::string & filename ,
-             const std::string & swrap_mode = "WrapDefault" ,
-             const std::string & twrap_mode = "WrapDefault" ,
-             const std::string & mip_mode = "MipModeDefault" ,
-             const std::string & interp_mode = "InterpSmartBicubic" ,
-             float stwidth = 1 , float stblur = 0 ,
-             bool conservative_filter = true ,
-             const std::string & tsoptions = "automip=1"
-           )
+  eval_env ( const arguments & args )
   : ts ( OIIO::TextureSystem::create() )
   {
-    ts->attribute ( "options" , tsoptions ) ;
+    ts->attribute ( "options" , args.tsoptions ) ;
 
     for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.swidth[i] = batch_options.twidth[i] = stwidth ;
+      batch_options.swidth[i] = batch_options.twidth[i]
+        = args.stwidth ;
     
     for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.sblur[i] = batch_options.tblur[i] = stblur ;
+      batch_options.sblur[i] = batch_options.tblur[i]
+        = args.stblur ;
 
-    batch_options.conservative_filter = conservative_filter ;
+    batch_options.conservative_filter = args.conservative_filter ;
 
-    auto wrap_it = wrap_map.find ( swrap_mode ) ;
+    auto wrap_it = wrap_map.find ( args.swrap ) ;
     assert ( wrap_it != wrap_map.end() ) ;
     batch_options.swrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
   
-    wrap_it = wrap_map.find ( twrap_mode ) ;
+    wrap_it = wrap_map.find ( args.twrap ) ;
     assert ( wrap_it != wrap_map.end() ) ;
     batch_options.twrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
   
-    auto mip_it = mipmode_map.find ( mip_mode ) ;
+    auto mip_it = mipmode_map.find ( args.mip ) ;
     assert ( mip_it != mipmode_map.end() ) ;
     batch_options.mipmode = OIIO::Tex::MipMode ( mip_it->second ) ;
   
-    auto interp_it = interpmode_map.find ( interp_mode ) ;
+    auto interp_it = interpmode_map.find ( args.interp ) ;
     assert ( interp_it != interpmode_map.end() ) ;
     batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
   
-    // typedef decltype ( batch_options.interpmode ) the_t ;
-    // batch_options.interpmode = the_t(OIIO::TextureOpt::InterpBilinear) ;
-    
-    OIIO::ustring uenvironment ( filename.c_str() ) ;
+    OIIO::ustring uenvironment ( args.input.c_str() ) ;
     th = ts->get_texture_handle ( uenvironment ) ;
   }
 
@@ -535,7 +521,7 @@ struct sixfold_t
   // shifted to their place in the IR image. After the load,
   // the frame of support is filled with interpolated values.
 
-  void load ( std::unique_ptr<ImageInput> & inp )
+  void load ( const std::unique_ptr<ImageInput> & inp )
   {
     assert ( inp != nullptr ) ;
 
@@ -1085,14 +1071,14 @@ struct cbm_to_px_t
 
 } ;
 
-// the 'environment' template codes objects which can serve as 'act'
+// the 'latlon' template codes objects which can serve as 'act'
 // functor in zimt::process. It's coded as a zimt::unary_functor
 // taking 3D 'ray' coordinates and producing pixels with C channels.
 // struct repix is used to convert the output to the desired number
 // of channels.
 
 template < typename T , typename U , std::size_t C , std::size_t L >
-class environment
+class latlon
 : public zimt::unary_functor < zimt::xel_t < T , 9 > ,
                                zimt::xel_t < U , C > ,
                                L >
@@ -1110,165 +1096,164 @@ public:
 
   zimt::grok_type < ray_t , px_t , L > env ;
 
-  environment ( const std::string & filename ,
-                const std::string & swrap_mode = "WrapDefault" ,
-                const std::string & twrap_mode = "WrapDefault" ,
-                const std::string & mip_mode = "MipModeDefault" ,
-                const std::string & interp_mode
-                  = "InterpSmartBicubic" ,
-                float stwidth = 1 , float stblur = 0 ,
-                bool conservative_filter = true ,
-                const std::string & tsoptions = "automip=1" )
+  latlon ( const std::unique_ptr<ImageInput> & inp ,
+           const std::size_t & w ,
+           const std::size_t & h ,
+           const std::size_t & nchannels ,
+           const arguments & args )
   {
-    auto inp = ImageInput::open ( filename ) ;
-
-    std::size_t w ;
-    std::size_t h ;
-    std::size_t nchannels ;
-
-    assert ( inp ) ;
-
-    const ImageSpec &spec = inp->spec() ;
-    w = spec.width ;
-    h = spec.height ;
-    nchannels = spec.nchannels ;
     shape_type shape { w , h } ;
 
-    if ( w == 2 * h )
+    assert ( w == 2 * h ) ;
+
+    if ( verbose )
+      std::cout << "input has 2:1 aspect ratio, assuming latlon"
+                << std::endl ;
+
+    if ( nchannels >= 4 )
     {
-      if ( verbose )
-        std::cout << "input has 2:1 aspect ratio, assuming latlon"
-                  << std::endl ;
+      typedef zimt::xel_t < float , 4 > in_px_t ;
+      pa4 = std::make_shared < zimt::array_t < 2 , in_px_t > >
+        ( shape ) ;
 
-      if ( nchannels >= 4 )
-      {
-        typedef zimt::xel_t < float , 4 > in_px_t ;
-        pa4 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-          ( shape ) ;
+      bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+                                      TypeDesc::FLOAT , pa4->data() ) ;
+      assert ( success ) ;
 
-        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
-                                        TypeDesc::FLOAT , pa4->data() ) ;
-        assert ( success ) ;
-
-        env = zimt::grok_type < ray_t , px_t , L >
-          ( eval_env < C >
-             ( filename , swrap_mode , twrap_mode ,
-               mip_mode , interp_mode ,
-               stwidth , stblur ,
-               conservative_filter , tsoptions )
-          ) ;
-      }
-      else if ( nchannels == 3 )
-      {
-        typedef zimt::xel_t < float , 3 > in_px_t ;
-        pa3 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-          ( shape ) ;
-
-        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
-                                        TypeDesc::FLOAT , pa3->data() ) ;
-        assert ( success ) ;
-
-        env = zimt::grok_type < ray_t , px_t , L >
-         ( eval_env < C >
-             ( filename , swrap_mode , twrap_mode ,
-               mip_mode , interp_mode ,
-               stwidth , stblur ,
-               conservative_filter , tsoptions )
-          ) ;
-      }
-      else if ( nchannels == 2 )
-      {
-        typedef zimt::xel_t < float , 2 > in_px_t ;
-        pa2 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-          ( shape ) ;
-     
-        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
-                                        TypeDesc::FLOAT , pa2->data() ) ;
-        assert ( success ) ;
-      
-        env = zimt::grok_type < ray_t , px_t , L >
-         ( eval_env < C >
-             ( filename , swrap_mode , twrap_mode ,
-               mip_mode , interp_mode ,
-               stwidth , stblur ,
-               conservative_filter , tsoptions )
-          ) ;
-      }
-      else
-      {
-        typedef zimt::xel_t < float , 1 > in_px_t ;
-        pa1 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-          ( shape ) ;
-     
-        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
-                                        TypeDesc::FLOAT , pa1->data() ) ;
-        assert ( success ) ;
-      
-        env = zimt::grok_type < ray_t , px_t , L >
-         ( eval_env < C >
-             ( filename , swrap_mode , twrap_mode ,
-               mip_mode , interp_mode ,
-               stwidth , stblur ,
-               conservative_filter , tsoptions )
-          ) ;
-      }
+      env = zimt::grok_type < ray_t , px_t , L >
+        ( eval_env < C > ( args ) ) ;
     }
-//     else if ( h == 6 * w )
+    else if ( nchannels == 3 )
+    {
+      typedef zimt::xel_t < float , 3 > in_px_t ;
+      pa3 = std::make_shared < zimt::array_t < 2 , in_px_t > >
+        ( shape ) ;
+
+      bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+                                      TypeDesc::FLOAT , pa3->data() ) ;
+      assert ( success ) ;
+
+      env = zimt::grok_type < ray_t , px_t , L >
+        ( eval_env < C > ( args ) ) ;
+    }
+    else if ( nchannels == 2 )
+    {
+      typedef zimt::xel_t < float , 2 > in_px_t ;
+      pa2 = std::make_shared < zimt::array_t < 2 , in_px_t > >
+        ( shape ) ;
+    
+      bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+                                      TypeDesc::FLOAT , pa2->data() ) ;
+      assert ( success ) ;
+    
+      env = zimt::grok_type < ray_t , px_t , L >
+        ( eval_env < C > ( args ) ) ;
+    }
+//     else if ( nchannels == 1 )
 //     {
-//       if ( verbose )
-//       {
-//         std::cout << "input has 1:6 aspect ratio, assuming cubemap"
-//                   << std::endl ;
-//       }
-//       if ( nchannels >= 4 )
-//       {
-//         sixfold_t<4> sf ( w ) ;
-//         sf.load ( inp ) ;
-//         inp->close() ;
-//         sf.mirror_around() ;
-//         sf.fill_support ( 1 ) ;
-//         std::cout << "cbm set env 4" << std::endl ;
-// 
-//         env =   cbm_to_px_t < 4 > ( sf )
-//               + repix < U , 4 , C , L > () ;
-//       }
-//       else if ( nchannels == 3 )
-//       {
-//         sixfold_t<3> sf ( w ) ;
-//         sf.load ( inp ) ;
-//         inp->close() ;
-//         sf.mirror_around() ;
-//         sf.fill_support ( 1 ) ;
-//         std::cout << "cbm set env 3" << std::endl ;
-// 
-//         env =   cbm_to_px_t < 3 > ( sf )
-//               + repix < U , 3 , C , L > () ;
-//       }
-//       else if ( nchannels == 2 )
-//       {
-//         sixfold_t<2> sf ( w ) ;
-//         sf.load ( inp ) ;
-//         inp->close() ;
-//         sf.mirror_around() ;
-//         sf.fill_support ( 1 ) ;
-//         std::cout << "cbm set env 2" << std::endl ;
-// 
-//         env =   cbm_to_px_t < 2 > ( sf )
-//               + repix < U , 2 , C , L > () ;
-//       }
-//       else
-//       {
-//         sixfold_t<1> sf ( w ) ;
-//         sf.load ( inp ) ;
-//         inp->close() ;
-//         sf.mirror_around() ;
-//         sf.fill_support ( 1 ) ;
-//         std::cout << "cbm set env 1" << std::endl ;
-// 
-//         env =   cbm_to_px_t < 1 > ( sf )
-//               + repix < U , 1 , C , L > () ;
-//       }
+//       typedef zimt::xel_t < float , 1 > in_px_t ;
+//       pa2 = std::make_shared < zimt::array_t < 2 , in_px_t > >
+//         ( shape ) ;
+//     
+//       bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+//                                       TypeDesc::FLOAT , pa2->data() ) ;
+//       assert ( success ) ;
+//     
+//       env = zimt::grok_type < ray_t , px_t , L >
+//         ( eval_env < C > ( const arguments & args ) ) ;
 //     }
+  }
+
+  void eval ( const typename zimt::grok_type < ray_t , px_t , L >::in_v & in ,
+              typename zimt::grok_type < ray_t , px_t , L >::out_v & out )
+  {
+    env.eval ( in , out ) ;
+  }
+
+} ;
+
+template < typename T , typename U , std::size_t C , std::size_t L >
+class cubemap
+: public zimt::unary_functor < zimt::xel_t < T , 3 > ,
+                               zimt::xel_t < U , C > ,
+                               L >
+{
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 1 > > > pa1 ;
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 2 > > > pa2 ;
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 3 > > > pa3 ;
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 4 > > > pa4 ;
+
+public:
+  
+  typedef zimt::xel_t < T , 3 > ray_t ;
+  typedef zimt::xel_t < U , C > px_t ;
+  typedef zimt::xel_t < std::size_t , 2 > shape_type ;
+
+  zimt::grok_type < ray_t , px_t , L > env ;
+
+  cubemap ( const std::unique_ptr<ImageInput> & inp ,
+            const std::size_t & w ,
+            const std::size_t & h ,
+            const std::size_t & nchannels ,
+            const arguments & args )
+  {
+    shape_type shape { w , h } ;
+
+    assert ( h == 6 * w ) ;
+
+    if ( verbose )
+    {
+      std::cout << "input has 1:6 aspect ratio, assuming cubemap"
+                << std::endl ;
+    }
+    if ( nchannels >= 4 )
+    {
+      sixfold_t<4> sf ( w ) ;
+      sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support ( 1 ) ;
+      std::cout << "cbm set env 4" << std::endl ;
+
+      env =   cbm_to_px_t < 4 > ( sf )
+            + repix < U , 4 , C , L > () ;
+    }
+    else if ( nchannels == 3 )
+    {
+      sixfold_t<3> sf ( w ) ;
+      sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support ( 1 ) ;
+      std::cout << "cbm set env 3" << std::endl ;
+
+      env =   cbm_to_px_t < 3 > ( sf )
+            + repix < U , 3 , C , L > () ;
+    }
+    else if ( nchannels == 2 )
+    {
+      sixfold_t<2> sf ( w ) ;
+      sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support ( 1 ) ;
+      std::cout << "cbm set env 2" << std::endl ;
+
+      env =   cbm_to_px_t < 2 > ( sf )
+            + repix < U , 2 , C , L > () ;
+    }
+    else
+    {
+      sixfold_t<1> sf ( w ) ;
+      sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support ( 1 ) ;
+      std::cout << "cbm set env 1" << std::endl ;
+
+      env =   cbm_to_px_t < 1 > ( sf )
+            + repix < U , 1 , C , L > () ;
+    }
   }
 
   void eval ( const typename zimt::grok_type < ray_t , px_t , L >::in_v & in ,
