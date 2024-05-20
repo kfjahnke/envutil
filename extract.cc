@@ -691,6 +691,12 @@ int main ( int argc , const char ** argv )
 
     zimt::grok_get_t < float , 9 , 2 , 16 > get_ray ;
 
+    // I tried coding a variant which uses OIIO loopkup without
+    // passing the derivatives if they aren't needed (stwidth == 0)
+    // but this did not make a significant difference to performance
+    // and bloated the code. So for the time being I calculate the
+    // derivatives for all lookups with OIIO code.
+
     switch ( args.projection )
     {
       case RECTILINEAR :
