@@ -1038,8 +1038,16 @@ public:
   }
 } ;
 
-// variant of stepper which yields the coordiate and the
-// derivatives for a a canonical step in x and y direction
+// variant of stepper which yields the ray coordinate for
+// the pick-up location itself and two more locations, which
+// are one canonical step in x- or y-direction away. The caller
+// can use these additional rays to figure out the derivatives
+// which are needed for OIIO's 'environment' or 'texture'
+// functions. 'environment' actually needs the difference of
+// the rays, but 'texture' needs the difference between the
+// 2D texture coordinates used for pick-up, so we can't do the
+// differencing here and simply pass the rays as they are,
+// as a 'ninepack'.
 
 template < typename T ,     // fundamental type
            std::size_t L ,  // lane count
@@ -1092,18 +1100,25 @@ struct deriv_stepper
   void init ( crd9_v & trg , const crd_t & crd )
   {
     crd3_v trg00 , trg10 , trg01 ;
+
+    // we initialize the three sub-steppers to the current discrete
+    // coordinate and to it's right and lower neighbour:
+
     r00.init ( trg00 , crd ) ;
     r10.init ( trg10 , { crd[0] + 1 , crd[1] } ) ;
     r01.init ( trg01 , { crd[0] , crd[1] + 1 } ) ;
+
+    // now we move the resulting rays to the 'ninepack':
+
     trg[0] = trg00[0] ;
-    trg[1] = -trg00[1] ;
-    trg[2] = -trg00[2] ;
-    trg[3] = trg10[0] - trg00[0] ;
-    trg[4] = - ( trg10[1] - trg00[1] ) ;
-    trg[5] = - ( trg10[2] - trg00[2] ) ;
-    trg[6] = trg01[0] - trg00[0] ;
-    trg[7] = - ( trg01[1] - trg00[1] ) ;
-    trg[8] = - ( trg01[2] - trg00[2] ) ;
+    trg[1] = trg00[1] ;
+    trg[2] = trg00[2] ;
+    trg[3] = trg10[0] ;
+    trg[4] = trg10[1] ;
+    trg[5] = trg10[2] ;
+    trg[6] = trg01[0] ;
+    trg[7] = trg01[1] ;
+    trg[8] = trg01[2] ;
   }
 
   void increase ( crd9_v & trg )
@@ -1115,14 +1130,14 @@ struct deriv_stepper
     r01.increase ( trg01 ) ;
 
     trg[0] = trg00[0] ;
-    trg[1] = -trg00[1] ;
-    trg[2] = -trg00[2] ;
-    trg[3] = trg10[0] - trg00[0] ;
-    trg[4] = - ( trg10[1] - trg00[1] ) ;
-    trg[5] = - ( trg10[2] - trg00[2] ) ;
-    trg[6] = trg01[0] - trg00[0] ;
-    trg[7] = - ( trg01[1] - trg00[1] ) ;
-    trg[8] = - ( trg01[2] - trg00[2] ) ;
+    trg[1] = trg00[1] ;
+    trg[2] = trg00[2] ;
+    trg[3] = trg10[0] ;
+    trg[4] = trg10[1] ;
+    trg[5] = trg10[2] ;
+    trg[6] = trg01[0] ;
+    trg[7] = trg01[1] ;
+    trg[8] = trg01[2] ;
   }
 
   // the capped variants:

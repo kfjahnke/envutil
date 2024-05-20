@@ -298,9 +298,21 @@ struct eval_env
   template < typename I , typename O >
   void eval ( const I & crd9 , O & px )
   {
-    crd3_v c3 { crd9[0] , crd9[1] , crd9[2] } ;
-    crd3_v ds { crd9[3] , crd9[4] , crd9[5] } ;
-    crd3_v dt { crd9[6] , crd9[7] , crd9[8] } ;
+    // we convert to OIIO-compatible coordinates as we go, this
+    // requires changing the sign of the y and z axis (hance the
+    // seemingly wrong order of the differences for ds and dt)
+
+    crd3_v c3 {   crd9[0] ,
+                - crd9[1] ,
+                - crd9[2] } ;
+
+    crd3_v ds { crd9[3] - crd9[0] ,
+                crd9[1] - crd9[4] ,
+                crd9[2] - crd9[5] } ;
+
+    crd3_v dt { crd9[6] - crd9[0] ,
+                crd9[1] - crd9[7] ,
+                crd9[2] - crd9[8] } ;
 
     // now we can call 'environment', but depending on the SIMD
     // back-end, we provide the pointers which 'environemnt' needs
@@ -427,6 +439,7 @@ struct repix
 } ;
 
 #include "metrics.h"
+#include <filesystem>
 
 // stripped-down version of sixfold_t, omitting the use of OIIO's
 // 'texture' function and twining, using bilinear interpolation
@@ -444,6 +457,10 @@ struct sixfold_t
   // pointers to an OIIO texture system and an OIIO texture handle.
   // These are only used if the pick-up is done using OIIO's
   // 'texture' function.
+
+  std::filesystem::path texture_file ;
+  OIIO::TextureSystem * ts ;
+  OIIO::TextureSystem::TextureHandle * th ;
 
   // This array holds all the image data. I'll refer to this
   // array as the 'IR image': the internal representation.
@@ -492,14 +509,6 @@ struct sixfold_t
     p_ul += ( left_frame_px * store.strides ) . sum() ;
   }
 
-  // We can use the fall-back bilinear interpolation to pick up
-  // pixel values from the IR image, but to use OIIO's 'texture'
-  // function, we need access to the texture system and - for
-  // speed - the texture handle. But we don't have these data
-  // when the sixfold_t is created - the texture has to be
-  // generated first, then stored to disk and then fed to the
-  // texture system. So we can only call this function later:
-
   // function to read the cube face image data from disk (via
   // an OIIO-provided inp) - this version reads a single image
   // with 1:6 aspect ratio containing six square cube face
@@ -540,6 +549,12 @@ struct sixfold_t
 
     if ( inp->supports ( "scanlines" ) )
     {
+      if ( verbose )
+      {
+        std::cout << "input supports scanline-based access"
+        << std::endl ;
+      }
+
       // if the input is scanline-based, we copy batches of
       // scanlines into the cube face slots in the store
 
@@ -576,6 +591,11 @@ struct sixfold_t
     }
     else
     {
+      if ( verbose )
+      {
+        std::cout << "input is tiled" << std::endl ;
+      }
+
       // if the input is not scanline-based, we read the entire image
       // into a buffer, then copy the cube faces to the store. We can
       // use a 3D array as a target, with the six cube faces 'on
@@ -652,6 +672,47 @@ struct sixfold_t
 
       inp->close() ;
     }
+  }
+
+  // We can use the fall-back bilinear interpolation to pick up
+  // pixel values from the IR image, but to use OIIO's 'texture'
+  // function, we need access to the texture system and - for
+  // speed - the texture handle. But we don't have these data
+  // when the sixfold_t is created - the texture has to be
+  // generated first, then stored to disk and then fed to the
+  // texture system. So we can only call this function later:
+
+  void gen_texture ( const std::string & ts_options )
+  {
+    // to load the texture with OIIO's texture system code, it
+    // has to be in a file, so we store the IR image to a temporary
+    // file:
+
+    auto temp_path = std::filesystem::temp_directory_path() ;
+    texture_file = temp_path / "temp_texture.exr" ;
+
+    if ( verbose )
+      std::cout << "saving generated texture to "
+                << texture_file.c_str() << std::endl ;
+
+    save_array ( texture_file.c_str() , store ) ;
+
+    // now we can create to the texture system and receive
+    // a texture handle for the temporary file for fast access
+
+    ts = OIIO::TextureSystem::create() ;
+
+    if ( ts_options != std::string() )
+    {
+      if ( verbose )
+        std::cout << "adding texture system options: " << ts_options
+                  << std::endl ;
+    
+      ts->attribute ( "options" , ts_options ) ;
+    }
+
+    OIIO::ustring uenvironment ( texture_file.c_str() ) ;
+    th = ts->get_texture_handle ( uenvironment ) ;
   }
 
   // given the cube face and the in-face coordinate, extract the
@@ -741,6 +802,127 @@ struct sixfold_t
     px2 += help * diff[0] ;
 
     px += px2 * diff[1] ;
+  }
+
+  // this is the equivalent function to 'cubemap_to_pixel', above,
+  // using OIIO's 'texture' function to perform the gleaning of
+  // pixel data from the IR image. The IR image is not accessed
+  // directly, but provided via OIIO's texture system.
+  // On top of the pick-up coordinate (coming in in texture
+  // units in [0,1], rather than pixel units which are used in
+  // 'cubemap_to_pixel') we have the four derivatives and the
+  // OIIO texture batch options.
+
+  void get_filtered_px ( const crd2_v & pickup ,
+                         px_v & px ,
+                         const f_v & dsdx ,
+                         const f_v & dtdx ,
+                         const f_v & dsdy ,
+                         const f_v & dtdy ,
+                         OIIO::TextureOptBatch batch_options ) const
+  {
+    assert ( all_of ( pickup[0] >= 0.0f ) ) ;
+    assert ( all_of ( pickup[0] <= 1.0f ) ) ;
+    assert ( all_of ( pickup[1] >= 0.0f ) ) ;
+    assert ( all_of ( pickup[1] <= 1.0f ) ) ;
+
+    // code to truncate the pickup coordinate to int and gather,
+    // after restoring the pickup to pixel units. Uncomment this
+    // code to directly pick up pixels from the IR image with NN
+    // interpolation - this is to verify that the pick-up coordinate
+    // is indeed correct.
+
+//     auto x = pickup[0] * float ( store.shape[0] ) ;
+//     auto y = pickup[1] * float ( store.shape[1] ) ;
+//     index_v idx { x , y } ;
+//     const auto ofs = ( idx * store.strides ) . sum() * nchannels ;
+//     const auto * p = (float*) ( store.data() ) ;
+//     
+//     px.gather ( p , ofs ) ;
+//     return ;
+
+    // OIIO's 'texture' signature is quite a mouthful:
+
+    // virtual bool texture (    TextureHandle *texture_handle,
+                              // Perthread *thread_info,
+                              // TextureOptBatch &options,
+                              // Tex::RunMask mask,
+                              // const float *s, const float *t,
+                              // const float *dsdx, const float *dtdx,
+                              // const float *dsdy, const float *dtdy,
+                              // std::size_t nchannels,
+                              // float *result,
+                              // float *dresultds = nullptr,
+                              // float *dresultdt = nullptr)
+
+    #if defined USE_VC or defined USE_STDSIMD
+
+    // to interface with zimt's Vc and std::simd backends, we need to
+    // extract the data from the SIMDized objects and re-package the
+    // ouptut as a SIMDized object. The compiler will likely optimize
+    // this away and work the entire operation in registers, so let's
+    // call this a 'semantic manoevre'.
+
+    float scratch [ 6 * LANES + nchannels * LANES ] ;
+
+    pickup.store ( scratch ) ; // stores 2 * LANES
+    dsdx.store ( scratch + 2 * LANES ) ;
+    dtdx.store ( scratch + 3 * LANES ) ;
+    dsdy.store ( scratch + 4 * LANES ) ;
+    dtdy.store ( scratch + 5 * LANES ) ;
+
+    bool result =
+    ts->texture ( th , nullptr , batch_options , OIIO::Tex::RunMaskOn ,
+                  scratch , scratch + LANES ,
+                  scratch + 2 * LANES , scratch + 3 * LANES ,
+                  scratch + 4 * LANES , scratch + 5 * LANES ,
+                  nchannels , scratch + 6 * LANES ) ;
+
+    assert ( result ) ;
+    px.load ( scratch + 6 * LANES ) ;
+
+    #else
+
+    // zimt's own and the highway backend have a representation as
+    // a C vector of fundamentals and provide a 'data' function
+    // to yield it's address. This simplifies matters, we can pass
+    // these pointers to OIIO directly.
+
+    bool result =
+    ts->texture ( th , nullptr , batch_options , OIIO::Tex::RunMaskOn ,
+                  pickup[0].data() , pickup[1].data() ,
+                  dsdx.data() , dtdx.data() ,
+                  dsdy.data() , dtdy.data() ,
+                  nchannels , (float*) ( px[0].data() ) ) ;
+
+    #endif
+  }
+
+  // variant taking derivatives of the in-face coordinate, which
+  // are approximated by calculating the difference to a canonical
+  // (target image) coordinate one sample step to the right (x)
+  // or below (y), respectively. The derivatives are in texture
+  // units aready, and we also convert the pickup coordinate to
+  // texture units.
+
+  void cubemap_to_pixel ( const i_v & face ,
+                          crd2_v in_face ,
+                          px_v & px ,
+                          const f_v & dsdx ,
+                          const f_v & dtdx ,
+                          const f_v & dsdy ,
+                          const f_v & dtdy ,
+                          OIIO::TextureOptBatch & bo ) const
+  {
+    crd2_v pickup_tx ;
+
+    // obtain the pickup coordinate in texture units (in [0,1])
+
+    get_pickup_coordinate_tx ( face , in_face , pickup_tx ) ;
+
+    // use OIIO to get the pixel value
+
+    get_filtered_px ( pickup_tx , px , dsdx , dtdx , dsdy , dtdy , bo ) ;
   }
 
   // After the cube faces have been read from disk, they are surrounded
@@ -1071,6 +1253,110 @@ struct cbm_to_px_t
 
 } ;
 
+template < std::size_t nchannels >
+struct cbm_to_px_t2
+: public zimt::unary_functor
+   < zimt::xel_t < float , 9 > ,
+     zimt::xel_t < float , nchannels > ,
+     LANES >
+{
+  // some types
+
+  typedef zimt::xel_t < float , 3 > crd3_t ;
+  typedef zimt::simdized_type < crd3_t , LANES > crd3_v ;
+  typedef zimt::xel_t < float , nchannels > px_t ;
+  typedef zimt::simdized_type < px_t , LANES > px_v ;
+
+  sixfold_t < nchannels > cubemap ;
+
+  // for lookup with OIIO's texture system, we need batch options.
+  // I'd keep them in the code which actually uses them, but the
+  // OIIO 'texture' function expects an lvalue.
+
+  OIIO::TextureOptBatch batch_options ;
+
+  // scaling factor to move from model space units to texture units
+  // (separate for the s and t direction - these factors are applied
+  // to coordinates pertaining to the IR image of the cubemap, which
+  // has 1:6 aspect ratio)
+
+  const float scale_s ;
+  const float scale_t ;
+
+  // cbm_to_px_t's c'tor obtains a const reference to the sixfold_t
+  // object holding pixel data. It receives 3D ray coordinates and
+  // produces pixel values gleaned with bilinear interpolation.
+
+  cbm_to_px_t2 ( const sixfold_t < nchannels > & _cubemap ,
+                 const OIIO::TextureOptBatch & _batch_options )
+  : cubemap ( _cubemap ) ,
+    scale_s ( _cubemap.model_to_px / _cubemap.store.shape[0] ) ,
+    scale_t ( _cubemap.model_to_px / _cubemap.store.shape[1] ) ,
+    batch_options ( _batch_options )
+  { }
+
+  template < typename I , typename O >
+  void eval ( const I & crd9 , O & px )
+  {
+    zimt::xel_t < float , 2 > scale { scale_s , scale_t } ;
+
+    // extract the three 3D ray coordinates from the nine-pack
+
+    crd3_v c3 { crd9[0] , crd9[1] , crd9[2] } ;
+    crd3_v dx { crd9[3] , crd9[4] , crd9[5] } ;
+    crd3_v dy { crd9[6] , crd9[7] , crd9[8] } ;
+
+    // find the cube face and in-face coordinate for 'c3'
+
+    i_v face ;
+    crd2_v in_face_00 , in_face_10 , in_face_01 ;
+    ray_to_cubeface ( c3 , face , in_face_00 ) ;
+
+    // do the same for the two offsetted rays
+  
+    ray_to_cubeface_fixed ( dx , face , in_face_10 ) ;
+    ray_to_cubeface_fixed ( dy , face , in_face_01 ) ;
+
+    // obtain the pickup coordinate in texture units (in [0,1])
+
+    crd2_v c3_tx ;
+    cubemap.get_pickup_coordinate_tx ( face , in_face_00 , c3_tx ) ;
+
+    // convert the neighbouring rays to texture coordinates
+    
+    // in_face_00 += 1.0f ;
+    in_face_00 *= scale ;
+    // in_face_10 += 1.0f ;
+    in_face_10 *= scale ;
+    // in_face_01 += 1.0f ;
+    in_face_01 *= scale ;
+
+    // form the differences
+
+    crd2_v dx_tx = in_face_10 - in_face_00 ;
+    crd2_v dy_tx = in_face_01 - in_face_00 ;
+
+    // cubemap.get_pickup_coordinate_tx ( face , in_face_10 , dx_tx ) ;
+    // cubemap.get_pickup_coordinate_tx ( face , in_face_01 , dy_tx ) ;
+
+//     // form the differences to get the derivatives
+//   
+//     dx_tx -= c3_tx ;
+//     dy_tx -= c3_tx ;
+
+    // use OIIO to get the pixel value
+
+    // OIIO wants the derivatives in this order:
+    // float *dsdx, const float *dtdx,
+    // const float *dsdy, const float *dtdy
+
+    cubemap.get_filtered_px ( c3_tx , px ,
+                              dx_tx[0] , dx_tx[1] ,
+                              dy_tx[0] , dy_tx[1] ,
+                              batch_options ) ;
+  }
+} ;
+
 // the 'latlon' template codes objects which can serve as 'act'
 // functor in zimt::process. It's coded as a zimt::unary_functor
 // taking 3D 'ray' coordinates and producing pixels with C channels.
@@ -1149,19 +1435,19 @@ public:
       env = zimt::grok_type < ray_t , px_t , L >
         ( eval_env < C > ( args ) ) ;
     }
-//     else if ( nchannels == 1 )
-//     {
-//       typedef zimt::xel_t < float , 1 > in_px_t ;
-//       pa2 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-//         ( shape ) ;
-//     
-//       bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
-//                                       TypeDesc::FLOAT , pa2->data() ) ;
-//       assert ( success ) ;
-//     
-//       env = zimt::grok_type < ray_t , px_t , L >
-//         ( eval_env < C > ( const arguments & args ) ) ;
-//     }
+    else if ( nchannels == 1 )
+    {
+      typedef zimt::xel_t < float , 1 > in_px_t ;
+      pa1 = std::make_shared < zimt::array_t < 2 , in_px_t > >
+        ( shape ) ;
+    
+      bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+                                      TypeDesc::FLOAT , pa2->data() ) ;
+      assert ( success ) ;
+    
+      env = zimt::grok_type < ray_t , px_t , L >
+        ( eval_env < C > ( args ) ) ;
+    }
   }
 
   void eval ( const typename zimt::grok_type < ray_t , px_t , L >::in_v & in ,
@@ -1174,6 +1460,136 @@ public:
 
 template < typename T , typename U , std::size_t C , std::size_t L >
 class cubemap
+: public zimt::unary_functor < zimt::xel_t < T , 9 > ,
+                               zimt::xel_t < U , C > ,
+                               L >
+{
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 1 > > > pa1 ;
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 2 > > > pa2 ;
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 3 > > > pa3 ;
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 4 > > > pa4 ;
+
+public:
+  
+  typedef zimt::xel_t < T , 9 > ray_t ;
+  typedef zimt::xel_t < U , C > px_t ;
+  typedef zimt::xel_t < std::size_t , 2 > shape_type ;
+
+  zimt::grok_type < ray_t , px_t , L > env ;
+
+  cubemap ( const std::unique_ptr<ImageInput> & inp ,
+            const std::size_t & w ,
+            const std::size_t & h ,
+            const std::size_t & nchannels ,
+            const arguments & args )
+  {
+    shape_type shape { w , h } ;
+
+    assert ( h == 6 * w ) ;
+
+    OIIO::TextureOptBatch batch_options ;
+
+    for ( int i = 0 ; i < 16 ; i++ )
+      batch_options.swidth[i] = batch_options.twidth[i]
+        = args.stwidth ;
+    
+    for ( int i = 0 ; i < 16 ; i++ )
+      batch_options.sblur[i] = batch_options.tblur[i]
+        = args.stblur ;
+
+    batch_options.conservative_filter = args.conservative_filter ;
+
+    auto wrap_it = wrap_map.find ( args.swrap ) ;
+    assert ( wrap_it != wrap_map.end() ) ;
+    batch_options.swrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+  
+    wrap_it = wrap_map.find ( args.twrap ) ;
+    assert ( wrap_it != wrap_map.end() ) ;
+    batch_options.twrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+  
+    auto mip_it = mipmode_map.find ( args.mip ) ;
+    assert ( mip_it != mipmode_map.end() ) ;
+    batch_options.mipmode = OIIO::Tex::MipMode ( mip_it->second ) ;
+  
+    auto interp_it = interpmode_map.find ( args.interp ) ;
+    assert ( interp_it != interpmode_map.end() ) ;
+    batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
+  
+    if ( verbose )
+    {
+      std::cout << "input has 1:6 aspect ratio, assuming cubemap"
+                << std::endl ;
+    }
+    if ( nchannels >= 4 )
+    {
+      sixfold_t<4> sf ( w ) ;
+      sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support ( 1 ) ;
+      sf.gen_texture ( args.tsoptions ) ;
+      std::cout << "cbm set env 4" << std::endl ;
+
+      env =   cbm_to_px_t2 < 4 > ( sf , batch_options )
+            + repix < U , 4 , C , L > () ;
+    }
+    else if ( nchannels == 3 )
+    {
+      sixfold_t<3> sf ( w ) ;
+      sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support ( 1 ) ;
+      sf.gen_texture ( args.tsoptions ) ;
+      std::cout << "cbm set env 3" << std::endl ;
+
+      env =   cbm_to_px_t2 < 3 > ( sf , batch_options )
+            + repix < U , 3 , C , L > () ;
+    }
+    else if ( nchannels == 2 )
+    {
+      sixfold_t<2> sf ( w ) ;
+      sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support ( 1 ) ;
+      sf.gen_texture ( args.tsoptions ) ;
+      std::cout << "cbm set env 2" << std::endl ;
+
+      env =   cbm_to_px_t2 < 2 > ( sf , batch_options )
+            + repix < U , 2 , C , L > () ;
+    }
+    else
+    {
+      sixfold_t<1> sf ( w ) ;
+      sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support ( 1 ) ;
+      sf.gen_texture ( args.tsoptions ) ;
+      std::cout << "cbm set env 1" << std::endl ;
+
+      env =   cbm_to_px_t2 < 1 > ( sf , batch_options )
+            + repix < U , 1 , C , L > () ;
+    }
+  }
+
+  void eval ( const typename zimt::grok_type < ray_t , px_t , L >::in_v & in ,
+              typename zimt::grok_type < ray_t , px_t , L >::out_v & out )
+  {
+    env.eval ( in , out ) ;
+  }
+
+} ;
+
+// the 'environment' template codes objects which can serve as 'act'
+// functor in zimt::process. It's coded as a zimt::unary_functor
+// taking 3D 'ray' coordinates and producing pixels with C channels.
+// struct repix is used to convert the output to the desired number
+// of channels.
+
+template < typename T , typename U , std::size_t C , std::size_t L >
+class environment
 : public zimt::unary_functor < zimt::xel_t < T , 3 > ,
                                zimt::xel_t < U , C > ,
                                L >
@@ -1191,68 +1607,133 @@ public:
 
   zimt::grok_type < ray_t , px_t , L > env ;
 
-  cubemap ( const std::unique_ptr<ImageInput> & inp ,
-            const std::size_t & w ,
-            const std::size_t & h ,
-            const std::size_t & nchannels ,
-            const arguments & args )
+  environment ( const std::unique_ptr<ImageInput> & inp ,
+                const std::size_t & w ,
+                const std::size_t & h ,
+                const std::size_t & nchannels ,
+                const arguments & args )
   {
+    assert ( inp ) ;
     shape_type shape { w , h } ;
 
-    assert ( h == 6 * w ) ;
-
-    if ( verbose )
+    if ( w == 2 * h )
     {
-      std::cout << "input has 1:6 aspect ratio, assuming cubemap"
-                << std::endl ;
+      if ( verbose )
+        std::cout << "input has 2:1 aspect ratio, assuming latlon"
+                  << std::endl ;
+
+      if ( nchannels >= 4 )
+      {
+        typedef zimt::xel_t < float , 4 > in_px_t ;
+        pa4 = std::make_shared < zimt::array_t < 2 , in_px_t > >
+          ( shape ) ;
+
+        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+                                         TypeDesc::FLOAT , pa4->data() ) ;
+        assert ( success ) ;
+
+        env =   ray_to_ll_t()
+              + eval_latlon < 4 > ( *pa4 )
+              + repix < U , 4 , C , L > () ;
+      }
+      else if ( nchannels == 3 )
+      {
+        typedef zimt::xel_t < float , 3 > in_px_t ;
+        pa3 = std::make_shared < zimt::array_t < 2 , in_px_t > >
+          ( shape ) ;
+
+        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+                                         TypeDesc::FLOAT , pa3->data() ) ;
+        assert ( success ) ;
+
+        env =   ray_to_ll_t()
+              + eval_latlon < 3 > ( *pa3 )
+              + repix < U , 3 , C , L > () ;
+      }
+      else if ( nchannels == 2 )
+      {
+        typedef zimt::xel_t < float , 2 > in_px_t ;
+        pa2 = std::make_shared < zimt::array_t < 2 , in_px_t > >
+          ( shape ) ;
+     
+        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+                                         TypeDesc::FLOAT , pa2->data() ) ;
+        assert ( success ) ;
+      
+        env =   ray_to_ll_t()
+              + eval_latlon < 2 > ( *pa2 )
+              + repix < U , 2 , C , L > () ;
+      }
+      else
+      {
+        typedef zimt::xel_t < float , 1 > in_px_t ;
+        pa1 = std::make_shared < zimt::array_t < 2 , in_px_t > >
+          ( shape ) ;
+     
+        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+                                         TypeDesc::FLOAT , pa1->data() ) ;
+        assert ( success ) ;
+      
+        env =   ray_to_ll_t()
+              + eval_latlon < 1 > ( *pa1 )
+              + repix < U , 1 , C , L > () ;
+      }
     }
-    if ( nchannels >= 4 )
+    else if ( h == 6 * w )
     {
-      sixfold_t<4> sf ( w ) ;
-      sf.load ( inp ) ;
-      inp->close() ;
-      sf.mirror_around() ;
-      sf.fill_support ( 1 ) ;
-      std::cout << "cbm set env 4" << std::endl ;
+      if ( verbose )
+      {
+        std::cout << "input has 1:6 aspect ratio, assuming cubemap"
+                  << std::endl ;
+      }
+      if ( nchannels >= 4 )
+      {
+        sixfold_t<4> sf ( w ) ;
+        sf.load ( inp ) ;
+        inp->close() ;
+        sf.mirror_around() ;
+        sf.fill_support ( 1 ) ;
+        std::cout << "cbm set env 4" << std::endl ;
 
-      env =   cbm_to_px_t < 4 > ( sf )
-            + repix < U , 4 , C , L > () ;
-    }
-    else if ( nchannels == 3 )
-    {
-      sixfold_t<3> sf ( w ) ;
-      sf.load ( inp ) ;
-      inp->close() ;
-      sf.mirror_around() ;
-      sf.fill_support ( 1 ) ;
-      std::cout << "cbm set env 3" << std::endl ;
+        env =   cbm_to_px_t < 4 > ( sf )
+              + repix < U , 4 , C , L > () ;
+      }
+      else if ( nchannels == 3 )
+      {
+        sixfold_t<3> sf ( w ) ;
+        sf.load ( inp ) ;
+        inp->close() ;
+        sf.mirror_around() ;
+        sf.fill_support ( 1 ) ;
+        std::cout << "cbm set env 3" << std::endl ;
 
-      env =   cbm_to_px_t < 3 > ( sf )
-            + repix < U , 3 , C , L > () ;
-    }
-    else if ( nchannels == 2 )
-    {
-      sixfold_t<2> sf ( w ) ;
-      sf.load ( inp ) ;
-      inp->close() ;
-      sf.mirror_around() ;
-      sf.fill_support ( 1 ) ;
-      std::cout << "cbm set env 2" << std::endl ;
+        env =   cbm_to_px_t < 3 > ( sf )
+              + repix < U , 3 , C , L > () ;
+      }
+      else if ( nchannels == 2 )
+      {
+        sixfold_t<2> sf ( w ) ;
+        sf.load ( inp ) ;
+        inp->close() ;
+        sf.mirror_around() ;
+        sf.fill_support ( 1 ) ;
+        std::cout << "cbm set env 2" << std::endl ;
 
-      env =   cbm_to_px_t < 2 > ( sf )
-            + repix < U , 2 , C , L > () ;
-    }
-    else
-    {
-      sixfold_t<1> sf ( w ) ;
-      sf.load ( inp ) ;
-      inp->close() ;
-      sf.mirror_around() ;
-      sf.fill_support ( 1 ) ;
-      std::cout << "cbm set env 1" << std::endl ;
+        env =   cbm_to_px_t < 2 > ( sf )
+              + repix < U , 2 , C , L > () ;
+      }
+      else
+      {
+        sixfold_t<1> sf ( w ) ;
+        sf.load ( inp ) ;
+        inp->close() ;
+        sf.mirror_around() ;
+        sf.fill_support ( 1 ) ;
+        std::cout << "cbm set env 1" << std::endl ;
 
-      env =   cbm_to_px_t < 1 > ( sf )
-            + repix < U , 1 , C , L > () ;
+        env =   cbm_to_px_t < 1 > ( sf )
+              + repix < U , 1 , C , L > () ;
+      }
     }
   }
 

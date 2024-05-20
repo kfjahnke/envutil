@@ -159,9 +159,6 @@ void save_array ( const std::string & filename ,
                     nchannels , TypeDesc::HALF ) ;
   out->open ( filename , ospec ) ;
 
-  if ( is_latlon )
-    ospec.attribute ( "textureformat" , "LatLong Environment" ) ;
-
   auto success = out->write_image ( TypeDesc::FLOAT , pixels.data() ) ;
   assert ( success ) ;
   out->close();
@@ -198,6 +195,7 @@ struct arguments
   std::regex field_re ;
   std::size_t env_width , env_height ;
   std::size_t nchannels ;
+  int itp ;
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
   bool conservative_filter ;
@@ -326,6 +324,9 @@ struct arguments
     ap.arg("--output OUTPUT")
       .help("output file name (mandatory)")
       .metavar("OUTPUT");
+    ap.arg("--itp ITP")
+      .help("interpolator: 1 for direct bilinear, -1 for OIIO")
+      .metavar("ITP");
     ap.arg("--tsoptions KVLIST")
       .help("OIIO TextureSystem Options: coma-separated key=value pairs")
       .metavar("KVLIST");
@@ -396,6 +397,7 @@ struct arguments
   
     input = ap["input"].as_string ( "" ) ;
     output = ap["output"].as_string ( "" ) ;
+    itp = ap["itp"].get<int>(-1);
     swrap = ap["swrap"].as_string ( "WrapDefault" ) ;
     twrap = ap["twrap"].as_string ( "WrapDefault" ) ;
     mip = ap["mip"].as_string ( "MipModeDefault" ) ;
@@ -468,6 +470,9 @@ struct arguments
       std::cout << "input width: " << env_width << std::endl ;
       std::cout << "input height: " << env_height << std::endl ;
       std::cout << "input has " << nchannels << " channels" << std::endl ;
+      std::cout << "interpolation: "
+              << ( itp == 1 ? "direct bilinear" : "uses OIIO" )
+              << std::endl ;
     
       std::cout << "output: " << output << std::endl ;
       std::cout << "output projection: " << prj_str << std::endl ;
@@ -504,17 +509,41 @@ void work ( const arguments & args ,
             const std::size_t & h ,
             zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
 {
-  // set up the environment object yielding content. This serves as
-  // the 'act' functor for zimt::process
+  // the 'act' functor is fed 'ninepacks' - sets of three 3D ray
+  // coordinates, holding information to allow the calculations
+  // of the coordinate transformation's derivatives. This is
+  // done inside the 'env' object and depends on it's specific
+  // type - the 'act' functor yields pixels, so here we don't
+  // have to deal with the internal workings.
 
-  latlon < float , float , nchannels , 16 > env
-   ( inp , w , h , nchannels , args ) ;
-
+  typedef zimt::xel_t < float , 9 > crd9_t ;
   typedef zimt::xel_t < float , nchannels > px_t ;
   
+  zimt::grok_type < crd9_t , px_t , 16 > act ;
+
+  if ( w == h * 2 )
+  {
+    // set up an environment object picking up pixel values from
+    // a lat/lon image using OIIO's 'environment' function
+
+    act = latlon < float , float , nchannels , 16 >
+            ( inp , w , h , nchannels , args ) ;
+  }
+  else
+  {
+    // set up an environment object picking up pixel values from
+    // a texture representing the cubemap image, using OIIO's
+    // 'texture' function
+
+    act = cubemap < float , float , nchannels , 16 >
+           ( inp , w , h , nchannels , args ) ;
+  }
+
+  // set up an array to receive the output pixels
+
   zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
   
-  // set up zimt::storers to populate the target arrays with
+  // set up zimt::storers to populate the target array with
   // zimt::process
   
   zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
@@ -525,7 +554,7 @@ void work ( const arguments & args ,
   if ( args.verbose )
     std::cout << "producing output" << std::endl ;
   
-  zimt::process ( trg.shape , get_ray , env , cstor ) ;
+  zimt::process ( trg.shape , get_ray , act , cstor ) ;
   
   if ( args.verbose )
     std::cout << "saving output image: " << args.output << std::endl ;
@@ -536,6 +565,9 @@ void work ( const arguments & args ,
     std::cout << "done." << std::endl ;
 }
 
+// overload using an 'environment' object as data source. This
+// does use bilinear interplation directly from the source image.
+
 template < std::size_t nchannels >
 void work ( const arguments & args ,
             const std::unique_ptr<ImageInput> & inp ,
@@ -543,17 +575,26 @@ void work ( const arguments & args ,
             const std::size_t & h ,
             zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
 {
-  // set up the cubemap object yielding content. This serves as
-  // the 'act' functor for zimt::process
+  // the 'act' functor is fed 'ninepacks' - sets of three 3D ray
+  // coordinates, holding information to allow the calculations
+  // of the coordinate transformation's derivatives. This is
+  // done inside the 'env' object and depends on it's specific
+  // type - the 'act' functor yields pixels, so here we don't
+  // have to deal with the internal workings.
 
-  cubemap < float , float , nchannels , 16 > env
-   ( inp , w , h , nchannels , args ) ;
-
+  typedef zimt::xel_t < float , 3 > crd3_t ;
   typedef zimt::xel_t < float , nchannels > px_t ;
   
+  zimt::grok_type < crd3_t , px_t , 16 > act ;
+
+  act = environment < float , float , nchannels , 16 >
+            ( inp , w , h , nchannels , args ) ;
+
+  // set up an array to receive the output pixels
+
   zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
   
-  // set up zimt::storers to populate the target arrays with
+  // set up zimt::storers to populate the target array with
   // zimt::process
   
   zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
@@ -564,7 +605,7 @@ void work ( const arguments & args ,
   if ( args.verbose )
     std::cout << "producing output" << std::endl ;
   
-  zimt::process ( trg.shape , get_ray , env , cstor ) ;
+  zimt::process ( trg.shape , get_ray , act , cstor ) ;
   
   if ( args.verbose )
     std::cout << "saving output image: " << args.output << std::endl ;
@@ -629,8 +670,25 @@ int main ( int argc , const char ** argv )
 
   assert ( w == 2 * h || h == 6 * w ) ;
 
-  if ( w == 2 * h )
+  if ( args.itp == -1 )
   {
+    // we want to employ OIIO to provide pixel data from the lat/lon
+    // or cubemap environments. For the best quality of lookup, OIIO
+    // needs the derivatives of the coordinate transformation. We
+    // have a special stepper which provised not only the 3D ray
+    // coordinate of the actual pick-up location, but also 3D ray
+    // coordinates for the location one sample step to the right
+    // and one step downwards in canonical target image coordinates,
+    // so instead of the usual three-component vector, this stepper
+    // yields a nine-component vector. Internally, this stepper
+    // holds three separate steppers - one for each of the ray
+    // coordinates it produces. The type of these three internal
+    // steppers is introduced as a template argument. To allow
+    // us to handle these variously-typed stepper objects with a
+    // common handle, we use a zimt::grok_get_t, which 'erases'
+    // the type and provides a uniformly-typed object, which we
+    // use as get_t object for the zimt::process invocation:
+
     zimt::grok_get_t < float , 9 , 2 , 16 > get_ray ;
 
     switch ( args.projection )
@@ -667,10 +725,12 @@ int main ( int argc , const char ** argv )
       default:
         break ;
     }
-    // the code to set up and extract data from the latlon image
-    // depends on the number of channels. That's passed as a template
-    // argument, so here we have a case switch over 'nchannels' which
-    // dispatches to the appropriate instantiations.
+
+    // the code to set up and extract data from the latlon image,
+    // or the cubemap, depends on the number of channels. That's
+    // passed as a template argument, so here we have a case
+    // switch over 'nchannels' which dispatches to the appropriate
+    // instantiations.
 
     switch ( args.nchannels )
     {
@@ -690,12 +750,11 @@ int main ( int argc , const char ** argv )
   }
   else
   {
-    // TODO: we'd like to access the cubemap via OIIO's 'texture'
-    // function - currently, access is with bilinear interpolation
-    // from the IR image in a sixfold_t
-
+    // access data with bilinear interpolation from the source
+    // image (does not use OIIO's 'environemnt' or 'texture')
+  
     zimt::grok_get_t < float , 3 , 2 , 16 > get_ray ;
-
+  
     switch ( args.projection )
     {
       case RECTILINEAR :
@@ -746,6 +805,5 @@ int main ( int argc , const char ** argv )
         break ;
     }
   }
-
 }
     
