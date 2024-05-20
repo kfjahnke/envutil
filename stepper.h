@@ -163,7 +163,7 @@ struct stepper_base
   // extent can be sampled with any horizontal and vertical
   // resolution.
 
-  const std::size_t width , height ;
+  const long width , height ;
 
   // stepper_base's standard c'tor receives the width and height,
   // and the image's extent, given as the extrema first in

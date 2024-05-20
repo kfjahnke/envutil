@@ -604,7 +604,7 @@ void work ( const arguments & args ,
   
   if ( args.verbose )
     std::cout << "producing output" << std::endl ;
-  
+
   zimt::process ( trg.shape , get_ray , act , cstor ) ;
   
   if ( args.verbose )

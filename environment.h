@@ -1324,25 +1324,14 @@ struct cbm_to_px_t2
 
     // convert the neighbouring rays to texture coordinates
     
-    // in_face_00 += 1.0f ;
     in_face_00 *= scale ;
-    // in_face_10 += 1.0f ;
     in_face_10 *= scale ;
-    // in_face_01 += 1.0f ;
     in_face_01 *= scale ;
 
     // form the differences
 
     crd2_v dx_tx = in_face_10 - in_face_00 ;
     crd2_v dy_tx = in_face_01 - in_face_00 ;
-
-    // cubemap.get_pickup_coordinate_tx ( face , in_face_10 , dx_tx ) ;
-    // cubemap.get_pickup_coordinate_tx ( face , in_face_01 , dy_tx ) ;
-
-//     // form the differences to get the derivatives
-//   
-//     dx_tx -= c3_tx ;
-//     dy_tx -= c3_tx ;
 
     // use OIIO to get the pixel value
 
