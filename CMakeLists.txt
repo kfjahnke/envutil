@@ -116,7 +116,7 @@ if ( NOT USE_GOADING )
   find_package ( HWY CONFIG )
   if ( HWY_FOUND )
     message ( STATUS "find_package: HWY_FOUND = true" )
-    set ( required_libraries ${required_libraries} hwy )
+    # set ( required_libraries ${required_libraries} hwy )
     set ( SIMD_LIBRARY "-D USE_HWY" )
   else()
     find_package ( Vc )
@@ -152,4 +152,74 @@ set_source_files_properties ( envutil.cc extract.cc PROPERTIES COMPILE_FLAGS
 
 # install the 'useful' binaries (stepper is only a demo)
 
-install(TARGETS extract DESTINATION bin)
+install(TARGETS envutil extract DESTINATION bin)
+
+# Some more options for building debian packages. The first one - with
+
+set(CPACK_DEBIAN_PACKAGE_NAME "envutil")
+set(CPACK_DEBIAN_PACKAGE_VERSION "0.1.0")
+
+set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CMAKE_INSTALL_PREFIX})
+set(CPACK_SET_DESTDIR "ON")
+
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Kay F. Jahnke")
+
+# insert license
+
+file(READ LICENSE CPACK_PACKAGE_LICENSE)
+
+# insert description
+
+set(CPACK_PACKAGE_DESCRIPTION_FILE
+  "${CMAKE_SOURCE_DIR}/brief_description.txt")
+
+set(CPACK_DEBIAN_PACKAGE_DESCRIPTION
+  "envutil, extract: utility programs for 360X180 degree images")
+
+set(CPACK_DEBIAN_PACKAGE_SECTION "universe/graphics")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/kfjahnke/envutil")
+
+# the empty string is needed to include dependencies in the
+# package
+
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libopenimageio2.4")
+
+# This option generates dependencies automatically - it requires
+# the dpkg-dev package to function
+
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+
+# is 'VENDOR' the right term here? This is FOSS
+
+set(CPACK_PACKAGE_VENDOR "Kay F. Jahnke")
+
+set(CPACK_STRIP_FILES 1)
+set(CPACK_PACKAGE_VERSION_MAJOR 0)
+set(CPACK_PACKAGE_VERSION_MINOR 1)
+set(CPACK_PACKAGE_VERSION_PATCH 0)
+
+set(CPACK_PACKAGE_CONTACT "Kay F. Jahnke <kfjahnke+envutil@gmail.com>")
+
+set(CPACK_PACKAGE_ICON scripts/PV_512x512x32.png)
+
+install(FILES scripts/256X256/lux.png
+        DESTINATION share/icons/hicolor/256x256/apps)
+
+install(FILES scripts/512X512/lux.png 
+        DESTINATION share/icons/hicolor/512x512/apps)
+
+install(FILES scripts/1024X1024/lux.png
+        DESTINATION share/icons/hicolor/1024x1024/apps)
+
+install(FILES scripts/envutil.desktop 
+        DESTINATION share/applications)
+
+# envutil and extract are MIT-licensed
+
+set(CPACK_DEBIAN_PACKAGE_LICENSE "MIT License")
+set(CPACK_PACKAGE_LICENSE "MIT License")
+set(CPACK_DEBIAN_PACKAGE_DEBUG ON)
+
+message(STATUS "CMAKE_INSTALL_PREFIX = ${CMAKE_INSTALL_PREFIX}")
+include(CPack)

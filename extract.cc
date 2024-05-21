@@ -328,6 +328,39 @@ struct arguments
     ap.arg("--itp ITP")
       .help("interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining")
       .metavar("ITP");
+    ap.arg("--width EXTENT")
+      .help("width of the output")
+      .metavar("EXTENT");
+    ap.arg("--height EXTENT")
+      .help("height of the output")
+      .metavar("EXTENT");
+    ap.arg("--projection PRJ")
+      .help("target projection")
+      .metavar("PRJ");
+    ap.arg("--hfov ANGLE")
+      .help("horiziontal field of view of the output (in degrees)")
+      .metavar("ANGLE");
+    ap.arg("--yaw ANGLE")
+      .help("yaw of the virtual camera (in degrees)")
+      .metavar("ANGLE");
+    ap.arg("--pitch ANGLE")
+      .help("pitch of the virtual camera (in degrees)")
+      .metavar("ANGLE");
+    ap.arg("--roll ANGLE")
+      .help("roll of the virtual camera (in degrees)")
+      .metavar("ANGLE");
+    ap.arg("--x0 EXTENT")
+      .help("low end of the horizontal range")
+      .metavar("EXTENT");
+    ap.arg("--x1 EXTENT")
+      .help("high end of the horizontal range")
+      .metavar("EXTENT");
+    ap.arg("--y0 EXTENT")
+      .help("low end of the vertical range")
+      .metavar("EXTENT");
+    ap.arg("--y1 EXTENT")
+      .help("high end of the vertical range")
+      .metavar("EXTENT");
     ap.arg("--twine TWINE")
       .help("use twine*twine oversampling - use with itp -2")
       .metavar("TWINE");
@@ -363,39 +396,6 @@ struct arguments
       .metavar("EXTENT");
     ap.arg("--conservative_filter" , &conservative_filter)
       .help("OIIO conservative_filter Texture Option");
-    ap.arg("--width EXTENT")
-      .help("width of the output")
-      .metavar("EXTENT");
-    ap.arg("--height EXTENT")
-      .help("height of the output")
-      .metavar("EXTENT");
-    ap.arg("--projection PRJ")
-      .help("target projection")
-      .metavar("PRJ");
-    ap.arg("--hfov ANGLE")
-      .help("horiziontal field of view of the output (in degrees)")
-      .metavar("ANGLE");
-    ap.arg("--yaw ANGLE")
-      .help("yaw of the virtual camera (in degrees)")
-      .metavar("ANGLE");
-    ap.arg("--pitch ANGLE")
-      .help("pitch of the virtual camera (in degrees)")
-      .metavar("ANGLE");
-    ap.arg("--roll ANGLE")
-      .help("roll of the virtual camera (in degrees)")
-      .metavar("ANGLE");
-    ap.arg("--x0 EXTENT")
-      .help("low end of the horizontal range")
-      .metavar("EXTENT");
-    ap.arg("--x1 EXTENT")
-      .help("high end of the horizontal range")
-      .metavar("EXTENT");
-    ap.arg("--y0 EXTENT")
-      .help("low end of the vertical range")
-      .metavar("EXTENT");
-    ap.arg("--y1 EXTENT")
-      .help("high end of the vertical range")
-      .metavar("EXTENT");
     
     if (ap.parse(argc, argv) < 0 ) {
         std::cerr << ap.geterror() << std::endl;
