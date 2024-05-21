@@ -1403,7 +1403,7 @@ struct ll_to_px_t
     delta ( _delta ) ,
     batch_options ( _batch_options ) ,
     scale_s ( _cubemap.model_to_px / _cubemap.store.shape[0] ) ,
-    scale_t ( _cubemap.model_to_px / -cubemap.store.shape[1] ) ,
+    scale_t ( _cubemap.model_to_px / _cubemap.store.shape[1] ) ,
     ll_to_ray() // g++ is picky.
   { }
 
@@ -1951,7 +1951,12 @@ void cubemap_to_latlon ( const std::string & input ,
   // has to be in a file, so we store it to a temporary file:
 
   auto temp_path = std::filesystem::temp_directory_path() ;
-  auto temp_filename = temp_path / "temp_texture.exr" ;
+  std::string texture_filename ;
+  if ( save_ir != std::string() )
+    texture_filename = save_ir ;
+  else
+    texture_filename = "temp_texture.exr" ;
+  auto temp_filename = temp_path / texture_filename ;
 
   if ( degree == -1 )
   {
@@ -2092,23 +2097,15 @@ void cubemap_to_latlon ( const std::string & input ,
     zimt::process ( trg.shape , linspace , act , st ) ;
   }
 
-  // we don't need the temporary texture any more. If save_ir is
-  // set, we save it under the given name.
-  if ( save_ir != std::string() )
-  {
-    if ( verbose )
-      std::cout << "saving internal representation to '" << save_ir
-                << "'" << std::endl ;
-    if ( degree == -1 )
-      std::filesystem::rename ( temp_filename , save_ir ) ;
-    else
-      save_array ( save_ir , sf.store ) ;
-  }
-  else if ( degree == -1 )
+  // we don't need the temporary texture any more. But if save_ir
+  // is set, the file was saved under this name and we keep it.
+  
+  if ( degree == -1 && save_ir == std::string() )
   {
     if ( verbose )
       std::cout << "removing temporary texture file "
                 << temp_filename.c_str() << std::endl ;
+
     std::filesystem::remove ( temp_filename ) ;
   }
 
@@ -2434,10 +2431,10 @@ int main ( int argc , const char ** argv )
   ts_options = ap["ts_options"].as_string("");
   save_ir = ap["save_ir"].as_string("");
   extent = ap["extent"].get<int>(0);
-  itp = ap["itp"].get<int>(-1);
-  twine = ap["twine"].get<int>(1);
   support_min_px = ap["support_min_px"].get<int>(4);
   tile_px = ap["tile_px"].get<int>(64);
+  itp = ap["itp"].get<int>(-1);
+  twine = ap["twine"].get<int>(1);
   twine_px = ap["twine_px"].get<float>(1.0);
   twine_sigma = ap["twine_sigma"].get<float>(0.0);
   twine_threshold = ap["twine_threshold"].get<float>(0.0);

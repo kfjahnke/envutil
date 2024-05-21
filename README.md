@@ -300,12 +300,11 @@ you figure out which 'flavour' your cubemaps are.
 # utility to extract a reprojected image from an environment.
 
 This program takes a 2:1 lat/lon environment or a 1:6 cubemap image as input and
-produces output in the specified orientation, projection, field of view and extent. The program is new and will still need some tweaking, but it's
-already functional.
+produces output in the specified orientation, projection, field of view and extent.
+The program is new and will still need some tweaking, but it's already functional.
 This started out as a simple demo for 'steppers' (stepper.cc is still there with
 the initial code), but I thought that, with a bit of additional parameterization,
-it would make a useful tool. For the time being, it only uses bilinear
-interpolation, so the resolution of the output should be close to the input's.
+it would make a useful tool.
 The output projection can be one of "spherical", "cylindrical", "rectilinear",
 "stereographic", "fisheye" or "cubemap". The geometrical extent of the output is
 set up most conveniently by passing --hfov, the horizontal field of view of the
@@ -314,6 +313,39 @@ output. The x0, x1, y0, and y1 parameters allow passing specific extent values
 rotation, pass Euler angles yaw, pitch and roll - they default to zero: no
 rotation. The size of the output is given by --width and --height. You must pass
 an output filename with --output; --input specifies the environment image.
+Pass 'width' and 'height' to tell extract the size of the output image.
+If you pass -v, you'll get informations about what is going on internally,
+and passing --help will produce this command line argument synopsis:
+
+    --help                             Print help message
+    -v                                 Verbose output
+    --input INPUT                      input file name (mandatory)
+    --output OUTPUT                    output file name (mandatory)
+    --itp ITP                          interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining
+    --width EXTENT                     width of the output
+    --height EXTENT                    height of the output
+    --projection PRJ                   target projection
+    --hfov ANGLE                       horiziontal field of view of the output (in degrees)
+    --yaw ANGLE                        yaw of the virtual camera (in degrees)
+    --pitch ANGLE                      pitch of the virtual camera (in degrees)
+    --roll ANGLE                       roll of the virtual camera (in degrees)
+    --x0 EXTENT                        low end of the horizontal range
+    --x1 EXTENT                        high end of the horizontal range
+    --y0 EXTENT                        low end of the vertical range
+    --y1 EXTENT                        high end of the vertical range
+    --twine TWINE                      use twine*twine oversampling - use with itp -2
+    --twine_px TWINE_WIDTH             widen the pick-up area of the twining filter
+    --twine_sigma TWINE_SIGMA          use a truncated gaussian for the twining filter (default: don't)
+    --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
+    --tsoptions KVLIST                 OIIO TextureSystem Options: coma-separated key=value pairs
+    --swrap WRAP                       OIIO Texture System swrap mode
+    --twrap WRAP                       OIIO Texture System twrap mode
+    --mip MIP                          OIIO Texture System mip mode
+    --interp INTERP                    OIIO Texture System interp mode
+    --stwidth EXTENT                   swidth and twidth OIIO Texture Options
+    --stblur EXTENT                    sblur and tblur OIIO Texture Options
+    --conservative_filter              OIIO conservative_filter Texture Option
+
 
 ## --input INPUT         input file name (mandatory)
 
@@ -325,6 +357,24 @@ See --6 for a way to load a cubemap from six separate cube face image files.
 
 The output will be stored under this name. See --6 for a way to store cubemaps
 to six separate cube face image files.
+
+## --itp ITP
+
+This is an integer value determining the interpolation method. There are currently
+three modes of interpolation:
+
+    1 - use simple bilinear interpolation directly on the source image
+        this is the fastest option, and unless there is a significant scale
+        change involved, the output should be 'good enough' for most purposes.
+
+    -1 - use OpenImageIO's 'environemnt' or 'texture' function for lookup.
+         without additional arguments, this will use a sophisticated interpolator
+         with good antialiasing.
+
+    -2 - use 'twining' - this is a method which first super-samples and then
+         combines several pixels to one output pixel ('binning'). This is my
+         own invention. It's quite fast and produces good quality output.
+         This method should see community review to compare it with other methods.
 
 ## --width EXTENT    width of the output
 
@@ -368,4 +418,84 @@ which extent values are generated from a field of view parameter, given a specif
 projection. This can help you figure out specific values you may want to pass,
 e.g. to produce anisotropic output.
 
+# OIIO-specific options
+
+These options can be used to configure the look-up with OpenImageIO's
+'environemnt' and 'texture' functions. You can read up the options in the
+[OpenImageIO documentation](https://openimageio.readthedocs.io/en/v2.5.11.0/texturesys.html#)
+
+## --tsoptions KVLIST  OIIO TextureSystem Options: coma-separated key=value pairs
+
+This argument can be used to pass a set of comma-separated key=value pairs
+to the 'catch-all' texture system attribute 'options'. It's a handy way to
+handle the transfer, because OIIO has a parser for such lists.
+
+## --swrap WRAP        OIIO Texture System swrap mode
+## --twrap WRAP        OIIO Texture System twrap mode
+
+Separate wrapping modes, determining how texture access outside the texture area
+proper is handled.
+
+## --mip MIP           OIIO Texture System mip mode
+
+mip-mapping mode. I use a default of 'automip=1' for tsoptions
+
+## --interp INTERP     OIIO Texture System interp mode
+
+interpolator. This is the interpolator OIIO uses for it's lookup, not the interpolator
+specified with the --itp option. To use OIIO's lookup, you pass --itp -1. Then you can
+use --interp to specify OIIO's interpolator, like --interp InterpSmartBicubic
+
+## --stwidth EXTENT    swidth and twidth OIIO Texture Options
+
+I lump together the swidth and twidth options - OIIO allows to pass them separately,
+but I don't see a need to do so in envutil and extract. The most useful value here
+is to pass zero, which makes OIIO ignore the pickup-point's derivatives. This can
+speed up the calculations.
+
+# --stblur EXTENT      sblur and tblur OIIO Texture Options
+
+I also lump together pre-blur along the s and t axis. This is to add more blur to
+the processing.
+
+# --conservative_filter              OIIO conservative_filter Texture Option
+
+pass this to switch on OIIO's 'conservative filter' - the default is to have it off.
+
+# Twining-specific options
+
+These options control the 'twining' filter. These options only hve an effect if you
+activate twining with --itp -2. extract will use bilinear interpolation on the source
+image for single-point lookups, but it will perform more lookups and then combine
+several neighbouring pixels from the oversampled result into each target pixel.
+The meaning of the parameters is the same as in envutil.
+
+## --twine TWINE         use twine*twine oversampling and box filter
+
+The effect of 'twining' is the same as oversampling and subsequent application of a box
+filter. The filter is sized so that the oversampling is uniform over the data, but the
+direct result of the oversampling is never saved - all samples falling into a common
+output pixel are pooled and only the average is stored. This keeps the pipeline afloat
+in SIMD registers, which is fast (as is the arithmetiic) - especially when highway or
+Vc are used, which increase SIMD performance particularly well.
+
+## --twine_width TWINE_WIDTH  widen the pick-up area of the twining filter
+
+A second parameter affecting 'twining'. If the source image has smaller resolution
+than the target image, the output reflects the interpolator's shortcomings, so
+with e.g. bilinear interpolation and large scale change (magnification) the output
+may show star-shaped and staircase artifacts. To counteract this problem, try and pass
+a twine_width up to roughly half the magnitude of the scale change.
+Input with low resolution is often insufficiently band-limited which will result
+in artifacts in the output or become very blurred when you try to counteract the
+artifacts with excessive blurring. There's little to be gained from scaling up
+anyway - the lost detail can't be regained.
+
+## --twine_sigma TWINE_SIGMA  use a truncated gaussian for the twining filter (default: don't)
+
+If you don't pass --twine_sigma, emvutil will use a simple box filter to combine the result of supersampling into single output pixels values. If you pass twine_sigma, the kernel will be derived from a gaussian with a sigma equivalent to twine_sigma times the half kernel width. This gives more weight to supersamples near the center of the pick-up.
+
+## --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
+
+If you pass twine_sigma, marginal twining kernel values may become quite small and using them as filter taps makes no sense. Pass a threshold here to suppress kernel values below the threshold. This is mainly to reduce processing time. Use -v to display the kernel and see which kernel values 'survive' the thresholding.
 
