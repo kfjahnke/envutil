@@ -2422,10 +2422,10 @@ int main ( int argc , const char ** argv )
   ts_options = ap["ts_options"].as_string("");
   save_ir = ap["save_ir"].as_string("");
   extent = ap["extent"].get<int>(0);
-  itp = ap["itp"].get<int>(-1);
-  twine = ap["twine"].get<int>(1);
   support_min_px = ap["support_min_px"].get<int>(4);
   tile_px = ap["tile_px"].get<int>(64);
+  itp = ap["itp"].get<int>(-1);
+  twine = ap["twine"].get<int>(1);
   twine_px = ap["twine_px"].get<float>(1.0);
   twine_sigma = ap["twine_sigma"].get<float>(0.0);
   twine_threshold = ap["twine_threshold"].get<float>(0.0);

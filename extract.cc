@@ -195,7 +195,8 @@ struct arguments
   std::regex field_re ;
   std::size_t env_width , env_height ;
   std::size_t nchannels ;
-  int itp ;
+  int itp , twine , twine_px ;
+  double twine_sigma , twine_threshold ;
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
   bool conservative_filter ;
@@ -325,8 +326,20 @@ struct arguments
       .help("output file name (mandatory)")
       .metavar("OUTPUT");
     ap.arg("--itp ITP")
-      .help("interpolator: 1 for direct bilinear, -1 for OIIO")
+      .help("interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining")
       .metavar("ITP");
+    ap.arg("--twine TWINE")
+      .help("use twine*twine oversampling - use with itp -2")
+      .metavar("TWINE");
+    ap.arg("--twine_px TWINE_WIDTH")
+      .help("widen the pick-up area of the twining filter")
+      .metavar("TWINE_WIDTH");
+    ap.arg("--twine_sigma TWINE_SIGMA")
+      .help("use a truncated gaussian for the twining filter (default: don't)")
+      .metavar("TWINE_SIGMA");
+    ap.arg("--twine_threshold TWINE_THRESHOLD")
+      .help("discard twining filter taps below this threshold")
+      .metavar("TWINE_THRESHOLD");
     ap.arg("--tsoptions KVLIST")
       .help("OIIO TextureSystem Options: coma-separated key=value pairs")
       .metavar("KVLIST");
@@ -398,6 +411,10 @@ struct arguments
     input = ap["input"].as_string ( "" ) ;
     output = ap["output"].as_string ( "" ) ;
     itp = ap["itp"].get<int>(-1);
+    twine = ap["twine"].get<int>(1);
+    twine_px = ap["twine_px"].get<float>(1.0);
+    twine_sigma = ap["twine_sigma"].get<float>(0.0);
+    twine_threshold = ap["twine_threshold"].get<float>(0.0);
     swrap = ap["swrap"].as_string ( "WrapDefault" ) ;
     twrap = ap["twrap"].as_string ( "WrapDefault" ) ;
     mip = ap["mip"].as_string ( "MipModeDefault" ) ;
@@ -499,6 +516,199 @@ struct arguments
 
 #include "environment.h"
 
+// this function sets up a simple box filter to use with the
+// twine_t functor above. The given w and h values determine
+// the number of pick-up points in the horizontal and vertical
+// direction - typically, you'd use the same value for both.
+// The deltas are set up so that, over all pick-ups, they produce
+// a uniform sampling.
+// additional parameters allow to apply gaussian weights and
+// apply a threshold to suppress very small weighting factors;
+// in a final step the weights are normalized.
+
+void make_spread ( std::vector < zimt::xel_t < float , 3 > > & trg ,
+                   int w = 2 ,
+                   int h = 0 ,
+                   float d = 1.0f ,
+                   float sigma = 0.0f ,
+                   float threshold = 0.0f )
+{
+  if ( w <= 2 )
+    w = 2 ;
+  if ( h <= 0 )
+    h = w ;
+  float wgt = 1.0 / ( w * h ) ;
+  double x0 = - ( w - 1.0 ) / ( 2.0 * w ) ;
+  double dx = 1.0 / w ;
+  double y0 = - ( h - 1.0 ) / ( 2.0 * h ) ;
+  double dy = 1.0 / h ;
+  trg.clear() ;
+  sigma *= - x0 ;
+  double sum = 0.0 ;
+
+  for ( int y = 0 ; y < h ; y++ )
+  {
+    for ( int x = 0 ; x < w ; x++ )
+    {
+      float wf = 1.0 ;
+      if ( sigma > 0.0 )
+      {
+        double wx = ( x0 + x * dx ) / sigma ;
+        double wy = ( y0 + y * dy ) / sigma ;
+        wf = exp ( - sqrt ( wx * wx + wy * wy ) ) ;
+      }
+      zimt::xel_t < float , 3 >
+        v { float ( d * ( x0 + x * dx ) ) ,
+            float ( d * ( y0 + y * dy ) ) ,
+            wf * wgt } ;
+      trg.push_back ( v ) ;
+      sum += wf * wgt ;
+    }
+  }
+
+  double th_sum = 0.0 ;
+  bool renormalize = false ;
+
+  if ( sigma != 0.0 )
+  {
+    for ( auto & v : trg )
+    {
+      v[2] /= sum ;
+      if ( v[2] >= threshold )
+      {        
+        th_sum += v[2] ;
+      }
+      else
+      {
+        renormalize = true ;
+        v[2] = 0.0f ;
+      }
+    }
+    if ( renormalize )
+    {
+      for ( auto & v : trg )
+      {
+        v[2] /= th_sum ;
+      }
+    }
+  }
+
+  if ( verbose )
+  {
+    if ( sigma != 0.0 )
+    {
+      std::cout << "using this twining filter kernel:" << std::endl ;
+      for ( int y = 0 ; y < h ; y++ )
+      {
+        for ( int x = 0 ; x < w ; x++ )
+        {
+          std::cout << '\t' << trg [ y * h + x ] [ 2 ] ;
+        }
+        std::cout << std::endl ;
+      }
+    }
+    else
+    {
+      std::cout << "using box filter for twining" << std::endl ;
+    }
+  }
+
+  if ( renormalize )
+  {
+    auto help = trg ;
+    trg.clear() ;
+    for ( auto v : help )
+    {
+      if ( v[2] > 0.0f )
+        trg.push_back ( v ) ;
+    }
+    if ( verbose )
+    {
+      std::cout << "twining filter taps after after thresholding: "
+                << trg.size() << std::endl ;
+    }
+  }
+}
+
+// class twine_t takes data from a deriv_stepper which yields
+// 3D ray coordinates of the pick-up point and two more points
+// corresponding to the right and lower neighbours in the target
+// image - so, one 'canonical' step away. It wraps an 'act' type
+// functor which can produce pixels (with nchannel channels) from
+// 3D ray coordinates. The twine_t object receives the three ray
+// coordinates (the 'ninepack'), forms the two differences, and adds
+// weighted linear combinations of the differences to the first ray
+// (the one representing the pick-up location). The modified rays
+// are fed to the wrapped act-type functor in turn, yielding pixel
+// values for (slightly) varying pick-up locations in the vicinity
+// of the 'central' pick-up location. These pixel values are
+// combined in a weighted sum which constitutes the final output.
+
+template < std::size_t nchannels , std::size_t L >
+struct twine_t
+: public zimt::unary_functor < zimt::xel_t < float , 9 > ,
+                               zimt::xel_t < float , nchannels > ,
+                               L
+                             >
+{
+  typedef zimt::unary_functor < zimt::xel_t < float , 9 > ,
+                                zimt::xel_t < float , nchannels > ,
+                                L
+                              > base_t ;
+
+  typedef zimt::grok_type < zimt::xel_t < float , 3 > ,
+                            zimt::xel_t < float , nchannels > ,
+                            L
+                          > act_t ;
+
+  act_t inner ;
+  const std::vector < zimt::xel_t < float , 3 > > spread ;
+
+  twine_t ( const act_t & _inner ,
+            const std::vector < zimt::xel_t < float , 3 > > & _spread )
+  : inner ( _inner ) ,
+    spread ( _spread )
+  { }
+
+  // eval function. incoming, we have 'ninepacks' with the ray data.
+  // we form the two differences and evaluate 'inner' in a loop,
+  // building up the weighted sum.
+
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out )
+  {
+    out = 0 ;
+    out_type px_k ;
+
+    typedef typename act_t::in_v crd_v ;
+
+    // ray coordinate of the 'central', unmodified pick-up location
+
+    crd_v pickup { in[0] , in[1] , in[2] } ;
+
+    // derivatives in x and y directions, formed by differencing
+
+    crd_v dx { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
+    crd_v dy { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
+
+    for ( auto const & contrib : spread )
+    {
+      // form the slightly offsetted pick-up ray coordinate
+
+      auto in_k = pickup + contrib[0] * dx + contrib[1] * dy ;
+
+      // evaluate 'inner' to yield the partial result
+
+      inner.eval ( in_k , px_k ) ;
+
+      // weight it and add it to the final result
+
+      out += contrib[2] * px_k ;
+    }
+  }
+} ;
+                               
 // 'work' overload to produce source data from a lat/lon environment
 // image using OIIO's 'environment' function
 
@@ -518,25 +728,44 @@ void work ( const arguments & args ,
 
   typedef zimt::xel_t < float , 9 > crd9_t ;
   typedef zimt::xel_t < float , nchannels > px_t ;
-  
+
+  std::vector < zimt::xel_t < float , 3 > > spread ;
+
+  if ( args.itp == -2 )
+  {
+    make_spread ( spread , args.twine , args.twine ,
+                  args.twine_px , args.twine_sigma ,
+                  args.twine_threshold ) ;
+  }
+
   zimt::grok_type < crd9_t , px_t , 16 > act ;
 
-  if ( w == h * 2 )
+  if ( args.itp == -2 )
   {
-    // set up an environment object picking up pixel values from
-    // a lat/lon image using OIIO's 'environment' function
+    environment < float , float , nchannels , 16 >
+      env ( inp , w , h , nchannels , args ) ;
 
-    act = latlon < float , float , nchannels , 16 >
-            ( inp , w , h , nchannels , args ) ;
+    act = twine_t < nchannels , 16 > ( env , spread ) ;
   }
   else
   {
-    // set up an environment object picking up pixel values from
-    // a texture representing the cubemap image, using OIIO's
-    // 'texture' function
+    if ( w == h * 2 )
+    {
+      // set up an environment object picking up pixel values from
+      // a lat/lon image using OIIO's 'environment' function
 
-    act = cubemap < float , float , nchannels , 16 >
-           ( inp , w , h , nchannels , args ) ;
+      act = latlon < float , float , nchannels , 16 >
+              ( inp , w , h , nchannels , args ) ;
+    }
+    else
+    {
+      // set up an environment object picking up pixel values from
+      // a texture representing the cubemap image, using OIIO's
+      // 'texture' function
+
+      act = cubemap < float , float , nchannels , 16 >
+              ( inp , w , h , nchannels , args ) ;
+    }
   }
 
   // set up an array to receive the output pixels
@@ -670,7 +899,7 @@ int main ( int argc , const char ** argv )
 
   assert ( w == 2 * h || h == 6 * w ) ;
 
-  if ( args.itp == -1 )
+  if ( args.itp == -1 || args.itp == -2 )
   {
     // we want to employ OIIO to provide pixel data from the lat/lon
     // or cubemap environments. For the best quality of lookup, OIIO

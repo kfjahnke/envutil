@@ -147,8 +147,8 @@ target_link_libraries(extract pthread ${required_libraries})
 #      "-O3 -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
 
 set_source_files_properties ( envutil.cc extract.cc PROPERTIES COMPILE_FLAGS
-      # "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
-      "-O3 -Wno-enum-compare ${SIMD_LIBRARY}")
+      "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
+      # "-O3 -Wno-enum-compare ${SIMD_LIBRARY}")
 
 # install the 'useful' binaries (stepper is only a demo)
 
