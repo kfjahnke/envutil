@@ -299,20 +299,29 @@ struct eval_env
   void eval ( const I & crd9 , O & px )
   {
     // we convert to OIIO-compatible coordinates as we go, this
-    // requires changing the sign of the y and z axis (hance the
-    // seemingly wrong order of the differences for ds and dt)
+    // requires changing the sign of the x and y axis (hence the
+    // seemingly wrong order of the differences for ds[0], ds[1],
+    // dt[0] and dt[1]). This is the only place where we need to
+    // do this in 'extract', because only here we are feeding 3D
+    // ray coordinates directly to OIIO code. OIIO's axis convention
+    // is the same as Imath's. They have the positive x axis pointing
+    // left and the positive y axis pointing down, whereas lux
+    // convention, which I use in theremainder of the program, has
+    // the positive x axis pointing right and the positive y axis
+    // pointing down ('latin book order'). Both systems have the
+    // positive z axis pointing forward.
 
-    crd3_v c3 {   crd9[0] ,
-                - crd9[1] ,
-                - crd9[2] } ;
+    crd3_v c3 { - crd9[0] ,  // note the sign change to move to
+                - crd9[1] ,  // OIIO-compatible 3D ray coordinates
+                  crd9[2] } ;
 
-    crd3_v ds { crd9[3] - crd9[0] ,
-                crd9[1] - crd9[4] ,
-                crd9[2] - crd9[5] } ;
+    crd3_v ds { crd9[0] - crd9[3] ,    // sic
+                crd9[1] - crd9[4] ,    // sic
+                crd9[5] - crd9[2] } ;
 
-    crd3_v dt { crd9[6] - crd9[0] ,
-                crd9[1] - crd9[7] ,
-                crd9[2] - crd9[8] } ;
+    crd3_v dt { crd9[0] - crd9[6] ,    // sic
+                crd9[1] - crd9[7] ,    // sic
+                crd9[8] - crd9[2] } ;
 
     // now we can call 'environment', but depending on the SIMD
     // back-end, we provide the pointers which 'environemnt' needs
