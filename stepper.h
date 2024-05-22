@@ -1092,6 +1092,20 @@ struct deriv_stepper
     // calculation). Other steppers which derive subimages from the
     // coordinate would follow this pattern (e.g. dual fisheye images
     // stacked vertically)
+    // A note: in the code using deriv_stepper, we'll produce the
+    // derivatives by simple differencing: we subtract the first set
+    // of three values from the second and third. What this really
+    // represents is a small rotation. When I use the derivatives
+    // for 'twining', I 'misuse' them to form linear combinations
+    // of the two vectors (with weights taken from the 'spread') to
+    // produce the separate pick-up rays. This is not entirely correct:
+    // The two vectors for this production should be orthogonal to the
+    // 'central' pick-up ray, but they aren't. Since the difference is
+    // typically very small because the three vectors are very close
+    // (we're talking sub-pixel OOMs) the difference is minimal, but
+    // an entirely correct calculation would eliminate the small
+    // error by projecting the two offsetted rays to the tangent plane
+    // of the first vector.
 
     r01 ( _xx , _yy , _zz , _width , _height ,
           _a0 , _a1 , _b0 , _b1 , -1 )
