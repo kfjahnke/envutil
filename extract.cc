@@ -36,25 +36,65 @@
 /*                                                                      */
 /************************************************************************/
 
-// utility to extract an image from an environment. This program takes
+// A utility to extract an image from an environment. This program takes
 // a 2:1 lat/lon environment or a 1:6 cubemap image as input and produces
 // output in the specified orientation, projection, field of view and
-// extent. this started out as a simple demo for 'steppers' (stepper.cc
-// is still there with the initial code), but I thought that, with a bit
-// of additional parameterization, it would make a useful tool.
-// For the time being, it only uses bilinear interpolation, so the
-// resolution of the output should be close to the input's. For CL
-// arguments, try 'extract -?'. The output projection can be one of
-// "spherical", "cylindrical", "rectilinear", "stereographic",
-// "fisheye" or "cubemap". The geometrical extent of the output is
-// set up most conveniently by passing --hfov, the horizontal field
-// of view of the output. The x0, x1, y0, and y1 parameters allow
-// passing specific extent values (in model space units), which should
-// rarely be necessary. To specify a 3D rotation, pass Euler angles
-// yaw, pitch and roll - they default to zero: no rotation. The size
-// of the output is given by --width and --height. You must pass an
-// output filename with --output; --input specifies the environment
-// image.
+// extent. For CL arguments, try 'extract --help'.
+//
+// The output projection can be one of "spherical", "cylindrical",
+// "rectilinear", "stereographic", "fisheye" or "cubemap". The geometrical
+// extent of the output is set up most conveniently by passing --hfov, the
+// horizontal field of view of the output. The x0, x1, y0, and y1 parameters
+// allow passing specific extent values (in model space units), which should
+// rarely be necessary. To specify the orientation of the 'virtual camera',
+// pass Euler angles yaw, pitch and roll - they default to zero: a view
+// 'straight ahead' to the point corresponding to the center of the
+// environment image with no camera roll. The size of the output is
+// given by --width and --height. You must pass an output filename
+// with --output; --input specifies the environment image.
+//
+// You can choose several different interpolation methods with the --itp
+// cammand line argument. The default is --itp 1, which uses bilinear
+// interpolation. This is fast and often good enough, especially if there
+// are no great scale changes involved - so, if the output's resolution is
+// similar to the input's. --itp -1 employs OpenImageIO (OIIO for short)
+// for interpolation. Without further parameters, OIIO's default mode is
+// used, which uses sophisticated, but slow methods to produce the output.
+// All of OIIO's interpolation, mip-mapping and wrapping modes can be
+// selected by using the relevant additional parameters. Finally, --itp -2
+// uses 'twining' - inlined oversampling with subsequent weighted pixel
+// binning. The default with this method is to use a simple 2X2 box filter
+// on a signal which is oversampled by a factor of four. Additional
+// parameters can change the smaount of oversampling and add gaussian
+// weights to the filter parameters. 'twining' is quite fast (if the number
+// of filter taps isn't very large - when down-scaling, the parameter
+// 'twine' should be at least the same as the scaling factor to avoid
+// aliasing. When upscaling, larger twining values will slighly soften
+// the output and suppress the star-shaped artifacts typical for bilinear
+// interpolation. Twining is new and this is a first approach. The method
+// is intrinsically very flexible (it's based on a generalization of
+// convolution), and the full flexibility isn't accessible in 'extract'
+// with the parameterization as it stands now, but it's already quite
+// useful with the few parameters I offer.
+//
+// The program uses zimt as it's 'strip-mining' and SIMD back-end, and
+// sets up the pixel pipelines using zimt's functional composition tools.
+// This allows for terse programming, and the use of a functional
+// paradigm allows for many features to be freely combined - a property
+// which is sometimes called 'orthogonality'. What you can't combine in
+// 'extract' is twining and interpolation with OIIO - this is pointless,
+// because OIIO offers all the anti-aliasing and quality interpolation
+// one might want, and using twining on top would not improve the
+// output. Currently, the build is set up to produce binary for AVX2-
+// -capable CPUs - nowadays most 'better' CPUs support this SIMD ISA.
+// When building for other (and non-i86) CPUs, suitable parameters should
+// be passed to the compiler (you'll have to modify the CMakeLists.txt).
+// I strongly suggest you install highway on your system - the build
+// will detect and use it to good effect. This is a build-time dependency
+// only. Next-best (when using i86 CPUs up to AVX2) is Vc, the fall-back
+// is to use std::simd, and even that can be turned off if you want to
+// rely on autovectorization; zimt structures the processing so that it's
+// autovectorization-friendly and performance is still quite good that way.
 
 #include "stepper.h"
 
@@ -307,8 +347,6 @@ struct arguments
 
   arguments ( int argc , const char ** argv )
   {
-    conservative_filter = false ;
-
     // we're using OIIO's argparse, since we're using OIIO anyway.
     // This is a convenient way to glean arguments on all supported
     // platforms - getopt isn't available everywhere.
@@ -394,8 +432,9 @@ struct arguments
     ap.arg("--stblur EXTENT")
       .help("sblur and tblur OIIO Texture Options")
       .metavar("EXTENT");
-    ap.arg("--conservative_filter" , &conservative_filter)
-      .help("OIIO conservative_filter Texture Option");
+    ap.arg("--conservative_filter YESNO")
+      .help("OIIO conservative_filter Texture Option - pass 0 or 1")
+      .metavar("YESNO");
     
     if (ap.parse(argc, argv) < 0 ) {
         std::cerr << ap.geterror() << std::endl;
@@ -410,7 +449,7 @@ struct arguments
   
     input = ap["input"].as_string ( "" ) ;
     output = ap["output"].as_string ( "" ) ;
-    itp = ap["itp"].get<int>(-1);
+    itp = ap["itp"].get<int>(1);
     twine = ap["twine"].get<int>(1);
     twine_px = ap["twine_px"].get<float>(1.0);
     twine_sigma = ap["twine_sigma"].get<float>(0.0);
@@ -420,6 +459,7 @@ struct arguments
     mip = ap["mip"].as_string ( "MipModeDefault" ) ;
     interp = ap["interp"].as_string ( "InterpSmartBicubic" ) ;
     tsoptions = ap["tsoptions"].as_string ( "automip=1" ) ;
+    conservative_filter = ap["conservative_filter"].get<int>(1) ;
     x0 = ap["x0"].get<float> ( 0.0 ) ;
     x1 = ap["x1"].get<float> ( 0.0 ) ;
     y0 = ap["y0"].get<float> ( 0.0 ) ;
@@ -807,13 +847,6 @@ void work ( const arguments & args ,
             const std::size_t & h ,
             zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
 {
-  // the 'act' functor is fed 'ninepacks' - sets of three 3D ray
-  // coordinates, holding information to allow the calculations
-  // of the coordinate transformation's derivatives. This is
-  // done inside the 'env' object and depends on it's specific
-  // type - the 'act' functor yields pixels, so here we don't
-  // have to deal with the internal workings.
-
   typedef zimt::xel_t < float , 3 > crd3_t ;
   typedef zimt::xel_t < float , nchannels > px_t ;
   
