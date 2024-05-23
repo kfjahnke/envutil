@@ -167,8 +167,7 @@ struct rotate_3d
   }
 } ;
 
-// for image I/O, we use OpenImageIO. For this demo, this is all
-// the OpenImageIO code we'll use:
+// for image I/O, we use OpenImageIO.
 
 #include <OpenImageIO/imageio.h>
 
@@ -211,7 +210,9 @@ void save_array ( const std::string & filename ,
 // arguments aren't acceptable, the program will terminate with an
 // exception. Beyond simply parsing the arguments, the code in this
 // object does some calculations to process the arguments further and
-// provide more palatable values to the program.
+// provide more palatable values to the program. Note: angles are passed
+// in degrees, but internally, only radians are used. The conversion is
+// done right after the parameter acquisition.
 
 #include <regex>
 #include <OpenImageIO/filesystem.h>
@@ -240,6 +241,10 @@ struct arguments
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
   bool conservative_filter ;
+
+  // assuming an isotropic image (same sampling resolution in the horizontal
+  // and vertical), calculate the vertical field of view from the horizontal
+  // field of view, under the given projection
 
   double get_vfov()
   {
@@ -279,9 +284,21 @@ struct arguments
         break ;
       }
     }
-    std::cout << "gleaned vfov = " << vfov << std::endl ;
+    if ( verbose )
+      std::cout << "gleaned vfov = " << vfov << std::endl ;
+
     return vfov ;
   }
+
+  // extract internally uses the notion of an image's 'extent' in 'model
+  // space'. The image is thought to be 'draped' to an 'archetypal 2D
+  // manifold' - the surface of a sphere or cylinder with unit radius
+  // ar a plane at unit distance forward - where the sample points are
+  // placed on the 2D manifold so that rays from the origin to the
+  // scene point which corresponds with the sample point intersect there.
+  // To put it differently: the sample point cloud is scaled and shifted
+  // to come to lie on the 'archetypal' 2D manifolds. This makes for
+  // efficient calculations.
 
   void get_extent()
   {
@@ -345,7 +362,10 @@ struct arguments
     }
   }
 
-  arguments ( int argc , const char ** argv )
+  // the 'arguments' object's 'init' takes the main program's argc
+  // and argv.
+
+  void init ( int argc , const char ** argv )
   {
     // we're using OIIO's argparse, since we're using OIIO anyway.
     // This is a convenient way to glean arguments on all supported
@@ -447,6 +467,8 @@ struct arguments
                                    | std::regex_constants::icase);
     }
   
+    // extract the arguments from the argparser, parse the projection
+
     input = ap["input"].as_string ( "" ) ;
     output = ap["output"].as_string ( "" ) ;
     itp = ap["itp"].get<int>(1);
@@ -470,16 +492,10 @@ struct arguments
     height = ap["height"].get<int> ( 0 ) ;
     hfov = ap["hfov"].get<float>(0.0);
     if ( hfov != 0.0 )
-    {
-      hfov *= M_PI / 180.0 ;
       x0 = x1 = y0 = y1 = 0 ;
-    }
     yaw = ap["yaw"].get<float>(0.0);
     pitch = ap["pitch"].get<float>(0.0);
     roll = ap["roll"].get<float>(0.0);
-    yaw *= M_PI / 180.0 ;
-    pitch *= M_PI / 180.0 ;
-    roll *= M_PI / 180.0 ;
     prj_str = ap["projection"].as_string ( "rectilinear" ) ;
     int prj = 0 ;
     for ( const auto & p : projection_name )
@@ -548,12 +564,24 @@ struct arguments
       }
       std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
       std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
+
+      std::cout << "yaw: " << yaw << " pitch: " << pitch
+                << " roll: " << roll << std::endl ;
     }
+
+    // convert angles to radians
+
+    hfov *= M_PI / 180.0 ;
     yaw *= M_PI / 180.0 ;
     pitch *= M_PI / 180.0 ;
     roll *= M_PI / 180.0 ;
   }
 } ;
+
+// to avoid having to pass the arguments around, we us a global
+// 'args' object.
+
+arguments args ;
 
 // environment.h has most of the 'workhorse' code for this demo.
 
@@ -565,9 +593,9 @@ struct arguments
 // direction - typically, you'd use the same value for both.
 // The deltas are set up so that, over all pick-ups, they produce
 // a uniform sampling.
-// additional parameters allow to apply gaussian weights and
-// apply a threshold to suppress very small weighting factors;
-// in a final step the weights are normalized.
+// additional parameters allow to apply gaussian weights and to
+// apply a threshold to suppress small weighting factors; in a
+// final step the weights are normalized.
 
 void make_spread ( std::vector < zimt::xel_t < float , 3 > > & trg ,
                    int w = 2 ,
@@ -756,8 +784,7 @@ struct twine_t
 // image using OIIO's 'environment' function
 
 template < std::size_t nchannels >
-void work ( const arguments & args ,
-            const std::unique_ptr<ImageInput> & inp ,
+void work ( const std::unique_ptr<ImageInput> & inp ,
             const std::size_t & w ,
             const std::size_t & h ,
             zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
@@ -841,8 +868,7 @@ void work ( const arguments & args ,
 // does use bilinear interplation directly from the source image.
 
 template < std::size_t nchannels >
-void work ( const arguments & args ,
-            const std::unique_ptr<ImageInput> & inp ,
+void work ( const std::unique_ptr<ImageInput> & inp ,
             const std::size_t & w ,
             const std::size_t & h ,
             zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
@@ -884,10 +910,9 @@ void work ( const arguments & args ,
 int main ( int argc , const char ** argv )
 {
   // process command line arguments - the result is held in a bunch
-  // of member variables in the 'args' object, to be passed around
-  // conveniently.
+  // of member variables in the global 'args' object
 
-  arguments args ( argc , argv ) ;
+  args.init ( argc , argv ) ;
 
   // orthonormal system of basis vectors the view
 
@@ -1006,16 +1031,16 @@ int main ( int argc , const char ** argv )
     switch ( args.nchannels )
     {
       case 1:
-        work < 1 > ( args , inp , w , h , get_ray ) ;
+        work < 1 > ( inp , w , h , get_ray ) ;
         break ;
       case 2:
-        work < 2 > ( args , inp , w , h , get_ray ) ;
+        work < 2 > ( inp , w , h , get_ray ) ;
         break ;
       case 3:
-        work < 3 > ( args , inp , w , h , get_ray ) ;
+        work < 3 > ( inp , w , h , get_ray ) ;
         break ;
       case 4:
-        work < 4 > ( args , inp , w , h , get_ray ) ;
+        work < 4 > ( inp , w , h , get_ray ) ;
         break ;
     }
   }
@@ -1063,16 +1088,16 @@ int main ( int argc , const char ** argv )
     switch ( args.nchannels )
     {
       case 1:
-        work < 1 > ( args , inp , w , h , get_ray ) ;
+        work < 1 > ( inp , w , h , get_ray ) ;
         break ;
       case 2:
-        work < 2 > ( args , inp , w , h , get_ray ) ;
+        work < 2 > ( inp , w , h , get_ray ) ;
         break ;
       case 3:
-        work < 3 > ( args , inp , w , h , get_ray ) ;
+        work < 3 > ( inp , w , h , get_ray ) ;
         break ;
       case 4:
-        work < 4 > ( args , inp , w , h , get_ray ) ;
+        work < 4 > ( inp , w , h , get_ray ) ;
         break ;
     }
   }

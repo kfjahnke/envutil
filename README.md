@@ -368,7 +368,7 @@ convolution), and the full flexibility isn't accessible in 'extract'
 with the parameterization as it stands now, but it's already quite
 useful with the few parameters I offer.
 
-The program uses zimt as it's 'strip-mining' and SIMD back-end, and
+The program uses [zimt](https://github.com/kfjahnke/zimt) as it's 'strip-mining' and SIMD back-end, and
 sets up the pixel pipelines using zimt's functional composition tools.
 This allows for terse programming, and the use of the functional
 paradigm allows for many features to be freely combined - a property
