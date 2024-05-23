@@ -482,7 +482,12 @@ software offers suitable options.
 ## --roll ANGLE      roll of the virtual camera (in degrees)
 
 These three angles are applied to the 'virtual camera' taking the extracted
-view. They default to zero. It's okay to pass none or just one or two.
+view. They default to zero. It's okay to pass none or just one or two. yaw
+is taken as moving the camera to the right, pitch is taken as upward movement,
+and roll as a clockwise rotation. Note that the orientation of the *virtual
+camera* is modified; when looking at the resulting images, objects seen on
+them seem to move the opposite way. Negative values hove the opposite effect.
+Panorama photographers: to extract nadir patches, pass --pitch -90
 
 ## --x0 EXTENT       low end of the horizontal range
 ## --x1 EXTENT       high end of the horizontal range

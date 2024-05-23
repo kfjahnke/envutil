@@ -241,6 +241,7 @@ struct arguments
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
   bool conservative_filter ;
+  std::unique_ptr<ImageInput> inp ;
 
   // assuming an isotropic image (same sampling resolution in the horizontal
   // and vertical), calculate the vertical field of view from the horizontal
@@ -373,7 +374,7 @@ struct arguments
 
     convert_native_arguments(argc, (const char**)argv);
     ArgParse ap;
-    ap.intro("stepper: extract image from an environment\n")
+    ap.intro("extract: extract image from an environment\n")
       .usage("extract [options] --input INPUT --output OUTPUT");
     ap.arg("-v", &verbose)
       .help("Verbose output");
@@ -513,17 +514,11 @@ struct arguments
     assert ( height > 0 ) ;
     if ( projection == CUBEMAP )
       assert ( height = 6 * width ) ;
-    if ( hfov != 0.0 )
-    {
-      get_extent() ;
-    }
-    assert ( x0 < x1 ) ;
-    assert ( y0 < y1 ) ;
 
     // some member variables in the args object are gleaned from
     // the input image:
 
-    auto inp = ImageInput::open ( input ) ;
+    inp = ImageInput::open ( input ) ;
     assert ( inp ) ;
 
     const ImageSpec &spec = inp->spec() ;
@@ -534,8 +529,6 @@ struct arguments
 
     assert (    env_width == env_height * 2
              || env_height == env_width * 6 ) ;
-
-    inp->close() ;
 
     if ( verbose )
     {
@@ -553,19 +546,10 @@ struct arguments
                 << " height: " << height << std::endl ;
 
       if ( hfov > 0.0 )
-      {
-        std::cout << "hfov: " << hfov << std::endl ;
-        std::cout << "extent gleaned from hfov:" << std::endl ;
-      }
-      else
-      {
-        std::cout << "extent gleaned from command line arguments:"
-                  << std::endl ;
-      }
-      std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
-      std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
+        std::cout << "output hfov: " << hfov << std::endl ;
 
-      std::cout << "yaw: " << yaw << " pitch: " << pitch
+      std::cout << "virtual camera yaw: " << yaw
+                << " pitch: " << pitch
                 << " roll: " << roll << std::endl ;
     }
 
@@ -575,6 +559,31 @@ struct arguments
     yaw *= M_PI / 180.0 ;
     pitch *= M_PI / 180.0 ;
     roll *= M_PI / 180.0 ;
+
+    // calculate extent - a non-zero hfov overrides x0, x1, y0, and y1
+
+    if ( hfov != 0.0 )
+    {
+      get_extent() ;
+    }
+    assert ( x0 < x1 ) ;
+    assert ( y0 < y1 ) ;
+
+    if ( verbose )
+    {
+      if ( hfov == 0.0 )
+      {
+        std::cout << "extent calculated from hfov:"
+                  << std::endl ;
+      }
+      else
+      {
+        std::cout << "extent gleaned from command line arguments:"
+                  << std::endl ;
+      }
+      std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
+      std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
+    }
   }
 } ;
 
@@ -583,249 +592,64 @@ struct arguments
 
 arguments args ;
 
-// environment.h has most of the 'workhorse' code for this demo.
+// environment.h has most of the 'workhorse' code for this program.
+// it provides functinal constructs to yield pixels for coordinates.
+// These functors are used with zimt::process to populate the output.
 
 #include "environment.h"
 
-// this function sets up a simple box filter to use with the
-// twine_t functor above. The given w and h values determine
-// the number of pick-up points in the horizontal and vertical
-// direction - typically, you'd use the same value for both.
-// The deltas are set up so that, over all pick-ups, they produce
-// a uniform sampling.
-// additional parameters allow to apply gaussian weights and to
-// apply a threshold to suppress small weighting factors; in a
-// final step the weights are normalized.
+// because we specialize for different channel counts with a template
+// argument (for maximum efficiency), the 'workhorse' code is in a
+// function template 'work'. There are several overloads:
 
-void make_spread ( std::vector < zimt::xel_t < float , 3 > > & trg ,
-                   int w = 2 ,
-                   int h = 0 ,
-                   float d = 1.0f ,
-                   float sigma = 0.0f ,
-                   float threshold = 0.0f )
-{
-  if ( w <= 2 )
-    w = 2 ;
-  if ( h <= 0 )
-    h = w ;
-  float wgt = 1.0 / ( w * h ) ;
-  double x0 = - ( w - 1.0 ) / ( 2.0 * w ) ;
-  double dx = 1.0 / w ;
-  double y0 = - ( h - 1.0 ) / ( 2.0 * h ) ;
-  double dy = 1.0 / h ;
-  trg.clear() ;
-  sigma *= - x0 ;
-  double sum = 0.0 ;
-
-  for ( int y = 0 ; y < h ; y++ )
-  {
-    for ( int x = 0 ; x < w ; x++ )
-    {
-      float wf = 1.0 ;
-      if ( sigma > 0.0 )
-      {
-        double wx = ( x0 + x * dx ) / sigma ;
-        double wy = ( y0 + y * dy ) / sigma ;
-        wf = exp ( - sqrt ( wx * wx + wy * wy ) ) ;
-      }
-      zimt::xel_t < float , 3 >
-        v { float ( d * ( x0 + x * dx ) ) ,
-            float ( d * ( y0 + y * dy ) ) ,
-            wf * wgt } ;
-      trg.push_back ( v ) ;
-      sum += wf * wgt ;
-    }
-  }
-
-  double th_sum = 0.0 ;
-  bool renormalize = false ;
-
-  if ( sigma != 0.0 )
-  {
-    for ( auto & v : trg )
-    {
-      v[2] /= sum ;
-      if ( v[2] >= threshold )
-      {        
-        th_sum += v[2] ;
-      }
-      else
-      {
-        renormalize = true ;
-        v[2] = 0.0f ;
-      }
-    }
-    if ( renormalize )
-    {
-      for ( auto & v : trg )
-      {
-        v[2] /= th_sum ;
-      }
-    }
-  }
-
-  if ( verbose )
-  {
-    if ( sigma != 0.0 )
-    {
-      std::cout << "using this twining filter kernel:" << std::endl ;
-      for ( int y = 0 ; y < h ; y++ )
-      {
-        for ( int x = 0 ; x < w ; x++ )
-        {
-          std::cout << '\t' << trg [ y * h + x ] [ 2 ] ;
-        }
-        std::cout << std::endl ;
-      }
-    }
-    else
-    {
-      std::cout << "using box filter for twining" << std::endl ;
-    }
-  }
-
-  if ( renormalize )
-  {
-    auto help = trg ;
-    trg.clear() ;
-    for ( auto v : help )
-    {
-      if ( v[2] > 0.0f )
-        trg.push_back ( v ) ;
-    }
-    if ( verbose )
-    {
-      std::cout << "twining filter taps after after thresholding: "
-                << trg.size() << std::endl ;
-    }
-  }
-}
-
-// class twine_t takes data from a deriv_stepper which yields
-// 3D ray coordinates of the pick-up point and two more points
-// corresponding to the right and lower neighbours in the target
-// image - so, one 'canonical' step away. It wraps an 'act' type
-// functor which can produce pixels (with nchannel channels) from
-// 3D ray coordinates. The twine_t object receives the three ray
-// coordinates (the 'ninepack'), forms the two differences, and adds
-// weighted linear combinations of the differences to the first ray
-// (the one representing the pick-up location). The modified rays
-// are fed to the wrapped act-type functor in turn, yielding pixel
-// values for (slightly) varying pick-up locations in the vicinity
-// of the 'central' pick-up location. These pixel values are
-// combined in a weighted sum which constitutes the final output.
-
-template < std::size_t nchannels , std::size_t L >
-struct twine_t
-: public zimt::unary_functor < zimt::xel_t < float , 9 > ,
-                               zimt::xel_t < float , nchannels > ,
-                               L
-                             >
-{
-  typedef zimt::unary_functor < zimt::xel_t < float , 9 > ,
-                                zimt::xel_t < float , nchannels > ,
-                                L
-                              > base_t ;
-
-  typedef zimt::grok_type < zimt::xel_t < float , 3 > ,
-                            zimt::xel_t < float , nchannels > ,
-                            L
-                          > act_t ;
-
-  act_t inner ;
-  const std::vector < zimt::xel_t < float , 3 > > spread ;
-
-  twine_t ( const act_t & _inner ,
-            const std::vector < zimt::xel_t < float , 3 > > & _spread )
-  : inner ( _inner ) ,
-    spread ( _spread )
-  { }
-
-  // eval function. incoming, we have 'ninepacks' with the ray data.
-  // we form the two differences and evaluate 'inner' in a loop,
-  // building up the weighted sum.
-
-  template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out )
-  {
-    out = 0 ;
-    out_type px_k ;
-
-    typedef typename act_t::in_v crd_v ;
-
-    // ray coordinate of the 'central', unmodified pick-up location
-
-    crd_v pickup { in[0] , in[1] , in[2] } ;
-
-    // derivatives in x and y directions, formed by differencing
-
-    crd_v dx { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
-    crd_v dy { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
-
-    for ( auto const & contrib : spread )
-    {
-      // form the slightly offsetted pick-up ray coordinate
-
-      auto in_k = pickup + contrib[0] * dx + contrib[1] * dy ;
-
-      // evaluate 'inner' to yield the partial result
-
-      inner.eval ( in_k , px_k ) ;
-
-      // weight it and add it to the final result
-
-      out += contrib[2] * px_k ;
-    }
-  }
-} ;
-                               
 // 'work' overload to produce source data from a lat/lon environment
-// image using OIIO's 'environment' function
+// image using OIIO's 'environment' oe 'texture' function, or bilinear
+// interpolation with 'twining'. All these lookup methods use 'ninepacks'
+// which are used to glean the derivatives of the coordinate transformation.
 
 template < std::size_t nchannels >
-void work ( const std::unique_ptr<ImageInput> & inp ,
-            const std::size_t & w ,
-            const std::size_t & h ,
-            zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
+void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
 {
   // the 'act' functor is fed 'ninepacks' - sets of three 3D ray
   // coordinates, holding information to allow the calculations
   // of the coordinate transformation's derivatives. This is
   // done inside the 'env' object and depends on it's specific
   // type - the 'act' functor yields pixels, so here we don't
-  // have to deal with the internal workings.
+  // have to deal with it's internal workings.
 
   typedef zimt::xel_t < float , 9 > crd9_t ;
   typedef zimt::xel_t < float , nchannels > px_t ;
 
-  std::vector < zimt::xel_t < float , 3 > > spread ;
-
-  if ( args.itp == -2 )
-  {
-    make_spread ( spread , args.twine , args.twine ,
-                  args.twine_px , args.twine_sigma ,
-                  args.twine_threshold ) ;
-  }
+  // the 'act' functor's 'inner' type is variable, so we use a
+  // uniform 'outer' type by 'grokking' it (type erasure)
 
   zimt::grok_type < crd9_t , px_t , 16 > act ;
 
   if ( args.itp == -2 )
   {
-    environment < float , float , nchannels , 16 >
-      env ( inp , w , h , nchannels , args ) ;
+    // create an 'environment' object
+
+    environment < float , float , nchannels , 16 > env ;
+
+    // set up the twining filter
+
+    std::vector < zimt::xel_t < float , 3 > > spread ;
+    make_spread ( spread , args.twine , args.twine ,
+                  args.twine_px , args.twine_sigma ,
+                  args.twine_threshold ) ;
+
+    // wrap the 'environment' object in a twine_t object.
 
     act = twine_t < nchannels , 16 > ( env , spread ) ;
   }
   else
   {
-    if ( w == h * 2 )
+    if ( args.env_width == args.env_height * 2 )
     {
       // set up an environment object picking up pixel values from
       // a lat/lon image using OIIO's 'environment' function
 
-      act = latlon < float , float , nchannels , 16 >
-              ( inp , w , h , nchannels , args ) ;
+      act = latlon < float , float , nchannels , 16 >() ;
     }
     else
     {
@@ -833,8 +657,7 @@ void work ( const std::unique_ptr<ImageInput> & inp ,
       // a texture representing the cubemap image, using OIIO's
       // 'texture' function
 
-      act = cubemap < float , float , nchannels , 16 >
-              ( inp , w , h , nchannels , args ) ;
+      act = cubemap < float , float , nchannels , 16 >() ;
     }
   }
 
@@ -842,13 +665,13 @@ void work ( const std::unique_ptr<ImageInput> & inp ,
 
   zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
   
-  // set up zimt::storers to populate the target array with
+  // set up a zimt::storer to populate the target array with
   // zimt::process
   
   zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
   
   // use the get, act and put components with zimt::process
-  // to produce the target images and store them to disk
+  // to produce the target images
   
   if ( args.verbose )
     std::cout << "producing output" << std::endl ;
@@ -857,29 +680,31 @@ void work ( const std::unique_ptr<ImageInput> & inp ,
   
   if ( args.verbose )
     std::cout << "saving output image: " << args.output << std::endl ;
-  
+
+  // store the result to disk
+
   save_array < nchannels > ( args.output , trg ) ;
   
   if ( args.verbose )
     std::cout << "done." << std::endl ;
 }
 
-// overload using an 'environment' object as data source. This
-// does use bilinear interplation directly from the source image.
+// overload using an 'environment' object directly as data source.
+// This uses bilinear interplation directly from the source image.
+// Note how the 'get_ray' object takes only three input channels,
+// in contrast to the previous overload where it takes nine.
 
 template < std::size_t nchannels >
-void work ( const std::unique_ptr<ImageInput> & inp ,
-            const std::size_t & w ,
-            const std::size_t & h ,
-            zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
+void work ( zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
 {
   typedef zimt::xel_t < float , 3 > crd3_t ;
   typedef zimt::xel_t < float , nchannels > px_t ;
   
   zimt::grok_type < crd3_t , px_t , 16 > act ;
 
-  act = environment < float , float , nchannels , 16 >
-            ( inp , w , h , nchannels , args ) ;
+  // create the 'environment' object
+
+  environment < float , float , nchannels , 16 > env ;
 
   // set up an array to receive the output pixels
 
@@ -896,7 +721,7 @@ void work ( const std::unique_ptr<ImageInput> & inp ,
   if ( args.verbose )
     std::cout << "producing output" << std::endl ;
 
-  zimt::process ( trg.shape , get_ray , act , cstor ) ;
+  zimt::process ( trg.shape , get_ray , env , cstor ) ;
   
   if ( args.verbose )
     std::cout << "saving output image: " << args.output << std::endl ;
@@ -913,6 +738,9 @@ int main ( int argc , const char ** argv )
   // of member variables in the global 'args' object
 
   args.init ( argc , argv ) ;
+
+  // we can do some processing here which is independent from the
+  // number of channels in the pixels:
 
   // orthonormal system of basis vectors the view
 
@@ -937,28 +765,16 @@ int main ( int argc , const char ** argv )
 
   // set up the steppers. note the extents of the 2D manifold
   // given in model space uits. These objects will deliver 3D
-  // 'ray' coordinates as input to the 'act' functor. Not how
+  // 'ray' coordinates as input to the 'act' functor. Note how
   // each projection has it's distinct type of stepper, but
   // they are all assigned to a common type, a 'grok_get_t'.
   // This uses type erasure and captures the functionality
   // in std::functions, and the resulting object is only
   // characterized by it's input and output type and lane
-  // count.
-
-  std::unique_ptr<ImageInput> inp = ImageInput::open ( args.input ) ;
-
-  std::size_t w ;
-  std::size_t h ;
-  std::size_t nchannels ;
-
-  assert ( inp ) ;
-
-  const ImageSpec &spec = inp->spec() ;
-  w = spec.width ;
-  h = spec.height ;
-  nchannels = spec.nchannels ;
-
-  assert ( w == 2 * h || h == 6 * w ) ;
+  // count. The uniform type alows us to pass these objects
+  // around with a common type - a convenient way of harnessing
+  // groups of types with different implementation but equal
+  // interface.
 
   if ( args.itp == -1 || args.itp == -2 )
   {
@@ -1031,16 +847,16 @@ int main ( int argc , const char ** argv )
     switch ( args.nchannels )
     {
       case 1:
-        work < 1 > ( inp , w , h , get_ray ) ;
+        work < 1 > ( get_ray ) ;
         break ;
       case 2:
-        work < 2 > ( inp , w , h , get_ray ) ;
+        work < 2 > ( get_ray ) ;
         break ;
       case 3:
-        work < 3 > ( inp , w , h , get_ray ) ;
+        work < 3 > ( get_ray ) ;
         break ;
       case 4:
-        work < 4 > ( inp , w , h , get_ray ) ;
+        work < 4 > ( get_ray ) ;
         break ;
     }
   }
@@ -1088,16 +904,16 @@ int main ( int argc , const char ** argv )
     switch ( args.nchannels )
     {
       case 1:
-        work < 1 > ( inp , w , h , get_ray ) ;
+        work < 1 > ( get_ray ) ;
         break ;
       case 2:
-        work < 2 > ( inp , w , h , get_ray ) ;
+        work < 2 > ( get_ray ) ;
         break ;
       case 3:
-        work < 3 > ( inp , w , h , get_ray ) ;
+        work < 3 > ( get_ray ) ;
         break ;
       case 4:
-        work < 4 > ( inp , w , h , get_ray ) ;
+        work < 4 > ( get_ray ) ;
         break ;
     }
   }

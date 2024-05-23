@@ -258,7 +258,7 @@ struct eval_env
 
   // pull in the c'tor arguments
 
-  eval_env ( const arguments & args )
+  eval_env()
   : ts ( OIIO::TextureSystem::create() )
   {
     ts->attribute ( "options" , args.tsoptions ) ;
@@ -1385,12 +1385,12 @@ public:
 
   zimt::grok_type < ray_t , px_t , L > env ;
 
-  latlon ( const std::unique_ptr<ImageInput> & inp ,
-           const std::size_t & w ,
-           const std::size_t & h ,
-           const std::size_t & nchannels ,
-           const arguments & args )
+  latlon()
   {
+    auto & inp ( args.inp ) ;
+    auto & w ( args.env_width ) ;
+    auto & h ( args.env_height ) ;
+
     shape_type shape { w , h } ;
 
     assert ( w == 2 * h ) ;
@@ -1399,57 +1399,53 @@ public:
       std::cout << "input has 2:1 aspect ratio, assuming latlon"
                 << std::endl ;
 
-    if ( nchannels >= 4 )
+    if ( C >= 4 )
     {
       typedef zimt::xel_t < float , 4 > in_px_t ;
       pa4 = std::make_shared < zimt::array_t < 2 , in_px_t > >
         ( shape ) ;
 
-      bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+      bool success = inp->read_image ( 0 , 0 , 0 , C ,
                                       TypeDesc::FLOAT , pa4->data() ) ;
       assert ( success ) ;
 
-      env = zimt::grok_type < ray_t , px_t , L >
-        ( eval_env < C > ( args ) ) ;
+      env = zimt::grok_type < ray_t , px_t , L > ( eval_env<C>() ) ;
     }
-    else if ( nchannels == 3 )
+    else if ( C == 3 )
     {
       typedef zimt::xel_t < float , 3 > in_px_t ;
       pa3 = std::make_shared < zimt::array_t < 2 , in_px_t > >
         ( shape ) ;
 
-      bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+      bool success = inp->read_image ( 0 , 0 , 0 , C ,
                                       TypeDesc::FLOAT , pa3->data() ) ;
       assert ( success ) ;
 
-      env = zimt::grok_type < ray_t , px_t , L >
-        ( eval_env < C > ( args ) ) ;
+      env = zimt::grok_type < ray_t , px_t , L > ( eval_env<C>() ) ;
     }
-    else if ( nchannels == 2 )
+    else if ( C == 2 )
     {
       typedef zimt::xel_t < float , 2 > in_px_t ;
       pa2 = std::make_shared < zimt::array_t < 2 , in_px_t > >
         ( shape ) ;
     
-      bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+      bool success = inp->read_image ( 0 , 0 , 0 , C ,
                                       TypeDesc::FLOAT , pa2->data() ) ;
       assert ( success ) ;
     
-      env = zimt::grok_type < ray_t , px_t , L >
-        ( eval_env < C > ( args ) ) ;
+      env = zimt::grok_type < ray_t , px_t , L > ( eval_env<C>() ) ;
     }
-    else if ( nchannels == 1 )
+    else if ( C == 1 )
     {
       typedef zimt::xel_t < float , 1 > in_px_t ;
       pa1 = std::make_shared < zimt::array_t < 2 , in_px_t > >
         ( shape ) ;
     
-      bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+      bool success = inp->read_image ( 0 , 0 , 0 , C ,
                                       TypeDesc::FLOAT , pa2->data() ) ;
       assert ( success ) ;
     
-      env = zimt::grok_type < ray_t , px_t , L >
-        ( eval_env < C > ( args ) ) ;
+      env = zimt::grok_type < ray_t , px_t , L > ( eval_env<C>() ) ;
     }
   }
 
@@ -1480,12 +1476,12 @@ public:
 
   zimt::grok_type < ray_t , px_t , L > env ;
 
-  cubemap ( const std::unique_ptr<ImageInput> & inp ,
-            const std::size_t & w ,
-            const std::size_t & h ,
-            const std::size_t & nchannels ,
-            const arguments & args )
+  cubemap()
   {
+    auto & inp ( args.inp ) ;
+    auto & w ( args.env_width ) ;
+    auto & h ( args.env_height ) ;
+
     shape_type shape { w , h } ;
 
     assert ( h == 6 * w ) ;
@@ -1523,7 +1519,7 @@ public:
       std::cout << "input has 1:6 aspect ratio, assuming cubemap"
                 << std::endl ;
     }
-    if ( nchannels >= 4 )
+    if ( C >= 4 )
     {
       sixfold_t<4> sf ( w ) ;
       sf.load ( inp ) ;
@@ -1536,7 +1532,7 @@ public:
       env =   cbm_to_px_t2 < 4 > ( sf , batch_options )
             + repix < U , 4 , C , L > () ;
     }
-    else if ( nchannels == 3 )
+    else if ( C == 3 )
     {
       sixfold_t<3> sf ( w ) ;
       sf.load ( inp ) ;
@@ -1549,7 +1545,7 @@ public:
       env =   cbm_to_px_t2 < 3 > ( sf , batch_options )
             + repix < U , 3 , C , L > () ;
     }
-    else if ( nchannels == 2 )
+    else if ( C == 2 )
     {
       sixfold_t<2> sf ( w ) ;
       sf.load ( inp ) ;
@@ -1610,13 +1606,12 @@ public:
 
   zimt::grok_type < ray_t , px_t , L > env ;
 
-  environment ( const std::unique_ptr<ImageInput> & inp ,
-                const std::size_t & w ,
-                const std::size_t & h ,
-                const std::size_t & nchannels ,
-                const arguments & args )
+  environment()
   {
-    assert ( inp ) ;
+    auto & inp ( args.inp ) ;
+    auto & w ( args.env_width ) ;
+    auto & h ( args.env_height ) ;
+
     shape_type shape { w , h } ;
 
     if ( w == 2 * h )
@@ -1625,13 +1620,13 @@ public:
         std::cout << "input has 2:1 aspect ratio, assuming latlon"
                   << std::endl ;
 
-      if ( nchannels >= 4 )
+      if ( C >= 4 )
       {
         typedef zimt::xel_t < float , 4 > in_px_t ;
         pa4 = std::make_shared < zimt::array_t < 2 , in_px_t > >
           ( shape ) ;
 
-        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+        bool success = inp->read_image ( 0 , 0 , 0 , C ,
                                          TypeDesc::FLOAT , pa4->data() ) ;
         assert ( success ) ;
 
@@ -1639,13 +1634,13 @@ public:
               + eval_latlon < 4 > ( *pa4 )
               + repix < U , 4 , C , L > () ;
       }
-      else if ( nchannels == 3 )
+      else if ( C == 3 )
       {
         typedef zimt::xel_t < float , 3 > in_px_t ;
         pa3 = std::make_shared < zimt::array_t < 2 , in_px_t > >
           ( shape ) ;
 
-        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+        bool success = inp->read_image ( 0 , 0 , 0 , C ,
                                          TypeDesc::FLOAT , pa3->data() ) ;
         assert ( success ) ;
 
@@ -1653,13 +1648,13 @@ public:
               + eval_latlon < 3 > ( *pa3 )
               + repix < U , 3 , C , L > () ;
       }
-      else if ( nchannels == 2 )
+      else if ( C == 2 )
       {
         typedef zimt::xel_t < float , 2 > in_px_t ;
         pa2 = std::make_shared < zimt::array_t < 2 , in_px_t > >
           ( shape ) ;
      
-        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+        bool success = inp->read_image ( 0 , 0 , 0 , C ,
                                          TypeDesc::FLOAT , pa2->data() ) ;
         assert ( success ) ;
       
@@ -1673,7 +1668,7 @@ public:
         pa1 = std::make_shared < zimt::array_t < 2 , in_px_t > >
           ( shape ) ;
      
-        bool success = inp->read_image ( 0 , 0 , 0 , nchannels ,
+        bool success = inp->read_image ( 0 , 0 , 0 , C ,
                                          TypeDesc::FLOAT , pa1->data() ) ;
         assert ( success ) ;
       
@@ -1689,7 +1684,7 @@ public:
         std::cout << "input has 1:6 aspect ratio, assuming cubemap"
                   << std::endl ;
       }
-      if ( nchannels >= 4 )
+      if ( C >= 4 )
       {
         sixfold_t<4> sf ( w ) ;
         sf.load ( inp ) ;
@@ -1701,7 +1696,7 @@ public:
         env =   cbm_to_px_t < 4 > ( sf )
               + repix < U , 4 , C , L > () ;
       }
-      else if ( nchannels == 3 )
+      else if ( C == 3 )
       {
         sixfold_t<3> sf ( w ) ;
         sf.load ( inp ) ;
@@ -1713,7 +1708,7 @@ public:
         env =   cbm_to_px_t < 3 > ( sf )
               + repix < U , 3 , C , L > () ;
       }
-      else if ( nchannels == 2 )
+      else if ( C == 2 )
       {
         sixfold_t<2> sf ( w ) ;
         sf.load ( inp ) ;
@@ -1747,3 +1742,201 @@ public:
   }
 
 } ;
+
+// code for 'twining'. This fits in here because it's applied
+// to the lookup from the environment, but it may move to a
+// separate header.
+
+// this function sets up a simple box filter to use with the
+// twine_t functor above. The given w and h values determine
+// the number of pick-up points in the horizontal and vertical
+// direction - typically, you'd use the same value for both.
+// The deltas are set up so that, over all pick-ups, they produce
+// a uniform sampling.
+// additional parameters allow to apply gaussian weights and to
+// apply a threshold to suppress small weighting factors; in a
+// final step the weights are normalized.
+
+void make_spread ( std::vector < zimt::xel_t < float , 3 > > & trg ,
+                   int w = 2 ,
+                   int h = 0 ,
+                   float d = 1.0f ,
+                   float sigma = 0.0f ,
+                   float threshold = 0.0f )
+{
+  if ( w <= 2 )
+    w = 2 ;
+  if ( h <= 0 )
+    h = w ;
+  float wgt = 1.0 / ( w * h ) ;
+  double x0 = - ( w - 1.0 ) / ( 2.0 * w ) ;
+  double dx = 1.0 / w ;
+  double y0 = - ( h - 1.0 ) / ( 2.0 * h ) ;
+  double dy = 1.0 / h ;
+  trg.clear() ;
+  sigma *= - x0 ;
+  double sum = 0.0 ;
+
+  for ( int y = 0 ; y < h ; y++ )
+  {
+    for ( int x = 0 ; x < w ; x++ )
+    {
+      float wf = 1.0 ;
+      if ( sigma > 0.0 )
+      {
+        double wx = ( x0 + x * dx ) / sigma ;
+        double wy = ( y0 + y * dy ) / sigma ;
+        wf = exp ( - sqrt ( wx * wx + wy * wy ) ) ;
+      }
+      zimt::xel_t < float , 3 >
+        v { float ( d * ( x0 + x * dx ) ) ,
+            float ( d * ( y0 + y * dy ) ) ,
+            wf * wgt } ;
+      trg.push_back ( v ) ;
+      sum += wf * wgt ;
+    }
+  }
+
+  double th_sum = 0.0 ;
+  bool renormalize = false ;
+
+  if ( sigma != 0.0 )
+  {
+    for ( auto & v : trg )
+    {
+      v[2] /= sum ;
+      if ( v[2] >= threshold )
+      {        
+        th_sum += v[2] ;
+      }
+      else
+      {
+        renormalize = true ;
+        v[2] = 0.0f ;
+      }
+    }
+    if ( renormalize )
+    {
+      for ( auto & v : trg )
+      {
+        v[2] /= th_sum ;
+      }
+    }
+  }
+
+  if ( args.verbose )
+  {
+    if ( sigma != 0.0 )
+    {
+      std::cout << "using this twining filter kernel:" << std::endl ;
+      for ( int y = 0 ; y < h ; y++ )
+      {
+        for ( int x = 0 ; x < w ; x++ )
+        {
+          std::cout << '\t' << trg [ y * h + x ] [ 2 ] ;
+        }
+        std::cout << std::endl ;
+      }
+    }
+    else
+    {
+      std::cout << "using box filter for twining" << std::endl ;
+    }
+  }
+
+  if ( renormalize )
+  {
+    auto help = trg ;
+    trg.clear() ;
+    for ( auto v : help )
+    {
+      if ( v[2] > 0.0f )
+        trg.push_back ( v ) ;
+    }
+    if ( args.verbose )
+    {
+      std::cout << "twining filter taps after after thresholding: "
+                << trg.size() << std::endl ;
+    }
+  }
+}
+
+// class twine_t takes data from a deriv_stepper which yields
+// 3D ray coordinates of the pick-up point and two more points
+// corresponding to the right and lower neighbours in the target
+// image - so, one 'canonical' step away. It wraps an 'act' type
+// functor which can produce pixels (with nchannel channels) from
+// 3D ray coordinates. The twine_t object receives the three ray
+// coordinates (the 'ninepack'), forms the two differences, and adds
+// weighted linear combinations of the differences to the first ray
+// (the one representing the pick-up location). The modified rays
+// are fed to the wrapped act-type functor in turn, yielding pixel
+// values for (slightly) varying pick-up locations in the vicinity
+// of the 'central' pick-up location. These pixel values are
+// combined in a weighted sum which constitutes the final output.
+
+template < std::size_t nchannels , std::size_t L >
+struct twine_t
+: public zimt::unary_functor < zimt::xel_t < float , 9 > ,
+                               zimt::xel_t < float , nchannels > ,
+                               L
+                             >
+{
+  typedef zimt::unary_functor < zimt::xel_t < float , 9 > ,
+                                zimt::xel_t < float , nchannels > ,
+                                L
+                              > base_t ;
+
+  typedef zimt::grok_type < zimt::xel_t < float , 3 > ,
+                            zimt::xel_t < float , nchannels > ,
+                            L
+                          > act_t ;
+
+  act_t inner ;
+  const std::vector < zimt::xel_t < float , 3 > > spread ;
+
+  twine_t ( const act_t & _inner ,
+            const std::vector < zimt::xel_t < float , 3 > > & _spread )
+  : inner ( _inner ) ,
+    spread ( _spread )
+  { }
+
+  // eval function. incoming, we have 'ninepacks' with the ray data.
+  // we form the two differences and evaluate 'inner' in a loop,
+  // building up the weighted sum.
+
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out )
+  {
+    out = 0 ;
+    out_type px_k ;
+
+    typedef typename act_t::in_v crd_v ;
+
+    // ray coordinate of the 'central', unmodified pick-up location
+
+    crd_v pickup { in[0] , in[1] , in[2] } ;
+
+    // derivatives in x and y directions, formed by differencing
+
+    crd_v dx { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
+    crd_v dy { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
+
+    for ( auto const & contrib : spread )
+    {
+      // form the slightly offsetted pick-up ray coordinate
+
+      auto in_k = pickup + contrib[0] * dx + contrib[1] * dy ;
+
+      // evaluate 'inner' to yield the partial result
+
+      inner.eval ( in_k , px_k ) ;
+
+      // weight it and add it to the final result
+
+      out += contrib[2] * px_k ;
+    }
+  }
+} ;
+                               
