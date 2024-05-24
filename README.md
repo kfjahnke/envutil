@@ -345,7 +345,7 @@ envutil in it's favour. Another feature which extract doesn't currently
 offer is processing of six separate single cube face images.
 
 You can choose several different interpolation methods with the --itp
-cammand line argument. The default is --itp 1, which uses bilinear
+command line argument. The default is --itp 1, which uses bilinear
 interpolation. This is fast and often good enough, especially if there
 are no great scale changes involved - so, if the output's resolution is
 similar to the input's. --itp -1 employs OpenImageIO (OIIO for short)
@@ -355,18 +355,18 @@ All of OIIO's interpolation, mip-mapping and wrapping modes can be
 selected by using the relevant additional parameters. Finally, --itp -2
 uses 'twining' - inlined oversampling with subsequent weighted pixel
 binning. The default with this method is to use a simple 2X2 box filter
-on a signal which is oversampled by a factor of four. Additional
-parameters can change the amount of oversampling and add gaussian
-weights to the filter parameters. Twining is quite fast (if the number
-of filter taps isn't very large); when down-scaling, the parameter
-'twine' should be at least the same as the scaling factor to avoid
-aliasing. When upscaling, larger twining values will slighly soften
-the output and suppress the star-shaped artifacts typical for bilinear
-interpolation. Twining is new and this is a first approach. The method
-is intrinsically very flexible (it's based on a generalization of
-convolution), and the full flexibility isn't accessible in 'extract'
-with the parameterization as it stands now, but it's already quite
-useful with the few parameters I offer.
+on a signal which is interpolated with bilinear interpolation, and oversampled by a factor of four. Additional parameters can change the
+amount of oversampling and add gaussian weights to the filter
+parameters. Twining is quite fast (if the number of filter taps isn't
+very large); when down-scaling, the parameter 'twine' should be at
+least the same as the scaling factor to avoid aliasing. When upscaling,
+larger twining values will slighly soften the output and suppress the
+star-shaped artifacts typical for bilinear interpolation. Twining is
+new and this is a first approach. The method is intrinsically very
+flexible (it's based on a generalization of convolution), and the full
+flexibility isn't accessible in 'extract' with the parameterization
+as it stands now, but it's already quite useful with the few parameters
+I offer.
 
 The program uses [zimt](https://github.com/kfjahnke/zimt) as it's 'strip-mining' and SIMD back-end, and
 sets up the pixel pipelines using zimt's functional composition tools.
@@ -409,7 +409,7 @@ and passing --help will produce this command line argument synopsis:
     --y0 EXTENT                        low end of the vertical range
     --y1 EXTENT                        high end of the vertical range
     --twine TWINE                      use twine*twine oversampling - use with itp -2
-    --twine_px TWINE_WIDTH             widen the pick-up area of the twining filter
+    --twine_width TWINE_WIDTH             widen the pick-up area of the twining filter
     --twine_sigma TWINE_SIGMA          use a truncated gaussian for the twining filter (default: don't)
     --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
     --tsoptions KVLIST                 OIIO TextureSystem Options: coma-separated key=value pairs
@@ -572,16 +572,18 @@ A second parameter affecting 'twining'. If the source image has smaller
 resolution than the target image, the output reflects the interpolator's
 shortcomings, so with e.g. bilinear interpolation and large scale change
 (magnification) the output may show star-shaped and staircase artifacts.
-To counteract this problem, try and pass a twine_width up to roughly half
-the magnitude of the scale change. Input with low resolution is often
+To counteract this problem, try and pass a twine_width up to the
+magnitude of the scale change. Input with low resolution is often
 insufficiently band-limited which will result in artifacts in the output or
 become very blurred when you try to counteract the artifacts with excessive
 blurring. There's little to be gained from scaling up anyway - the lost
-detail can't be regained.
+detail can't be regained. If you don't get satisfactory results with
+twining and adequate twine_width, you may be better off with one of the
+better OIIO interpolators, e.g. bicubic.
 
 ## --twine_sigma TWINE_SIGMA  use a truncated gaussian for the twining filter (default: don't)
 
-If you don't pass --twine_sigma, emvutil will use a simple box filter to combine the result of supersampling into single output pixels values. If you pass twine_sigma, the kernel will be derived from a gaussian with a sigma equivalent to twine_sigma times the half kernel width. This gives more weight to supersamples near the center of the pick-up.
+If you don't pass --twine_sigma, extract will use a simple box filter to combine the result of supersampling into single output pixels values. If you pass twine_sigma, the kernel will be derived from a gaussian with a sigma equivalent to twine_sigma times the half kernel width. This gives more weight to supersamples near the center of the pick-up.
 
 ## --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
 

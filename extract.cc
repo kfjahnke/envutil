@@ -236,7 +236,7 @@ struct arguments
   std::regex field_re ;
   std::size_t env_width , env_height ;
   std::size_t nchannels ;
-  int itp , twine , twine_px ;
+  int itp , twine , twine_width ;
   double twine_sigma , twine_threshold ;
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
@@ -423,7 +423,7 @@ struct arguments
     ap.arg("--twine TWINE")
       .help("use twine*twine oversampling - use with itp -2")
       .metavar("TWINE");
-    ap.arg("--twine_px TWINE_WIDTH")
+    ap.arg("--twine_width TWINE_WIDTH")
       .help("widen the pick-up area of the twining filter")
       .metavar("TWINE_WIDTH");
     ap.arg("--twine_sigma TWINE_SIGMA")
@@ -474,7 +474,7 @@ struct arguments
     output = ap["output"].as_string ( "" ) ;
     itp = ap["itp"].get<int>(1);
     twine = ap["twine"].get<int>(1);
-    twine_px = ap["twine_px"].get<float>(1.0);
+    twine_width = ap["twine_width"].get<float>(1.0);
     twine_sigma = ap["twine_sigma"].get<float>(0.0);
     twine_threshold = ap["twine_threshold"].get<float>(0.0);
     swrap = ap["swrap"].as_string ( "WrapDefault" ) ;
@@ -635,7 +635,7 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
 
     std::vector < zimt::xel_t < float , 3 > > spread ;
     make_spread ( spread , args.twine , args.twine ,
-                  args.twine_px , args.twine_sigma ,
+                  args.twine_width , args.twine_sigma ,
                   args.twine_threshold ) ;
 
     // wrap the 'environment' object in a twine_t object.
