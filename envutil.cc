@@ -196,7 +196,7 @@ static std::string metamatch;
 static std::regex field_re;
 std::string input , output , save_ir , ts_options ;
 int extent , support_min_px , tile_px ;
-int itp , twine , twine_width´ ;
+int itp , twine , twine_width ;
 double face_fov , twine_sigma , twine_threshold ;
 
 // helper function to save a zimt array to an image file. I am
@@ -2085,7 +2085,7 @@ void cubemap_to_latlon ( const std::string & input ,
 
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
     make_spread ( twine , twine ,
-                  sf.px_to_model * twine_width´ ,
+                  sf.px_to_model * twine_width ,
                     twine_sigma , twine_threshold , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
@@ -2199,7 +2199,7 @@ void latlon_to_ir ( const zimt::view_t < 2 , pix_t<nchannels> > & latlon ,
 
     std::vector < zimt::xel_t < float , 3 > > twine_v ;
     make_spread ( twine , twine ,
-                  sf.px_to_model * twine_width´ ,
+                  sf.px_to_model * twine_width ,
                     twine_sigma , twine_threshold , twine_v ) ;
 
     twine_t < nchannels > twined_act ( act , twine_v ) ;
@@ -2295,7 +2295,7 @@ void latlon_to_cubemap ( const std::string & latlon ,
         std::cout << "applying a twine of " << twine << std::endl ;
 
       std::vector < zimt::xel_t < float , 3 > > twine_v ;
-      make_spread ( twine , twine , twine_width´ ,
+      make_spread ( twine , twine , twine_width ,
                     twine_sigma , twine_threshold , twine_v ) ;
 
       twine_t < nchannels > twined_act ( act , twine_v ) ;
@@ -2388,7 +2388,7 @@ int main ( int argc , const char ** argv )
   ap.arg("--twine TWINE")
     .help("use twine*twine oversampling and box filter - best with itp1")
     .metavar("TWINE");
-  ap.arg("--twine_width´ TWINE_WIDTH")
+  ap.arg("--twine_width TWINE_WIDTH")
     .help("widen the pick-up area of the twining filter")
     .metavar("TWINE_WIDTH");
   ap.arg("--twine_sigma TWINE_SIGMA")
@@ -2435,7 +2435,7 @@ int main ( int argc , const char ** argv )
   tile_px = ap["tile_px"].get<int>(64);
   itp = ap["itp"].get<int>(-1);
   twine = ap["twine"].get<int>(1);
-  twine_width´ = ap["twine_width´"].get<float>(1.0);
+  twine_width = ap["twine_width"].get<float>(1.0);
   twine_sigma = ap["twine_sigma"].get<float>(0.0);
   twine_threshold = ap["twine_threshold"].get<float>(0.0);
   face_fov = ap["face_fov"].get<float>(90.0);
