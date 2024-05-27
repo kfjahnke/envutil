@@ -1,0 +1,4 @@
+envutil - utility to convert between lat/lon and cubemap environemnt images
+extract - extract a reprojected image from a lat/lon or cubemap environment
+These programs require an AVX2-capable CPU. For documentation, please visit
+the github project page: https://github.com/kfjahnke/envutil

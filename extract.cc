@@ -809,6 +809,7 @@ int main ( int argc , const char ** argv )
       // use as get_t object for the zimt::process invocation:
 
       zimt::grok_get_t < float , 9 , 2 , 16 > get_ray ;
+      args.twine = 0 ;
 
       // I tried coding a variant which uses OIIO loopkup without
       // passing the derivatives if they aren't needed (stwidth == 0)
