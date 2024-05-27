@@ -1895,6 +1895,8 @@ struct twine_t
   act_t inner ;
   const std::vector < zimt::xel_t < float , 3 > > spread ;
 
+  using typename base_t::in_ele_v ;
+
   twine_t ( const act_t & _inner ,
             const std::vector < zimt::xel_t < float , 3 > > & _spread )
   : inner ( _inner ) ,
@@ -1918,10 +1920,90 @@ struct twine_t
 
     crd_v pickup { in[0] , in[1] , in[2] } ;
 
-    // derivatives in x and y directions, formed by differencing
+    // we want the 'derivatives' in x and y directions. What we have
+    // are two additional rays pointing to the two next 'canonial'
+    // neighbours of the 'central' pickup ray. If we're sloppy,
+    // we can form the 'derivatives' by simple differencing, but
+    // if the rays aren't very close together (they are, normally,
+    // which is the reason differencing works pretty much
+    // always) the vectors received from differencing are not
+    // orthogonal to the pickup ray and the plane they define
+    // is not the tangential plane of 'pickup', but instead it's
+    // tilted a bit. A reasonably inexpensive way of obtaining
+    // two vectors in the tangent plane which can serve as a base
+    // to calculate the actual pickup locations from the 'spread'
+    // is using an orthogonal projection of the neighbouring points
+    // onto the tangential plane. We only have to do this once per
+    // 'twined' lookup, so the cost is tolerable. To activate this
+    // code, #define DERIV_TANGENTIAL - I use plain differencing for
+    // now, for this reason: if the twining is to work like a filter,
+    // the actual pick-up points have to be so closely spaced that
+    // they don't 'skip' pixels in the source image - they have to
+    // obey the sampling theorem, or otherwise we simply get visibly
+    // overlaid image copies (try unduly large twine_width values
+    // to see the effect). With such close spacing, the difference
+    // between having the actual pick-up points on the tangent plane
+    // or on a very slightly tiled plane is negligible.
+
+// #define DERIV_TANGENTIAL
+
+#ifdef DERIV_TANGENTIAL
+  
+    // the second and third point in the ninepack represent
+    // rays - they have unit distance from the origin, but
+    // they aren't on 'pickup's' tangent plane, which is where
+    // we'd want two vectors as a basis (dx, dy) to produce
+    // the additional pick-up points (the in_k below).
+    // we start out by manifesting these two points:
+
+    crd_v p10 { in[3] , in[4] , in[5] } ;
+    crd_v p01 { in[6] , in[7] , in[8] } ;
+
+    // we use two lines parallel to the 'pickup' ray and passing
+    // through p10 and p01, respectively. Imath comes to play:
+
+    Imath::Line3 < in_ele_v > lp10 , lp01 ;
+
+    lp10.pos = p10 ;
+    lp10.dir = pickup ;
+
+    lp01.pos = p01 ;
+    lp01.dir = pickup ;
+
+    // now we calculate the closest points on these lines to
+    // 'pickup': these points are on the tangential plane.
+    // they are, to put it differently, the orthogonal projection
+    // of p01 and p10 to the tangential plane, and we'll use them
+    // to form our basis.
+
+    crd_v dx , dy ;
+
+    // zimt and Imath are compatible, but Imath doesn't know that,
+    // so we reinterpret_cast:
+
+    auto const & pi = reinterpret_cast < Imath::Vec3 < in_ele_v > const & >
+                        ( pickup ) ; 
+    auto & dxi = reinterpret_cast < Imath::Vec3 < in_ele_v > & > ( dx ) ; 
+    auto & dyi = reinterpret_cast < Imath::Vec3 < in_ele_v > & > ( dy ) ; 
+
+    dxi = lp10.closestPointTo ( pi ) ;
+    dyi = lp01.closestPointTo ( pi ) ;
+
+    // subtracting 'pickup' yields the desired vectors coplanar to
+    // the tangential plane
+
+    dx -= pickup ;
+    dy -= pickup ;
+
+#else
+
+    // this is the alternative code using simple differencing, which
+    // is fine for the 'normal' scenario: very close neighbours.
 
     crd_v dx { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
     crd_v dy { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
+
+#endif
 
     for ( auto const & contrib : spread )
     {

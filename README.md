@@ -450,7 +450,10 @@ currently three modes of interpolation:
     -2 - use 'twining' - this is a method which first super-samples and then
          combines several pixels to one output pixel ('binning'). This is my
          own invention. It's quite fast and produces good quality output.
-         This method should see community review to compare it with other methods.
+         This method should see community review to compare it with other
+         methods. If you only pass --itp -2 and not --twine, extract will
+         set up twining parameters calculated to fit well with the
+         transformation at hand.
 
 ## --width EXTENT    width of the output
 
@@ -470,12 +473,17 @@ Pass on of the supported output projections: "spherical", "cylindrical",
 ## --hfov ANGLE      horiziontal field of view of the output (in degrees)
 
 Spherical, cylindrical and fisheye output will automatically periodize
-the image if the hfov exceeds 360 degrees. Rectilinear and stereographic
-images can't handle more than 180 degrees hfov, and at this hfov, they
-won't produce usable output. For cubemaps, you should specify ninety degrees
-hfov, but you can produce cubemaps with different hfov - they just won't
-conform to any standards and won't be usable with other software unless that
-software offers suitable options.
+the image if the hfov exceeds 360 degrees. Rectilinear images can't handle
+more than 180 degrees hfov, and at this hfov, they won't produce usable
+output. Stereographic images can theoretically accomodate 360 degrees fov,
+but just as rectilinear images aren't usable near their limit of 180 degrees,
+they aren't usable when their limit is approached: most of the content
+becomes concentrated in the center and around that a lot of space is wasted
+on a bit of content which is stretched extremely in radial direction. For
+cubemaps, you should specify ninety degrees hfov, but you can produce
+cubemaps with different hfov - they just won't conform to any standards
+and won't be usable with other software unless that software offers
+suitable options.
 
 ## --yaw ANGLE       yaw of the virtual camera (in degrees)
 ## --pitch ANGLE     pitch of the virtual camera (in degrees)
@@ -554,7 +562,7 @@ These options control the 'twining' filter. These options only hve an effect if
 you activate twining with --itp -2. extract will use bilinear interpolation on
 the source image for single-point lookups, but it will perform more lookups and
 then combine several neighbouring pixels from the oversampled result into each
-target pixel. The meaning of the parameters is the same as in envutil.
+target pixel. The meaning of the parameters is the same as in envutil:
 
 ## --twine TWINE         use twine*twine oversampling and box filter
 
@@ -565,6 +573,12 @@ samples falling into a common output pixel are pooled and only the average
 is stored. This keeps the pipeline afloat in SIMD registers, which is fast
 (as is the arithmetiic) - especially when highway or Vc are used, which
 increase SIMD performance particularly well.
+If you activate twining by selecting --itp -2, but don't pass --twine (or if
+you pass --twine 0 explicitly), extract will set up twining parameters
+automatically, so that they fit the relation of input and output. If the
+output magnifies (in it's center), the twine width will be widened to
+avoid star-shaped artifacts in the output. Otherwise, the twine factor
+will be raised to avoid aliasing.
 
 ## --twine_width TWINE_WIDTH  widen the pick-up area of the twining filter
 

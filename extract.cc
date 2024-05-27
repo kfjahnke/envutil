@@ -107,6 +107,7 @@
 #include <Imath/ImathVec.h>
 #include <Imath/ImathEuler.h>
 #include <Imath/ImathQuat.h>
+#include <Imath/ImathLine.h>
 
 // rotate_3d uses a SIMDized Imath Quaternion to affect a 3D rotation
 // of a 3D SIMDized coordinate. Imath::Quat<float> can't broadcast
@@ -225,143 +226,24 @@ struct arguments
 {
   bool verbose ;
   double yaw , pitch , roll ;
-  projection_t projection ;
+  projection_t projection , env_projection ;
   std::string prj_str ;
   double x0 , x1 , y0 , y1 ;
   double hfov ;
+  double step , env_step ;
   std::size_t width , height ;
+  std::size_t env_width , env_height ;
   std::string input ;
   std::string output ;
   std::string metamatch ;
   std::regex field_re ;
-  std::size_t env_width , env_height ;
   std::size_t nchannels ;
-  int itp , twine , twine_width ;
-  double twine_sigma , twine_threshold ;
+  int itp , twine  ;
+  double twine_width , twine_sigma , twine_threshold ;
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
   bool conservative_filter ;
   std::unique_ptr<ImageInput> inp ;
-
-  // assuming an isotropic image (same sampling resolution in the horizontal
-  // and vertical), calculate the vertical field of view from the horizontal
-  // field of view, under the given projection
-
-  double get_vfov()
-  {
-    double vfov = 0.0 ;
-    switch ( projection )
-    {
-      case RECTILINEAR:
-      {
-        // as a one-liner, this is probably clearer than the code below
-         vfov = 2.0 * atan ( height * tan ( hfov / 2.0 ) / width ) ;
-         break ;
-      }
-      case CYLINDRICAL:
-      {
-        double pixels_per_rad = width / hfov ;
-        double h_rad = height / pixels_per_rad ;
-        vfov = 2.0 * atan ( h_rad / 2.0 ) ;
-        break ;
-      }
-      case STEREOGRAPHIC:
-      {
-        double w_rad = 2.0 * tan ( hfov / 4.0 ) ;
-        double pixels_per_rad = width / w_rad ;
-        double h_rad = height / pixels_per_rad ;
-        vfov = 4.0 * atan ( h_rad / 2.0 ) ;
-        break ;
-      }
-      case SPHERICAL:
-      case FISHEYE:
-      {
-        vfov = hfov * height / width ;
-        break ;
-      }
-      default:
-      {
-        vfov = hfov ; // debatable...
-        break ;
-      }
-    }
-    if ( verbose )
-      std::cout << "gleaned vfov = " << vfov << std::endl ;
-
-    return vfov ;
-  }
-
-  // extract internally uses the notion of an image's 'extent' in 'model
-  // space'. The image is thought to be 'draped' to an 'archetypal 2D
-  // manifold' - the surface of a sphere or cylinder with unit radius
-  // ar a plane at unit distance forward - where the sample points are
-  // placed on the 2D manifold so that rays from the origin to the
-  // scene point which corresponds with the sample point intersect there.
-  // To put it differently: the sample point cloud is scaled and shifted
-  // to come to lie on the 'archetypal' 2D manifolds. This makes for
-  // efficient calculations.
-
-  void get_extent()
-  {
-    double alpha_x = - hfov / 2.0 ;
-    double beta_x = hfov / 2.0 ;
-    double beta_y = get_vfov() / 2.0 ;
-    double alpha_y = - beta_y ;
-
-    switch ( projection )
-    {
-      case SPHERICAL:
-      case FISHEYE:
-      {
-        x0 = alpha_x ;
-        x1 = beta_x ;
-
-        y0 = alpha_y ;
-        y1 = beta_y ;
-        break ;
-      }
-      case CYLINDRICAL:
-      {
-        x0 = alpha_x ;
-        x1 = beta_x ;
-
-        y0 = tan ( alpha_y ) ;
-        y1 = tan ( beta_y ) ;
-        break ;
-      }
-      case RECTILINEAR:
-      {
-        x0 = tan ( alpha_x ) ;
-        x1 = tan ( beta_x ) ;
-
-        y0 = tan ( alpha_y ) ;
-        y1 = tan ( beta_y ) ;
-        break ;
-      }
-      case STEREOGRAPHIC:
-      {
-        x0 = 2.0 * tan ( alpha_x / 2.0 ) ;
-        x1 = 2.0 * tan ( beta_x / 2.0 ) ;
-
-        y0 = 2.0 * tan ( alpha_y / 2.0 ) ;
-        y1 = 2.0 * tan ( beta_y / 2.0 ) ;
-        break ;
-      }
-      case CUBEMAP:
-      {
-        x0 = tan ( alpha_x ) ;
-        x1 = tan ( beta_x ) ;
-
-        y0 = 6 * x0 ;
-        y1 = 6 * x1 ;
-        break ;
-      }
-      default:
-      {
-        break ;
-      }
-    }
-  }
 
   // the 'arguments' object's 'init' takes the main program's argc
   // and argv.
@@ -473,7 +355,7 @@ struct arguments
     input = ap["input"].as_string ( "" ) ;
     output = ap["output"].as_string ( "" ) ;
     itp = ap["itp"].get<int>(1);
-    twine = ap["twine"].get<int>(1);
+    twine = ap["twine"].get<int>(0);
     twine_width = ap["twine_width"].get<float>(1.0);
     twine_sigma = ap["twine_sigma"].get<float>(0.0);
     twine_threshold = ap["twine_threshold"].get<float>(0.0);
@@ -530,6 +412,23 @@ struct arguments
     assert (    env_width == env_height * 2
              || env_height == env_width * 6 ) ;
 
+    if ( env_width == env_height * 2 )
+    {
+      env_projection = SPHERICAL ;
+      env_step = 2.0 * M_PI / env_width ;
+    }
+    else if ( env_width * 6 == env_height )
+    {
+      env_projection = CUBEMAP ;
+      env_step = M_PI_2 / env_width ;
+    }
+    else
+    {
+      std::cerr << "input image must have 2:1 or 1:6 aspect ratio"
+                << std::endl ;
+      exit ( -1 ) ;
+    }
+
     if ( verbose )
     {
       std::cout << "input: " << input << std::endl ;
@@ -562,12 +461,19 @@ struct arguments
 
     // calculate extent - a non-zero hfov overrides x0, x1, y0, and y1
 
+    step = 0.0 ;
     if ( hfov != 0.0 )
     {
-      get_extent() ;
+      auto extent = get_extent ( projection , width , height , hfov  ) ;
+      x0 = extent.x0 ;
+      x1 = extent.x1 ;
+      y0 = extent.y0 ;
+      y1 = extent.y1 ;
     }
     assert ( x0 < x1 ) ;
     assert ( y0 < y1 ) ;
+
+    step = ( x1 - x0 ) / width ;
 
     if ( verbose )
     {
@@ -583,6 +489,8 @@ struct arguments
       }
       std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
       std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
+      std::cout << "step: " << step << std::endl ;
+      std::cout << "env_step: " << env_step << std::endl ;
     }
   }
 } ;
@@ -632,6 +540,56 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
     environment < float , float , nchannels , 16 > env ;
 
     // set up the twining filter
+
+    if ( args.twine == 0 )
+    {
+      // user has passed twine 0, or not passed anything - but itp
+      // is -2. We set up the twining with automatically generated
+      // parameters.
+
+      // figure out the magnification in the image center as a
+      // guideline
+
+      double mag = args.env_step / args.step ;
+
+      if ( mag > 1.0 )
+      {
+        // if the transformation magnifies, we use a moderate twine
+        // size and a twine_width equal to the magnification, to
+        // avoid the star-shaped artifacts from the bilinear
+        // interpolation used for the lookup of the contributing rays
+
+        args.twine = 5 ;
+        args.twine_width = mag ;
+      }
+      else
+      {
+        // otherwise, we use a twine size which depends on the
+        // downscaling factor (reciprocal of 'mag') and a twine_width
+        // of 1.0: we only want anti-aliasing
+
+        args.twine = int ( 1.0 + 1.0 / mag ) ;
+        args.twine_width = 1.0 ;
+      }
+
+      if ( verbose )
+      {
+        std::cout << "automatic twining for magnification " << mag
+                  << ":" << std::endl ;
+        std::cout << "twine: " << args.twine
+                  << " twine_width: " << args.twine_width
+                  << std::endl ;
+      }
+    }
+    else
+    {
+      if ( verbose )
+      {
+        std::cout << "using twine: " << args.twine
+                  << " twine_width: " << args.twine_width
+                  << std::endl ;
+      }
+    }
 
     std::vector < zimt::xel_t < float , 3 > > spread ;
     make_spread ( spread , args.twine , args.twine ,

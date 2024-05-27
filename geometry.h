@@ -127,6 +127,177 @@ struct extent_type
   double x0 , x1 , y0 , y1 ;
 } ;
 
+// assuming an isotropic image (same sampling resolution in the horizontal
+// and vertical), calculate the vertical field of view from the horizontal
+// field of view, under the given projection.
+
+double get_vfov ( projection_t projection ,
+                  int width ,
+                  int height ,
+                  double hfov )
+{
+  double vfov = 0.0 ;
+  switch ( projection )
+  {
+    case RECTILINEAR:
+    {
+      // as a one-liner, this is probably clearer than the code below
+      vfov = 2.0 * atan ( height * tan ( hfov / 2.0 ) / width ) ;
+      break ;
+    }
+    case CYLINDRICAL:
+    {
+      double pixels_per_rad = width / hfov ;
+      double h_rad = height / pixels_per_rad ;
+      vfov = 2.0 * atan ( h_rad / 2.0 ) ;
+      break ;
+    }
+    case STEREOGRAPHIC:
+    {
+      double w_rad = 2.0 * tan ( hfov / 4.0 ) ;
+      double pixels_per_rad = width / w_rad ;
+      double h_rad = height / pixels_per_rad ;
+      vfov = 4.0 * atan ( h_rad / 2.0 ) ;
+      break ;
+    }
+    case SPHERICAL:
+    case FISHEYE:
+    {
+      vfov = hfov * height / width ;
+      break ;
+    }
+    default:
+    {
+      vfov = hfov ; // debatable...
+      break ;
+    }
+  }
+  return vfov ;
+}
+
+// the 'step' of an image is the angle - in radians - which
+// corresponds to the width of one pixel in the image center.
+// for some projections and in certain directions, this value
+// will be usable at non-central points (e.g. for spherical
+// images along the horizon). In any case it can be used as a
+// 'rule of thumb' indicator of the image's resolution.
+// If we have the 'extent' already, we can calculate the step
+// as ( x1 - x0 ) / width.
+
+double get_step ( projection_t projection ,
+                  int width ,
+                  int height ,
+                  double hfov )
+{
+  double step = 0.0 ;
+  switch ( projection )
+  {
+    case RECTILINEAR:
+    case CUBEMAP:
+    {
+      step = 2.0 * tan ( hfov / 2.0 ) / width ;
+      break ;
+    }
+    case SPHERICAL:
+    case CYLINDRICAL:
+    case FISHEYE:
+    {
+      step = hfov / width ;
+      break ;
+    }
+    case STEREOGRAPHIC:
+    {
+      step = 4.0 * tan ( hfov / 4.0 ) / width ;
+      break ;
+    }
+    default:
+    {
+      break ;
+    }
+  }
+  return step ;
+}
+
+// extract internally uses the notion of an image's 'extent' in 'model
+// space'. The image is thought to be 'draped' to an 'archetypal 2D
+// manifold' - the surface of a sphere or cylinder with unit radius
+// ar a plane at unit distance forward - where the sample points are
+// placed on the 2D manifold so that rays from the origin to the
+// scene point which corresponds with the sample point intersect there.
+// To put it differently: the sample point cloud is scaled and shifted
+// to come to lie on the 'archetypal' 2D manifolds. This makes for
+// efficient calculations. The image is taken to be centered on the
+// 'forward' ray.
+
+extent_type get_extent ( projection_t projection ,
+                         int width ,
+                         int height ,
+                         double hfov )
+{
+  double x0 , x1 , y0 , y1 ;
+
+  double alpha_x = - hfov / 2.0 ;
+  double beta_x = hfov / 2.0 ;
+  double beta_y = get_vfov ( projection , width , height , hfov ) / 2.0 ;
+  double alpha_y = - beta_y ;
+
+  switch ( projection )
+  {
+    case SPHERICAL:
+    case FISHEYE:
+    {
+      x0 = alpha_x ;
+      x1 = beta_x ;
+
+      y0 = alpha_y ;
+      y1 = beta_y ;
+      break ;
+    }
+    case CYLINDRICAL:
+    {
+      x0 = alpha_x ;
+      x1 = beta_x ;
+
+      y0 = tan ( alpha_y ) ;
+      y1 = tan ( beta_y ) ;
+      break ;
+    }
+    case RECTILINEAR:
+    {
+      x0 = tan ( alpha_x ) ;
+      x1 = tan ( beta_x ) ;
+
+      y0 = tan ( alpha_y ) ;
+      y1 = tan ( beta_y ) ;
+      break ;
+    }
+    case STEREOGRAPHIC:
+    {
+      x0 = 2.0 * tan ( alpha_x / 2.0 ) ;
+      x1 = 2.0 * tan ( beta_x / 2.0 ) ;
+
+      y0 = 2.0 * tan ( alpha_y / 2.0 ) ;
+      y1 = 2.0 * tan ( beta_y / 2.0 ) ;
+      break ;
+    }
+    case CUBEMAP:
+    {
+      x0 = tan ( alpha_x ) ;
+      x1 = tan ( beta_x ) ;
+
+      y0 = 6 * x0 ;
+      y1 = 6 * x1 ;
+      break ;
+    }
+    default:
+    {
+      x0 = x1 = y0 = y1 = 0.0 ;
+      break ;
+    }
+  }
+  return { x0 , x1 , y0 , y1 } ;
+}
+
 // coordinate transformations, coded as templates in zimt 'act'
 // functor style, returning the result via a reference argument
 
