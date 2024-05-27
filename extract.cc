@@ -96,6 +96,7 @@
 // rely on autovectorization; zimt structures the processing so that it's
 // autovectorization-friendly and performance is still quite good that way.
 
+#include <fstream>
 #include "stepper.h"
 
 // To conveniently rotate with a rotational quaternion, we employ
@@ -235,6 +236,7 @@ struct arguments
   std::size_t env_width , env_height ;
   std::string input ;
   std::string output ;
+  std::string seqfile ;
   std::string metamatch ;
   std::regex field_re ;
   std::size_t nchannels ;
@@ -265,6 +267,9 @@ struct arguments
       .metavar("INPUT");
     ap.arg("--output OUTPUT")
       .help("output file name (mandatory)")
+      .metavar("OUTPUT");
+    ap.arg("--seqfile SEQFILE")
+      .help("image sequence file name (optional)")
       .metavar("OUTPUT");
     ap.arg("--itp ITP")
       .help("interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining")
@@ -354,6 +359,7 @@ struct arguments
 
     input = ap["input"].as_string ( "" ) ;
     output = ap["output"].as_string ( "" ) ;
+    seqfile = ap["seqfile"].as_string ( "" ) ;
     itp = ap["itp"].get<int>(1);
     twine = ap["twine"].get<int>(0);
     twine_width = ap["twine_width"].get<float>(1.0);
@@ -435,62 +441,68 @@ struct arguments
       std::cout << "input width: " << env_width << std::endl ;
       std::cout << "input height: " << env_height << std::endl ;
       std::cout << "input has " << nchannels << " channels" << std::endl ;
+      std::cout << "env_step: " << env_step << std::endl ;
       std::cout << "interpolation: "
               << ( itp == 1 ? "direct bilinear" : "uses OIIO" )
               << std::endl ;
-    
-      std::cout << "output: " << output << std::endl ;
-      std::cout << "output projection: " << prj_str << std::endl ;
-      std::cout << "width: " << width
-                << " height: " << height << std::endl ;
-
-      if ( hfov > 0.0 )
-        std::cout << "output hfov: " << hfov << std::endl ;
-
-      std::cout << "virtual camera yaw: " << yaw
-                << " pitch: " << pitch
-                << " roll: " << roll << std::endl ;
     }
 
-    // convert angles to radians
-
-    hfov *= M_PI / 180.0 ;
-    yaw *= M_PI / 180.0 ;
-    pitch *= M_PI / 180.0 ;
-    roll *= M_PI / 180.0 ;
-
-    // calculate extent - a non-zero hfov overrides x0, x1, y0, and y1
-
-    step = 0.0 ;
-    if ( hfov != 0.0 )
+    if ( seqfile == std::string() )
     {
-      auto extent = get_extent ( projection , width , height , hfov  ) ;
-      x0 = extent.x0 ;
-      x1 = extent.x1 ;
-      y0 = extent.y0 ;
-      y1 = extent.y1 ;
-    }
-    assert ( x0 < x1 ) ;
-    assert ( y0 < y1 ) ;
-
-    step = ( x1 - x0 ) / width ;
-
-    if ( verbose )
-    {
-      if ( hfov == 0.0 )
+      if ( verbose)
       {
-        std::cout << "extent calculated from hfov:"
-                  << std::endl ;
+        std::cout << "output: " << output << std::endl ;
+        std::cout << "output projection: " << prj_str << std::endl ;
+        std::cout << "width: " << width
+                  << " height: " << height << std::endl ;
+
+        if ( hfov > 0.0 )
+          std::cout << "output hfov: " << hfov << std::endl ;
+
+        std::cout << "virtual camera yaw: " << yaw
+                  << " pitch: " << pitch
+                  << " roll: " << roll << std::endl ;
       }
-      else
+
+      // convert angles to radians
+
+      hfov *= M_PI / 180.0 ;
+      yaw *= M_PI / 180.0 ;
+      pitch *= M_PI / 180.0 ;
+      roll *= M_PI / 180.0 ;
+
+      // calculate extent - a non-zero hfov overrides x0, x1, y0, and y1
+
+      step = 0.0 ;
+      if ( hfov != 0.0 )
       {
-        std::cout << "extent gleaned from command line arguments:"
-                  << std::endl ;
+        auto extent = get_extent ( projection , width , height , hfov  ) ;
+        x0 = extent.x0 ;
+        x1 = extent.x1 ;
+        y0 = extent.y0 ;
+        y1 = extent.y1 ;
       }
-      std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
-      std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
-      std::cout << "step: " << step << std::endl ;
-      std::cout << "env_step: " << env_step << std::endl ;
+      assert ( x0 < x1 ) ;
+      assert ( y0 < y1 ) ;
+
+      step = ( x1 - x0 ) / width ;
+
+      if ( verbose )
+      {
+        if ( hfov == 0.0 )
+        {
+          std::cout << "extent calculated from hfov:"
+                    << std::endl ;
+        }
+        else
+        {
+          std::cout << "extent gleaned from command line arguments:"
+                    << std::endl ;
+        }
+        std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
+        std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
+        std::cout << "step: " << step << std::endl ;
+     }
     }
   }
 } ;
@@ -537,7 +549,7 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
   {
     // create an 'environment' object
 
-    environment < float , float , nchannels , 16 > env ;
+    static environment < float , float , nchannels , 16 > env ;
 
     // set up the twining filter
 
@@ -607,7 +619,8 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
       // set up an environment object picking up pixel values from
       // a lat/lon image using OIIO's 'environment' function
 
-      act = latlon < float , float , nchannels , 16 >() ;
+      static latlon < float , float , nchannels , 16 > ll ;
+      act = ll ;
     }
     else
     {
@@ -615,7 +628,8 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
       // a texture representing the cubemap image, using OIIO's
       // 'texture' function
 
-      act = cubemap < float , float , nchannels , 16 >() ;
+      static cubemap < float , float , nchannels , 16 > cbm ;
+      act = cbm ;
     }
   }
 
@@ -662,7 +676,8 @@ void work ( zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
 
   // create the 'environment' object
 
-  environment < float , float , nchannels , 16 > env ;
+  static environment < float , float , nchannels , 16 > env ;
+  act = env ;
 
   // set up an array to receive the output pixels
 
@@ -679,7 +694,7 @@ void work ( zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
   if ( args.verbose )
     std::cout << "producing output" << std::endl ;
 
-  zimt::process ( trg.shape , get_ray , env , cstor ) ;
+  zimt::process ( trg.shape , get_ray , act , cstor ) ;
   
   if ( args.verbose )
     std::cout << "saving output image: " << args.output << std::endl ;
@@ -700,180 +715,223 @@ int main ( int argc , const char ** argv )
   // we can do some processing here which is independent from the
   // number of channels in the pixels:
 
-  // orthonormal system of basis vectors the view
-
-  crd3_t xx { 1.0 , 0.0 , 0.0 } ;
-  crd3_t yy { 0.0 , 1.0 , 0.0 } ;
-  crd3_t zz { 0.0 , 0.0 , 1.0 } ;
-
-  // the three vectors are rotated with the given yaw, pitch
-  // and roll, and later passed on the to 'steppers', the objects
-  // which provide 3D 'ray' coordinates. They incorporate the
-  // rotated basis in their ray generation, resulting in
-  // appropriately oriented ray coordinates which can be formed
-  // more efficiently in the steppers - first calculating the
-  // rays and then rotating the rays in a second step takes
-  // more CPU cycles.
-
-  rotate_3d < float , 16 > r3 ( args.roll , args.pitch , args.yaw ) ;
-  
-  xx = r3 ( xx ) ;
-  yy = r3 ( yy ) ;
-  zz = r3 ( zz ) ;
-
-  // set up the steppers. note the extents of the 2D manifold
-  // given in model space uits. These objects will deliver 3D
-  // 'ray' coordinates as input to the 'act' functor. Note how
-  // each projection has it's distinct type of stepper, but
-  // they are all assigned to a common type, a 'grok_get_t'.
-  // This uses type erasure and captures the functionality
-  // in std::functions, and the resulting object is only
-  // characterized by it's input and output type and lane
-  // count. The uniform type alows us to pass these objects
-  // around with a common type - a convenient way of harnessing
-  // groups of types with different implementation but equal
-  // interface.
-
-  if ( args.itp == -1 || args.itp == -2 )
+  bool have_seq = ( args.seqfile != std::string() ) ;
+  std::ifstream seqstream ;
+  if ( have_seq )
   {
-    // we want to employ OIIO to provide pixel data from the lat/lon
-    // or cubemap environments. For the best quality of lookup, OIIO
-    // needs the derivatives of the coordinate transformation. We
-    // have a special stepper which provised not only the 3D ray
-    // coordinate of the actual pick-up location, but also 3D ray
-    // coordinates for the location one sample step to the right
-    // and one step downwards in canonical target image coordinates,
-    // so instead of the usual three-component vector, this stepper
-    // yields a nine-component vector. Internally, this stepper
-    // holds three separate steppers - one for each of the ray
-    // coordinates it produces. The type of these three internal
-    // steppers is introduced as a template argument. To allow
-    // us to handle these variously-typed stepper objects with a
-    // common handle, we use a zimt::grok_get_t, which 'erases'
-    // the type and provides a uniformly-typed object, which we
-    // use as get_t object for the zimt::process invocation:
-
-    zimt::grok_get_t < float , 9 , 2 , 16 > get_ray ;
-
-    // I tried coding a variant which uses OIIO loopkup without
-    // passing the derivatives if they aren't needed (stwidth == 0)
-    // but this did not make a significant difference to performance
-    // and bloated the code. So for the time being I calculate the
-    // derivatives for all lookups with OIIO code.
-
-    switch ( args.projection )
-    {
-      case RECTILINEAR :
-        get_ray = deriv_stepper < float , 16 , rectilinear_stepper >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        break ;
-      case FISHEYE :
-        get_ray = deriv_stepper < float , 16 , fisheye_stepper >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        break ;
-      case STEREOGRAPHIC :
-        get_ray = deriv_stepper < float , 16 , stereographic_stepper >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        break ;
-      case SPHERICAL :
-        get_ray = deriv_stepper < float , 16 , spherical_stepper >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        break ;
-      case CYLINDRICAL :
-        get_ray = deriv_stepper < float , 16 , cylindrical_stepper >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        break ;
-      case CUBEMAP :
-        get_ray = deriv_stepper < float , 16 , cubemap_stepper >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      default:
-        break ;
-    }
-
-    // the code to set up and extract data from the latlon image,
-    // or the cubemap, depends on the number of channels. That's
-    // passed as a template argument, so here we have a case
-    // switch over 'nchannels' which dispatches to the appropriate
-    // instantiations.
-
-    switch ( args.nchannels )
-    {
-      case 1:
-        work < 1 > ( get_ray ) ;
-        break ;
-      case 2:
-        work < 2 > ( get_ray ) ;
-        break ;
-      case 3:
-        work < 3 > ( get_ray ) ;
-        break ;
-      case 4:
-        work < 4 > ( get_ray ) ;
-        break ;
-    }
+    seqstream.open ( args.seqfile ) ;
+    assert ( seqstream.good() ) ;
   }
-  else
+
+  int seqno = 0 ;
+  while ( true )
   {
-    // access data with bilinear interpolation from the source
-    // image (does not use OIIO's 'environemnt' or 'texture')
-  
-    zimt::grok_get_t < float , 3 , 2 , 16 > get_ray ;
-  
-    switch ( args.projection )
+    if ( have_seq )
     {
-      case RECTILINEAR :
-        get_ray = rectilinear_stepper < float , 16 >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      double seq_hfov , seq_yaw , seq_pitch , seq_roll ;
+      seqstream >> seq_hfov >> seq_yaw >> seq_pitch >> seq_roll ;
+      if ( ! seqstream.good() )
         break ;
-      case FISHEYE :
-        get_ray = fisheye_stepper < float , 16 >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        break ;
-      case STEREOGRAPHIC :
-        get_ray = stereographic_stepper < float , 16 >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        break ;
-      case SPHERICAL :
-        get_ray = spherical_stepper < float , 16 >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        break ;
-      case CYLINDRICAL :
-        get_ray = cylindrical_stepper < float , 16 >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        break ;
-      case CUBEMAP :
-        get_ray = cubemap_stepper < float , 16 >
-                    ( xx , yy , zz , args.width , args.height ,
-                      args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      default:
-        break ;
+      std::cout << "from seqfile: hfov: " << seq_hfov
+                << " yaw: " << seq_yaw << " pitch: " << seq_pitch
+                << " roll: " << seq_roll << std::endl ;
+      args.hfov = seq_hfov * M_PI / 180.0 ;
+      args.yaw = seq_yaw * M_PI / 180.0 ;
+      args.pitch = seq_pitch * M_PI / 180.0 ;
+      args.roll = seq_roll * M_PI / 180.0 ;
+
+      auto extent = get_extent ( args.projection , args.width ,
+                                 args.height , args.hfov  ) ;
+      args.x0 = extent.x0 ;
+      args.x1 = extent.x1 ;
+      args.y0 = extent.y0 ;
+      args.y1 = extent.y1 ;
+      assert ( args.x0 < args.x1 ) ;
+      assert ( args.y0 < args.y1 ) ;
+      args.step = ( args.x1 - args.x0 ) / args.width ;
+      ++seqno ;
+      char buffer [ 12 ] ;
+      snprintf ( buffer , 12 , "%03d" , seqno ) ;
+      args.output = "seq" + std::string(buffer) + ".jpg" ;
     }
-    switch ( args.nchannels )
+
+    // orthonormal system of basis vectors the view
+
+    crd3_t xx { 1.0 , 0.0 , 0.0 } ;
+    crd3_t yy { 0.0 , 1.0 , 0.0 } ;
+    crd3_t zz { 0.0 , 0.0 , 1.0 } ;
+
+    // the three vectors are rotated with the given yaw, pitch
+    // and roll, and later passed on the to 'steppers', the objects
+    // which provide 3D 'ray' coordinates. They incorporate the
+    // rotated basis in their ray generation, resulting in
+    // appropriately oriented ray coordinates which can be formed
+    // more efficiently in the steppers - first calculating the
+    // rays and then rotating the rays in a second step takes
+    // more CPU cycles.
+
+    rotate_3d < float , 16 > r3 ( args.roll , args.pitch , args.yaw ) ;
+    
+    xx = r3 ( xx ) ;
+    yy = r3 ( yy ) ;
+    zz = r3 ( zz ) ;
+
+    // set up the steppers. note the extents of the 2D manifold
+    // given in model space uits. These objects will deliver 3D
+    // 'ray' coordinates as input to the 'act' functor. Note how
+    // each projection has it's distinct type of stepper, but
+    // they are all assigned to a common type, a 'grok_get_t'.
+    // This uses type erasure and captures the functionality
+    // in std::functions, and the resulting object is only
+    // characterized by it's input and output type and lane
+    // count. The uniform type alows us to pass these objects
+    // around with a common type - a convenient way of harnessing
+    // groups of types with different implementation but equal
+    // interface.
+
+    if ( args.itp == -1 || args.itp == -2 )
     {
-      case 1:
-        work < 1 > ( get_ray ) ;
-        break ;
-      case 2:
-        work < 2 > ( get_ray ) ;
-        break ;
-      case 3:
-        work < 3 > ( get_ray ) ;
-        break ;
-      case 4:
-        work < 4 > ( get_ray ) ;
-        break ;
+      // we want to employ OIIO to provide pixel data from the lat/lon
+      // or cubemap environments. For the best quality of lookup, OIIO
+      // needs the derivatives of the coordinate transformation. We
+      // have a special stepper which provised not only the 3D ray
+      // coordinate of the actual pick-up location, but also 3D ray
+      // coordinates for the location one sample step to the right
+      // and one step downwards in canonical target image coordinates,
+      // so instead of the usual three-component vector, this stepper
+      // yields a nine-component vector. Internally, this stepper
+      // holds three separate steppers - one for each of the ray
+      // coordinates it produces. The type of these three internal
+      // steppers is introduced as a template argument. To allow
+      // us to handle these variously-typed stepper objects with a
+      // common handle, we use a zimt::grok_get_t, which 'erases'
+      // the type and provides a uniformly-typed object, which we
+      // use as get_t object for the zimt::process invocation:
+
+      zimt::grok_get_t < float , 9 , 2 , 16 > get_ray ;
+
+      // I tried coding a variant which uses OIIO loopkup without
+      // passing the derivatives if they aren't needed (stwidth == 0)
+      // but this did not make a significant difference to performance
+      // and bloated the code. So for the time being I calculate the
+      // derivatives for all lookups with OIIO code.
+
+      switch ( args.projection )
+      {
+        case RECTILINEAR :
+          get_ray = deriv_stepper < float , 16 , rectilinear_stepper >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case FISHEYE :
+          get_ray = deriv_stepper < float , 16 , fisheye_stepper >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case STEREOGRAPHIC :
+          get_ray = deriv_stepper < float , 16 , stereographic_stepper >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case SPHERICAL :
+          get_ray = deriv_stepper < float , 16 , spherical_stepper >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case CYLINDRICAL :
+          get_ray = deriv_stepper < float , 16 , cylindrical_stepper >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case CUBEMAP :
+          get_ray = deriv_stepper < float , 16 , cubemap_stepper >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        default:
+          break ;
+      }
+
+      // the code to set up and extract data from the latlon image,
+      // or the cubemap, depends on the number of channels. That's
+      // passed as a template argument, so here we have a case
+      // switch over 'nchannels' which dispatches to the appropriate
+      // instantiations.
+
+      switch ( args.nchannels )
+      {
+        case 1:
+          work < 1 > ( get_ray ) ;
+          break ;
+        case 2:
+          work < 2 > ( get_ray ) ;
+          break ;
+        case 3:
+          work < 3 > ( get_ray ) ;
+          break ;
+        case 4:
+          work < 4 > ( get_ray ) ;
+          break ;
+      }
     }
+    else
+    {
+      // access data with bilinear interpolation from the source
+      // image (does not use OIIO's 'environemnt' or 'texture')
+    
+      zimt::grok_get_t < float , 3 , 2 , 16 > get_ray ;
+    
+      switch ( args.projection )
+      {
+        case RECTILINEAR :
+          get_ray = rectilinear_stepper < float , 16 >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case FISHEYE :
+          get_ray = fisheye_stepper < float , 16 >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case STEREOGRAPHIC :
+          get_ray = stereographic_stepper < float , 16 >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case SPHERICAL :
+          get_ray = spherical_stepper < float , 16 >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case CYLINDRICAL :
+          get_ray = cylindrical_stepper < float , 16 >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          break ;
+        case CUBEMAP :
+          get_ray = cubemap_stepper < float , 16 >
+                      ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        default:
+          break ;
+      }
+      switch ( args.nchannels )
+      {
+        case 1:
+          work < 1 > ( get_ray ) ;
+          break ;
+        case 2:
+          work < 2 > ( get_ray ) ;
+          break ;
+        case 3:
+          work < 3 > ( get_ray ) ;
+          break ;
+        case 4:
+          work < 4 > ( get_ray ) ;
+          break ;
+      }
+    }
+    if ( ! have_seq )
+      break ;
   }
 }
     

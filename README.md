@@ -396,6 +396,7 @@ and passing --help will produce this command line argument synopsis:
     -v                                 Verbose output
     --input INPUT                      input file name (mandatory)
     --output OUTPUT                    output file name (mandatory)
+    --seq SEQFILE                      image sequence file name (optional)
     --itp ITP                          interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining
     --width EXTENT                     width of the output
     --height EXTENT                    height of the output
@@ -432,6 +433,17 @@ See --6 for a way to load a cubemap from six separate cube face image files.
 
 The output will be stored under this name. See --6 for a way to store cubemaps
 to six separate cube face image files.
+
+## --seq SEQFILE         image sequence file name (optional)
+
+Alternative output of an image sequence with hfov, yaw, pitch and roll given
+as four consecutive numbers per line, one line per image. This is a new
+experimental feature, output is jpg only and named seq + number + .jpg
+Needs some tweaking - e.g. should generate image file names from a given
+pattern (format string). I intend to evolve this into a tool to produce
+video output - for now I just combine the single frames with ffmpeg, like
+
+ffmpeg -f image2 -pattern_type glob -framerate 60 -i 'seq*.jpg' -s 960x540 -c:v libx264 foo.mp4
 
 ## --itp ITP
 
@@ -573,12 +585,15 @@ samples falling into a common output pixel are pooled and only the average
 is stored. This keeps the pipeline afloat in SIMD registers, which is fast
 (as is the arithmetiic) - especially when highway or Vc are used, which
 increase SIMD performance particularly well.
-If you activate twining by selecting --itp -2, but don't pass --twine (or if
-you pass --twine 0 explicitly), extract will set up twining parameters
+
+If you activate twining by selecting --itp -2, but don't pass --twine
+(or pass --twine 0 explicitly), extract will set up twining parameters
 automatically, so that they fit the relation of input and output. If the
 output magnifies (in it's center), the twine width will be widened to
 avoid star-shaped artifacts in the output. Otherwise, the twine factor
-will be raised to avoid aliasing.
+will be raised to avoid aliasing. You can see the values which extract
+calculates if you pass -v. If the effect isn't to your liking, you can
+take the automatically calculated values as a starting point.
 
 ## --twine_width TWINE_WIDTH  widen the pick-up area of the twining filter
 
@@ -597,9 +612,19 @@ better OIIO interpolators, e.g. bicubic.
 
 ## --twine_sigma TWINE_SIGMA  use a truncated gaussian for the twining filter (default: don't)
 
-If you don't pass --twine_sigma, extract will use a simple box filter to combine the result of supersampling into single output pixels values. If you pass twine_sigma, the kernel will be derived from a gaussian with a sigma equivalent to twine_sigma times the half kernel width. This gives more weight to supersamples near the center of the pick-up.
+If you don't pass --twine_sigma, extract will use a simple box filter to combine the result of supersampling into single output pixels values. If you pass twine_sigma, the kernel will be derived from a gaussian with a sigma equivalent to twine_sigma times the half kernel width. This gives more weight to supersamples near the center of the pick-up.  If you pass -v, the filter is echoed to std::cout for inspection.
+
+You can combine this parameter with automatic twining - the twine factor and
+the twine width will be calculated automatically, then the gaussian is applied
+to the initially equal-weighted box filter. Also consider the next parameter
+which eliminates weights below a given threshold to save CPU time.
 
 ## --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
 
 If you pass twine_sigma, marginal twining kernel values may become quite small and using them as filter taps makes no sense. Pass a threshold here to suppress kernel values below the threshold. This is mainly to reduce processing time. Use -v to display the kernel and see which kernel values 'survive' the thresholding.
+This parameter makes no sense without --twine_sigma (see above): if all weights
+are equal, they'd either all be above or below the threshold.
 
+You can combine this parameter with automatic twining - the twine factor and
+the twine width will be calculated automatically, then the twine_sigma is applied,
+and finally the thresholding eliminates small weights.
