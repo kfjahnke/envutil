@@ -513,22 +513,22 @@ struct arguments
 arguments args ;
 
 // environment.h has most of the 'workhorse' code for this program.
-// it provides functinal constructs to yield pixels for coordinates.
+// it provides functional constructs to yield pixels for coordinates.
 // These functors are used with zimt::process to populate the output.
 
 #include "environment.h"
 
 // because we specialize for different channel counts with a template
 // argument (for maximum efficiency), the 'workhorse' code is in a
-// function template 'work'. There are several overloads:
+// function template 'work'. There are two overloads:
 
 // 'work' overload to produce source data from a lat/lon environment
-// image using OIIO's 'environment' oe 'texture' function, or bilinear
+// image using OIIO's 'environment' or 'texture' function, or bilinear
 // interpolation with 'twining'. All these lookup methods use 'ninepacks'
 // which are used to glean the derivatives of the coordinate transformation.
 
 template < std::size_t nchannels >
-void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
+void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
 {
   // the 'act' functor is fed 'ninepacks' - sets of three 3D ray
   // coordinates, holding information to allow the calculations
@@ -547,7 +547,13 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
 
   if ( args.itp == -2 )
   {
-    // create an 'environment' object
+    // use twining (--itp -2). first create an 'environment' object.
+    // Note how this object will persist (we declare it static), so
+    // it's only created right when control flow arrives here for
+    // the very first time (parameterization is taken from 'args').
+    // This is deliberate: subsequent invocations of 'work' are
+    // supposed to use the same environment, so it would be
+    // wasteful to set up a new one - it's an expensive asset.
 
     static environment < float , float , nchannels , 16 > env ;
 
@@ -608,16 +614,26 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
                   args.twine_width , args.twine_sigma ,
                   args.twine_threshold ) ;
 
-    // wrap the 'environment' object in a twine_t object.
+    // wrap the 'environment' object in a twine_t object and assign
+    // to 'act' - this 'groks' the twine_t object to act's type.
+    // Note how this object is not declared static: the twining
+    // parameters may change due to changing hfov from one invocation
+    // of 'work' to the next.
 
     act = twine_t < nchannels , 16 > ( env , spread ) ;
   }
   else
   {
+    // use OIIO's 'environment' or 'texture' lookup functions.
+    // These code paths are coded in the 'latlon' and 'cubemap'
+    // objects, which are created and also grokked to 'act'.
+
     if ( args.env_width == args.env_height * 2 )
     {
       // set up an environment object picking up pixel values from
-      // a lat/lon image using OIIO's 'environment' function
+      // a lat/lon image using OIIO's 'environment' function. Again
+      // we set up a static object, but it's assigned to 'act' in
+      // every invocation of 'work'.
 
       static latlon < float , float , nchannels , 16 > ll ;
       act = ll ;
@@ -633,9 +649,11 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
     }
   }
 
-  // set up an array to receive the output pixels
+  // we have the 'act' functor set up. now set up an array to
+  // receive the output pixels. Again we use a static object:
+  // the output size will remain the same.
 
-  zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
+  static zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
   
   // set up a zimt::storer to populate the target array with
   // zimt::process
@@ -645,9 +663,6 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
   // use the get, act and put components with zimt::process
   // to produce the target images
   
-  if ( args.verbose )
-    std::cout << "producing output" << std::endl ;
-  
   zimt::process ( trg.shape , get_ray , act , cstor ) ;
   
   if ( args.verbose )
@@ -656,9 +671,6 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
   // store the result to disk
 
   save_array < nchannels > ( args.output , trg ) ;
-  
-  if ( args.verbose )
-    std::cout << "done." << std::endl ;
 }
 
 // overload using an 'environment' object directly as data source.
@@ -667,7 +679,7 @@ void work ( zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
 // in contrast to the previous overload where it takes nine.
 
 template < std::size_t nchannels >
-void work ( zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
+void work ( const zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
 {
   typedef zimt::xel_t < float , 3 > crd3_t ;
   typedef zimt::xel_t < float , nchannels > px_t ;
@@ -677,13 +689,12 @@ void work ( zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
   // create the 'environment' object
 
   static environment < float , float , nchannels , 16 > env ;
-  act = env ;
 
   // set up an array to receive the output pixels
 
-  zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
+  static zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
   
-  // set up zimt::storers to populate the target array with
+  // set up a zimt::storer to populate the target array with
   // zimt::process
   
   zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
@@ -691,28 +702,18 @@ void work ( zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
   // use the get, act and put components with zimt::process
   // to produce the target images and store them to disk
   
-  if ( args.verbose )
-    std::cout << "producing output" << std::endl ;
-
-  zimt::process ( trg.shape , get_ray , act , cstor ) ;
+  zimt::process ( trg.shape , get_ray , env , cstor ) ;
   
   if ( args.verbose )
     std::cout << "saving output image: " << args.output << std::endl ;
   
   save_array < nchannels > ( args.output , trg ) ;
-  
-  if ( args.verbose )
-    std::cout << "done." << std::endl ;
 }
 
-int main ( int argc , const char ** argv )
+template < int NCH , typename stepper_t >
+void dispatch()
 {
-  // process command line arguments - the result is held in a bunch
-  // of member variables in the global 'args' object
-
-  args.init ( argc , argv ) ;
-
-  // we can do some processing here which is independent from the
+  // first do some processing here which is independent from the
   // number of channels in the pixels:
 
   bool have_seq = ( args.seqfile != std::string() ) ;
@@ -753,6 +754,7 @@ int main ( int argc , const char ** argv )
       char buffer [ 12 ] ;
       snprintf ( buffer , 12 , "%03d" , seqno ) ;
       args.output = "seq" + std::string(buffer) + ".jpg" ;
+      args.twine = 0 ;
     }
 
     // orthonormal system of basis vectors the view
@@ -776,9 +778,10 @@ int main ( int argc , const char ** argv )
     yy = r3 ( yy ) ;
     zz = r3 ( zz ) ;
 
-    // set up the steppers. note the extents of the 2D manifold
+    // set up the stepper. note the extents of the 2D manifold
     // given in model space uits. These objects will deliver 3D
-    // 'ray' coordinates as input to the 'act' functor. Note how
+    // 'ray' coordinates as input to the 'act' functor, or 9D
+    // ray and neighbouring rays (deriv_stepper). Note how
     // each projection has it's distinct type of stepper, but
     // they are all assigned to a common type, a 'grok_get_t'.
     // This uses type erasure and captures the functionality
@@ -789,150 +792,108 @@ int main ( int argc , const char ** argv )
     // groups of types with different implementation but equal
     // interface.
 
-    if ( args.itp == -1 || args.itp == -2 )
-    {
-      // we want to employ OIIO to provide pixel data from the lat/lon
-      // or cubemap environments. For the best quality of lookup, OIIO
-      // needs the derivatives of the coordinate transformation. We
-      // have a special stepper which provised not only the 3D ray
-      // coordinate of the actual pick-up location, but also 3D ray
-      // coordinates for the location one sample step to the right
-      // and one step downwards in canonical target image coordinates,
-      // so instead of the usual three-component vector, this stepper
-      // yields a nine-component vector. Internally, this stepper
-      // holds three separate steppers - one for each of the ray
-      // coordinates it produces. The type of these three internal
-      // steppers is introduced as a template argument. To allow
-      // us to handle these variously-typed stepper objects with a
-      // common handle, we use a zimt::grok_get_t, which 'erases'
-      // the type and provides a uniformly-typed object, which we
-      // use as get_t object for the zimt::process invocation:
+    stepper_t get_ray ( xx , yy , zz , args.width , args.height ,
+                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-      zimt::grok_get_t < float , 9 , 2 , 16 > get_ray ;
-      args.twine = 0 ;
+    auto getter = zimt::grok_get < typename stepper_t::value_t ,
+                       stepper_t::size ,
+                       2 ,
+                       16 > ( get_ray ) ;
 
-      // I tried coding a variant which uses OIIO loopkup without
-      // passing the derivatives if they aren't needed (stwidth == 0)
-      // but this did not make a significant difference to performance
-      // and bloated the code. So for the time being I calculate the
-      // derivatives for all lookups with OIIO code.
+    // now we can call the channel-specific 'work', with the
+    // stepper-specific getter. There are two overloads:
+    // one taking the getters yielding simple single-ray
+    // coordinates and one taking the three-ray variant
+    // needed to compute the derivatives.
 
-      switch ( args.projection )
-      {
-        case RECTILINEAR :
-          get_ray = deriv_stepper < float , 16 , rectilinear_stepper >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case FISHEYE :
-          get_ray = deriv_stepper < float , 16 , fisheye_stepper >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case STEREOGRAPHIC :
-          get_ray = deriv_stepper < float , 16 , stereographic_stepper >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case SPHERICAL :
-          get_ray = deriv_stepper < float , 16 , spherical_stepper >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case CYLINDRICAL :
-          get_ray = deriv_stepper < float , 16 , cylindrical_stepper >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case CUBEMAP :
-          get_ray = deriv_stepper < float , 16 , cubemap_stepper >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        default:
-          break ;
-      }
+    work < NCH > ( getter ) ;
 
-      // the code to set up and extract data from the latlon image,
-      // or the cubemap, depends on the number of channels. That's
-      // passed as a template argument, so here we have a case
-      // switch over 'nchannels' which dispatches to the appropriate
-      // instantiations.
+    // if we're not working a sequence, we're done now.
 
-      switch ( args.nchannels )
-      {
-        case 1:
-          work < 1 > ( get_ray ) ;
-          break ;
-        case 2:
-          work < 2 > ( get_ray ) ;
-          break ;
-        case 3:
-          work < 3 > ( get_ray ) ;
-          break ;
-        case 4:
-          work < 4 > ( get_ray ) ;
-          break ;
-      }
-    }
-    else
-    {
-      // access data with bilinear interpolation from the source
-      // image (does not use OIIO's 'environemnt' or 'texture')
-    
-      zimt::grok_get_t < float , 3 , 2 , 16 > get_ray ;
-    
-      switch ( args.projection )
-      {
-        case RECTILINEAR :
-          get_ray = rectilinear_stepper < float , 16 >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case FISHEYE :
-          get_ray = fisheye_stepper < float , 16 >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case STEREOGRAPHIC :
-          get_ray = stereographic_stepper < float , 16 >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case SPHERICAL :
-          get_ray = spherical_stepper < float , 16 >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case CYLINDRICAL :
-          get_ray = cylindrical_stepper < float , 16 >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          break ;
-        case CUBEMAP :
-          get_ray = cubemap_stepper < float , 16 >
-                      ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        default:
-          break ;
-      }
-      switch ( args.nchannels )
-      {
-        case 1:
-          work < 1 > ( get_ray ) ;
-          break ;
-        case 2:
-          work < 2 > ( get_ray ) ;
-          break ;
-        case 3:
-          work < 3 > ( get_ray ) ;
-          break ;
-        case 4:
-          work < 4 > ( get_ray ) ;
-          break ;
-      }
-    }
     if ( ! have_seq )
       break ;
   }
+}
+
+template < int NCH ,
+           template < typename , std::size_t > class STP >
+void dispatch ( int ninputs )
+{
+  switch ( ninputs )
+  {
+    case 3:
+      dispatch < NCH , STP < float , 16 > >() ;
+      break ;
+    case 9:
+      dispatch < NCH , deriv_stepper < float , 16 , STP > >() ;
+      break ;
+  }
+}
+
+template < int NCH >
+void dispatch ( int ninputs ,
+                projection_t projection )
+{
+  switch ( projection )
+  {
+    case SPHERICAL:
+      dispatch < NCH , spherical_stepper > ( ninputs ) ;
+      break ;
+    case CYLINDRICAL:
+      dispatch < NCH , cylindrical_stepper > ( ninputs ) ;
+      break ;
+    case RECTILINEAR:
+      dispatch < NCH , rectilinear_stepper > ( ninputs ) ;
+      break ;
+    case FISHEYE:
+      dispatch < NCH , fisheye_stepper > ( ninputs ) ;
+      break ;
+    case STEREOGRAPHIC:
+      dispatch < NCH , stereographic_stepper > ( ninputs ) ;
+      break ;
+    case CUBEMAP:
+      dispatch < NCH , cubemap_stepper > ( ninputs ) ;
+      break ;
+    default:
+      break ;
+  }
+}
+
+void dispatch ( int nchannels ,
+                int ninputs ,
+                projection_t projection )
+{
+  switch ( nchannels )
+  {
+    case 1:
+      dispatch < 1 > ( ninputs , projection ) ;
+      break ;
+    case 2:
+      dispatch < 2 > ( ninputs , projection ) ;
+      break ;
+    case 3:
+      dispatch < 3 > ( ninputs , projection ) ;
+      break ;
+    case 4:
+      dispatch < 4 > ( ninputs , projection ) ;
+      break ;
+  }
+}
+
+int main ( int argc , const char ** argv )
+{
+  // process command line arguments - the result is held in a bunch
+  // of member variables in the global 'args' object
+
+  args.init ( argc , argv ) ;
+
+  // find the parameters which are type-relevant to dispatch to
+  // the specialized code
+
+  int nch = args.nchannels ;
+  int ninp = ( args.itp == 1 ) ? 3 : 9 ;
+  projection_t prj = args.projection ;
+
+  dispatch ( nch , ninp , prj ) ;
 }
     

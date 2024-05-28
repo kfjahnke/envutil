@@ -115,6 +115,8 @@ template < typename T ,     // fundamental type
            std::size_t L >  // lane count
 struct stepper_base
 {
+  typedef T value_t ;
+  static const std::size_t size = 3 ;
   typedef zimt::xel_t < T , 3 > crd3_t ;
   typedef zimt::simdized_type < crd3_t , L > crd3_v ;
   typedef zimt::xel_t < T , 2 > crd2_t ;
@@ -254,10 +256,12 @@ struct stepper_base
 
 template < typename T ,     // fundamental type
            std::size_t L >  // lane count
-class spherical_stepper
+struct spherical_stepper
 : public stepper_base < T , L >
 {
   typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
   using typename base_t::crd_t ;
   using typename base_t::crd3_t ;
   using typename base_t::crd3_v ;
@@ -422,10 +426,12 @@ public:
 
 template < typename T ,     // fundamental type
            std::size_t L >  // lane count
-class cylindrical_stepper
+struct cylindrical_stepper
 : public stepper_base < T , L >
 {
   typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
   using typename base_t::crd_t ;
   using typename base_t::crd3_t ;
   using typename base_t::crd3_v ;
@@ -535,10 +541,12 @@ public:
 
 template < typename T ,     // fundamental type
            std::size_t L >  // lane count
-class rectilinear_stepper
+struct rectilinear_stepper
 : public stepper_base < T , L >
 {
   typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
   using typename base_t::crd_t ;
   using typename base_t::crd3_t ;
   using typename base_t::crd3_v ;
@@ -645,6 +653,8 @@ struct fisheye_stepper
 : public stepper_base < T , L >
 {
   typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
   using typename base_t::crd_t ;
   using typename base_t::crd3_t ;
   using typename base_t::crd3_v ;
@@ -767,6 +777,8 @@ struct stereographic_stepper
 : public stepper_base < T , L >
 {
   typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
   using typename base_t::crd_t ;
   using typename base_t::crd3_t ;
   using typename base_t::crd3_v ;
@@ -878,10 +890,12 @@ struct stereographic_stepper
 
 template < typename T ,     // fundamental type
            std::size_t L >  // lane count
-class cubemap_stepper
+struct cubemap_stepper
 : public stepper_base < T , L >
 {
   typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
   using typename base_t::crd_t ;
   using typename base_t::crd3_t ;
   using typename base_t::crd3_v ;
@@ -1054,6 +1068,8 @@ template < typename T ,     // fundamental type
            template < typename , size_t > class S >
 struct deriv_stepper
 {
+  typedef T value_t ;
+  static const std::size_t size = 9 ;
   typedef zimt::xel_t < T , 3 > crd3_t ;
   typedef zimt::simdized_type < crd3_t , L > crd3_v ;
   typedef zimt::xel_t < T , 9 > crd9_t ;

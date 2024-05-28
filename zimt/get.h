@@ -1059,6 +1059,21 @@ grok_get_t < T , N , D , L > grok_get
   return grok_get_t < T , N , D , L > ( grokkee ) ;
 }
 
+// grok_get is a factory function to 'grok' a get_t object.
+// using ATD, the invocation to 'grok' some get_t x is simply
+// auto gk = grok_get ( x ) ;
+// gk can then be used wherever a get_t is required.
+
+template < typename T ,     // fundamental type
+           std::size_t N ,  // channel count
+           std::size_t D ,  // dimensions
+           std::size_t L ,  // lane count
+           class G >
+grok_get_t < T , N , D , L > grok_get ( G grokkee )
+{
+  return grok_get_t < T , N , D , L > ( grokkee ) ;
+}
+
 } ; // namespace zimt
 
 #define ZIMT_GET_H
