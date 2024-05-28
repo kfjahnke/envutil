@@ -396,7 +396,7 @@ struct arguments
     projection = projection_t ( prj ) ;
 
     assert ( input != std::string() ) ;
-    assert ( output != std::string() ) ;
+    assert ( output != std::string() || seqfile != std::string() ) ;
     assert ( projection != PRJ_NONE ) ;
     assert ( width > 0 ) ;
     assert ( height > 0 ) ;
@@ -445,16 +445,21 @@ struct arguments
       std::cout << "interpolation: "
               << ( itp == 1 ? "direct bilinear" : "uses OIIO" )
               << std::endl ;
+      std::cout << "output width: " << width
+                << " height: " << height << std::endl ;
     }
 
     if ( seqfile == std::string() )
     {
+      // single-image output (no sequence file given)
+      // if there is a sequence file, the variables which are set
+      // here will be set for every frame specified in the sequence,
+      // and single-image parameters from the CL have no effect.
+
       if ( verbose)
       {
         std::cout << "output: " << output << std::endl ;
         std::cout << "output projection: " << prj_str << std::endl ;
-        std::cout << "width: " << width
-                  << " height: " << height << std::endl ;
 
         if ( hfov > 0.0 )
           std::cout << "output hfov: " << hfov << std::endl ;
@@ -525,7 +530,8 @@ arguments args ;
 // 'work' overload to produce source data from a lat/lon environment
 // image using OIIO's 'environment' or 'texture' function, or bilinear
 // interpolation with 'twining'. All these lookup methods use 'ninepacks'
-// which are used to glean the derivatives of the coordinate transformation.
+// which are used to glean the derivatives of the coordinate
+// transformation, on top of the actual pick-up coordinate.
 
 template < std::size_t nchannels >
 void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
@@ -603,11 +609,20 @@ void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
     {
       if ( verbose )
       {
-        std::cout << "using twine: " << args.twine
+        std::cout << "using fixed twine: " << args.twine
                   << " twine_width: " << args.twine_width
                   << std::endl ;
       }
     }
+
+    // with the given twining parameters, we can now set up a 'spread':
+    // the generalized equivalent of a filter kernel. While a 'standard'
+    // convolution kernel has pre-determined geometry (it's a matrix of
+    // coefficients meant to be applied to an equally-shaped matrix of
+    // data) - here we have three values for each coefficient: the
+    // first two define the position of the look-up relative to the
+    // 'central' position, and the third is the weight and corresponds
+    // to a 'normal' convolution coefficient.
 
     std::vector < zimt::xel_t < float , 3 > > spread ;
     make_spread ( spread , args.twine , args.twine ,
@@ -627,6 +642,9 @@ void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
     // use OIIO's 'environment' or 'texture' lookup functions.
     // These code paths are coded in the 'latlon' and 'cubemap'
     // objects, which are created and also grokked to 'act'.
+    // There, the 'ninepack' is used to calculate the derivatives
+    // and then all the data needed for the look-up are passed to
+    // the relevant (batched) OIIO look-up function.
 
     if ( args.env_width == args.env_height * 2 )
     {
@@ -649,19 +667,24 @@ void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
     }
   }
 
-  // we have the 'act' functor set up. now set up an array to
+  // we have the 'act' functor set up. now we set up an array to
   // receive the output pixels. Again we use a static object:
-  // the output size will remain the same.
+  // the output size will remain the same, so the array can be
+  // re-used every time and we don't have to deallocate and then
+  // reallocate the memory.
 
   static zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
   
   // set up a zimt::storer to populate the target array with
-  // zimt::process
+  // zimt::process. This is the third component needed for
+  // zimt::process - we already have the get_t and act.
   
   zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
   
   // use the get, act and put components with zimt::process
-  // to produce the target images
+  // to produce the target images. This is the point where all
+  // the state we have built up is finally put to use, running
+  // a multithreaded pipeline which fills the target image.
   
   zimt::process ( trg.shape , get_ray , act , cstor ) ;
   
@@ -675,15 +698,18 @@ void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
 
 // overload using an 'environment' object directly as data source.
 // This uses bilinear interplation directly from the source image.
-// Note how the 'get_ray' object takes only three input channels,
-// in contrast to the previous overload where it takes nine.
+// Note how the 'get_ray' object has only three input channels,
+// in contrast to the previous overload where it has nine. This
+// is the 'fast lane'.
 
 template < std::size_t nchannels >
 void work ( const zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
 {
   typedef zimt::xel_t < float , 3 > crd3_t ;
   typedef zimt::xel_t < float , nchannels > px_t ;
-  
+
+  // this is to accomodate the 'act' functor
+
   zimt::grok_type < crd3_t , px_t , 16 > act ;
 
   // create the 'environment' object and 'grok' it to 'act'
@@ -704,12 +730,24 @@ void work ( const zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
   // to produce the target images and store them to disk
   
   zimt::process ( trg.shape , get_ray , act , cstor ) ;
-  
+
+  // save the result
+
   if ( args.verbose )
     std::cout << "saving output image: " << args.output << std::endl ;
   
   save_array < nchannels > ( args.output , trg ) ;
 }
+
+// to call the apprpriate template instantiation and overload of
+// 'work' we need to do some dispatching: picking types depending
+// on run-time variables. We achieve this with a staged 'dispatch'
+// routine: every stage processes one argument and dispatches to
+// specialized code. The least specialized dispatch variant is
+// the lowest one down, this here is the final stage where we have
+// the number of channels and the stepper as template arguments.
+// Here we proceed to set up more state which is common to all
+// code paths and finally call 'work' to run the pixel pipeline.
 
 template < int NCH , typename stepper_t >
 void dispatch()
@@ -758,14 +796,14 @@ void dispatch()
       args.twine = 0 ;
     }
 
-    // orthonormal system of basis vectors the view
+    // orthonormal system of basis vectors for the view
 
     crd3_t xx { 1.0 , 0.0 , 0.0 } ;
     crd3_t yy { 0.0 , 1.0 , 0.0 } ;
     crd3_t zz { 0.0 , 0.0 , 1.0 } ;
 
-    // the three vectors are rotated with the given yaw, pitch
-    // and roll, and later passed on the to 'steppers', the objects
+    // the three vectors are rotated with the given yaw, pitch and
+    // roll, and later passed on to the to 'steppers', the objects
     // which provide 3D 'ray' coordinates. They incorporate the
     // rotated basis in their ray generation, resulting in
     // appropriately oriented ray coordinates which can be formed
@@ -788,7 +826,7 @@ void dispatch()
     // This uses type erasure and captures the functionality
     // in std::functions, and the resulting object is only
     // characterized by it's input and output type and lane
-    // count. The uniform type alows us to pass these objects
+    // count. The uniform type allows us to pass these objects
     // around with a common type - a convenient way of harnessing
     // groups of types with different implementation but equal
     // interface.
@@ -796,10 +834,8 @@ void dispatch()
     stepper_t get_ray ( xx , yy , zz , args.width , args.height ,
                         args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-    auto getter = zimt::grok_get < typename stepper_t::value_t ,
-                       stepper_t::size ,
-                       2 ,
-                       16 > ( get_ray ) ;
+    zimt::grok_get_t < float , stepper_t::size ,  2 , 16 >
+          getter ( get_ray ) ;
 
     // now we can call the channel-specific 'work', with the
     // stepper-specific getter. There are two overloads:
@@ -816,6 +852,12 @@ void dispatch()
   }
 }
 
+// we already have the number of colour channels and the type of the
+// stepper as template arguments, now we dispatch depending on
+// 'ninputs': three means it's an ordinary lookup using the stepper
+// directly, and nine means it's a lookup using ninepacks and
+// working with the derivatives.
+
 template < int NCH ,
            template < typename , std::size_t > class STP >
 void dispatch ( int ninputs )
@@ -830,6 +872,11 @@ void dispatch ( int ninputs )
       break ;
   }
 }
+
+// we have the number of channels as a template argument from the
+// dispatch below, now we dispatch on the projection and instantiate
+// the next dispatch level with a stepper type which fits the
+// projection.
 
 template < int NCH >
 void dispatch ( int ninputs ,
@@ -859,6 +906,9 @@ void dispatch ( int ninputs ,
       break ;
   }
 }
+
+// dispatch by the number of colour channels. We process one to four,
+// where the usefulness of two channels isn't clear.
 
 void dispatch ( int nchannels ,
                 int ninputs ,
