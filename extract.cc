@@ -686,9 +686,10 @@ void work ( const zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
   
   zimt::grok_type < crd3_t , px_t , 16 > act ;
 
-  // create the 'environment' object
+  // create the 'environment' object and 'grok' it to 'act'
 
   static environment < float , float , nchannels , 16 > env ;
+  act = env ;
 
   // set up an array to receive the output pixels
 
@@ -702,7 +703,7 @@ void work ( const zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
   // use the get, act and put components with zimt::process
   // to produce the target images and store them to disk
   
-  zimt::process ( trg.shape , get_ray , env , cstor ) ;
+  zimt::process ( trg.shape , get_ray , act , cstor ) ;
   
   if ( args.verbose )
     std::cout << "saving output image: " << args.output << std::endl ;
