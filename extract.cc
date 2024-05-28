@@ -237,8 +237,6 @@ struct arguments
   std::string input ;
   std::string output ;
   std::string seqfile ;
-  std::string metamatch ;
-  std::regex field_re ;
   std::size_t nchannels ;
   int itp , twine  ;
   double twine_width , twine_sigma , twine_threshold ;
@@ -246,6 +244,9 @@ struct arguments
   float stwidth , stblur ;
   bool conservative_filter ;
   std::unique_ptr<ImageInput> inp ;
+
+  std::string metamatch ;
+  std::regex field_re ;
 
   // the 'arguments' object's 'init' takes the main program's argc
   // and argv.
@@ -581,16 +582,23 @@ void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
         // if the transformation magnifies, we use a moderate twine
         // size and a twine_width equal to the magnification, to
         // avoid the star-shaped artifacts from the bilinear
-        // interpolation used for the lookup of the contributing rays
+        // interpolation used for the lookup of the contributing
+        // rays. If mag is small, the star-shaped artifacts aren't
+        // really an issue, and twine values beyond, say, five
+        // do little to improve the filter response, so we cap
+        // the twine value at five, but lower it when approaching
+        // mag 1, down to two - where the next case down starts.
 
-        args.twine = 5 ;
+        args.twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
         args.twine_width = mag ;
       }
       else
       {
         // otherwise, we use a twine size which depends on the
         // downscaling factor (reciprocal of 'mag') and a twine_width
-        // of 1.0: we only want anti-aliasing
+        // of 1.0: we only want anti-aliasing. picking a sufficiently
+        // large twine value guarantees that we're not skipping any
+        // pixels in the source (due to undersampling).
 
         args.twine = int ( 1.0 + 1.0 / mag ) ;
         args.twine_width = 1.0 ;
