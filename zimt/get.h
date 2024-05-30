@@ -1059,10 +1059,9 @@ grok_get_t < T , N , D , L > grok_get
   return grok_get_t < T , N , D , L > ( grokkee ) ;
 }
 
-// grok_get is a factory function to 'grok' a get_t object.
-// using ATD, the invocation to 'grok' some get_t x is simply
-// auto gk = grok_get ( x ) ;
-// gk can then be used wherever a get_t is required.
+// overload which takes grokkee type with different type signature.
+// to use this overload, you'll have to pass template arguments
+// T, N, D and L.
 
 template < typename T ,     // fundamental type
            std::size_t N ,  // channel count

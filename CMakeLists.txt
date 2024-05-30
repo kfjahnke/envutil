@@ -137,7 +137,7 @@ add_executable(${_project_name} envutil.cc)
 add_executable(extract extract.cc)
 
 target_link_libraries(${_project_name} pthread ${required_libraries})
-target_link_libraries(extract pthread ${required_libraries})
+target_link_libraries(extract pthread ${required_libraries} avutil avcodec swscale)
 
 # TODO: currently, optimization with -Ofast does not work
 
