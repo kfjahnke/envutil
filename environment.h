@@ -450,9 +450,9 @@ struct repix
 #include "metrics.h"
 #include <filesystem>
 
-// stripped-down version of sixfold_t, omitting the use of OIIO's
-// 'texture' function and twining, using bilinear interpolation
-// only. The focus here is on testing the steppers in stepper.h.
+// sixfold_t provides an internal representation of a cubemap
+// with widened support, to provide for easy mip-mapping and
+// interpolation.
 
 template < std::size_t nchannels >
 struct sixfold_t
@@ -486,9 +486,9 @@ struct sixfold_t
   px_t * p_ul ;
 
   sixfold_t ( std::size_t _face_px ,
+              double _face_fov = M_PI_2 ,
               std::size_t _support_min_px = 4UL ,
-              std::size_t _tile_px = 64UL ,
-              double _face_fov = M_PI_2 )
+              std::size_t _tile_px = 64UL )
   : metrics_t ( _face_px ,
                 _face_fov ,
                 _support_min_px ,
@@ -1521,8 +1521,11 @@ public:
     }
     if ( C >= 4 )
     {
-      sixfold_t<4> sf ( w ) ;
-      sf.load ( inp ) ;
+      sixfold_t<4> sf ( w , args.cbmfov ) ;
+      if ( args.multiple_input )
+        sf.load ( args.cfs.get_filenames() ) ;
+      else
+        sf.load ( inp ) ;
       inp->close() ;
       sf.mirror_around() ;
       sf.fill_support ( 1 ) ;
@@ -1534,8 +1537,11 @@ public:
     }
     else if ( C == 3 )
     {
-      sixfold_t<3> sf ( w ) ;
-      sf.load ( inp ) ;
+      sixfold_t<3> sf ( w , args.cbmfov ) ;
+      if ( args.multiple_input )
+        sf.load ( args.cfs.get_filenames() ) ;
+      else
+        sf.load ( inp ) ;
       inp->close() ;
       sf.mirror_around() ;
       sf.fill_support ( 1 ) ;
@@ -1547,8 +1553,11 @@ public:
     }
     else if ( C == 2 )
     {
-      sixfold_t<2> sf ( w ) ;
-      sf.load ( inp ) ;
+      sixfold_t<2> sf ( w , args.cbmfov ) ;
+      if ( args.multiple_input )
+        sf.load ( args.cfs.get_filenames() ) ;
+      else
+        sf.load ( inp ) ;
       inp->close() ;
       sf.mirror_around() ;
       sf.fill_support ( 1 ) ;
@@ -1560,8 +1569,11 @@ public:
     }
     else
     {
-      sixfold_t<1> sf ( w ) ;
-      sf.load ( inp ) ;
+      sixfold_t<1> sf ( w , args.cbmfov ) ;
+      if ( args.multiple_input )
+        sf.load ( args.cfs.get_filenames() ) ;
+      else
+        sf.load ( inp ) ;
       inp->close() ;
       sf.mirror_around() ;
       sf.fill_support ( 1 ) ;
@@ -1686,8 +1698,11 @@ public:
       }
       if ( C >= 4 )
       {
-        sixfold_t<4> sf ( w ) ;
-        sf.load ( inp ) ;
+        sixfold_t<4> sf ( w , args.cbmfov ) ;
+        if ( args.multiple_input )
+          sf.load ( args.cfs.get_filenames() ) ;
+        else
+          sf.load ( inp ) ;
         inp->close() ;
         sf.mirror_around() ;
         sf.fill_support ( 1 ) ;
@@ -1698,8 +1713,11 @@ public:
       }
       else if ( C == 3 )
       {
-        sixfold_t<3> sf ( w ) ;
-        sf.load ( inp ) ;
+        sixfold_t<3> sf ( w , args.cbmfov ) ;
+        if ( args.multiple_input )
+          sf.load ( args.cfs.get_filenames() ) ;
+        else
+          sf.load ( inp ) ;
         inp->close() ;
         sf.mirror_around() ;
         sf.fill_support ( 1 ) ;
@@ -1710,8 +1728,11 @@ public:
       }
       else if ( C == 2 )
       {
-        sixfold_t<2> sf ( w ) ;
-        sf.load ( inp ) ;
+        sixfold_t<2> sf ( w , args.cbmfov ) ;
+        if ( args.multiple_input )
+          sf.load ( args.cfs.get_filenames() ) ;
+        else
+          sf.load ( inp ) ;
         inp->close() ;
         sf.mirror_around() ;
         sf.fill_support ( 1 ) ;
@@ -1722,8 +1743,11 @@ public:
       }
       else
       {
-        sixfold_t<1> sf ( w ) ;
-        sf.load ( inp ) ;
+        sixfold_t<1> sf ( w , args.cbmfov ) ;
+        if ( args.multiple_input )
+          sf.load ( args.cfs.get_filenames() ) ;
+        else
+          sf.load ( inp ) ;
         inp->close() ;
         sf.mirror_around() ;
         sf.fill_support ( 1 ) ;

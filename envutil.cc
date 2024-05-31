@@ -773,7 +773,7 @@ struct sixfold_t
   void store_cubemap ( const std::vector < std::string > & filename6 ) const
   {
     const int xres = face_px ;
-    const int yres = 6 * face_px ;
+    const int yres = face_px ;
 
     if ( verbose )
     {

@@ -256,7 +256,7 @@ struct view_t
   // of the data.
 
   view_t window ( const index_type & start ,
-                  const index_type & end )
+                  const index_type & end ) const
   {
     return view_t ( origin + offset ( start ) ,
                     strides ,

@@ -189,32 +189,150 @@ using OIIO::ImageOutput ;
 using OIIO::TypeDesc ;
 using OIIO::ImageSpec ;
 
+// struct image_series holds a format string for a series of numbered
+// images. It's a standard printf-type format string containing precisely
+// one %-sequence accepting an integer - e.g. %04d
+// It has operator[] to provide the filename fixed with the given index.
+
+struct image_series
+{
+  std::string format_string ;
+  std::size_t buffer_size ;
+
+  image_series ( const std::string & _format_string )
+  : format_string ( _format_string )
+  {
+    // scan the format string for percent signs. Only one of them
+    // is allowed.
+
+    int percent_count = 0 ;
+    int percent_pos = 0 ;
+    int pos = 0 ;
+
+    for ( auto const & c : format_string )
+    {
+      if ( c == '%' )
+      {
+        percent_count++ ;
+        percent_pos = pos ;
+      }
+      ++pos ;
+    }
+
+    if ( percent_count == 1 )
+      buffer_size = pos + 16 ;
+  }
+
+  bool valid()
+  {
+    return ( buffer_size != 0 ) ;
+  }
+
+  std::string operator[] ( const std::size_t & index )
+  {
+    if ( buffer_size )
+    {
+      char buffer [ buffer_size ] ;
+      snprintf ( buffer , buffer_size ,
+                 format_string.c_str() , int(index) ) ;
+      return buffer ;
+    }
+    else
+    {
+      return format_string ;
+    }
+  }
+} ;
+
+// similar class, used for six cube faces
+
+struct cubeface_series
+{
+  std::string format_string ;
+  std::vector < std::string > filename ;
+  std::size_t buffer_size ;
+
+  cubeface_series() = default ;
+
+  cubeface_series ( const std::string & _format_string )
+  : format_string ( _format_string )
+  {
+    // scan the format string for percent signs. Only one of them
+    // is allowed.
+
+    int percent_count = 0 ;
+    int percent_pos = 0 ;
+    int pos = 0 ;
+
+    for ( auto const & c : format_string )
+    {
+      if ( c == '%' )
+      {
+        percent_count++ ;
+        percent_pos = pos ;
+      }
+      ++pos ;
+    }
+
+    buffer_size = 0 ;
+
+    if ( percent_count == 1 )
+    {
+      buffer_size = pos + 16 ;
+
+      char buffer [ buffer_size ] ;
+      snprintf ( buffer , buffer_size , format_string.c_str() , "left" ) ;
+      filename.push_back ( buffer ) ;
+      snprintf ( buffer , buffer_size , format_string.c_str() , "right" ) ;
+      filename.push_back ( buffer ) ;
+      snprintf ( buffer , buffer_size , format_string.c_str() , "top" ) ;
+      filename.push_back ( buffer ) ;
+      snprintf ( buffer , buffer_size , format_string.c_str() , "bottom" ) ;
+      filename.push_back ( buffer ) ;
+      snprintf ( buffer , buffer_size , format_string.c_str() , "front" ) ;
+      filename.push_back ( buffer ) ;
+      snprintf ( buffer , buffer_size , format_string.c_str() , "back" ) ;
+      filename.push_back ( buffer ) ;
+    }
+  }
+
+  bool valid()
+  {
+    return filename.size() == 6 ;
+  }
+
+  // we provide two operator[] overloads. The first one accesses the
+  // cubeface filename by number, the second inserts a given orientation
+  // string.
+
+  std::string operator[] ( const std::size_t & index )
+  {
+    assert ( buffer_size != 0 && index < 6 ) ;
+    return filename [ index ] ;
+  }
+
+  std::string operator[] ( const std::string & face )
+  {
+    char buffer [ buffer_size ] ;
+    snprintf ( buffer , buffer_size ,
+               format_string.c_str() ,
+               face.c_str() ) ;
+    return buffer ;
+  }
+
+  // return a reference to the set of six names
+
+  const std::vector < std::string > & get_filenames()
+  {
+    return filename ;
+  }
+} ;
+
 // from the envutil project, we use geometry.h for the coordinate
 // transformations needed when dealing with environment images,
 // especially cubemaps.
 
 #include "geometry.h"
-
-// helper function to save a zimt array of pixels to an image file
-
-template < std::size_t nchannels >
-void save_array ( const std::string & filename ,
-                  const zimt::view_t
-                    < 2 ,
-                      zimt::xel_t < float , nchannels >
-                    > & pixels ,
-                  bool is_latlon = false )
-{
-  auto out = ImageOutput::create ( filename );
-  assert ( out != nullptr ) ;
-  ImageSpec ospec ( pixels.shape[0] , pixels.shape[1] ,
-                    nchannels , TypeDesc::HALF ) ;
-  out->open ( filename , ospec ) ;
-
-  auto success = out->write_image ( TypeDesc::FLOAT , pixels.data() ) ;
-  assert ( success ) ;
-  out->close();
-}
 
 // a large part of the code in this file is dedicated to processing
 // command line arguments. We use OpenImageIO's ArgParse object, which
@@ -237,11 +355,14 @@ using OIIO::Filesystem::convert_native_arguments ;
 struct arguments
 {
   bool verbose ;
+  bool multiple_input ;
+  cubeface_series cfs ;
   double yaw , pitch , roll ;
   projection_t projection , env_projection ;
   std::string prj_str ;
   double x0 , x1 , y0 , y1 ;
-  double hfov ;
+  double hfov , cbmfov ;
+  bool ctc ;
   double step , env_step ;
   std::size_t width , height ;
   std::size_t env_width , env_height ;
@@ -258,8 +379,8 @@ struct arguments
 
   std::string metamatch ;
   std::regex field_re ;
-  int bitrate ;
-  int fps ;
+  std::string codec ;
+  int mbps , fps ;
 
   // the 'arguments' object's 'init' takes the main program's argc
   // and argv.
@@ -279,12 +400,27 @@ struct arguments
     ap.arg("--input INPUT")
       .help("input file name (mandatory)")
       .metavar("INPUT");
+    ap.arg("--cbmfov ANGLE")
+      .help("horiziontal field of view of cubemap input (in degrees)")
+      .metavar("ANGLE");
+    ap.arg("--ctc CTC")
+      .help("flag indicating how fov is measured between marginal pixel centers")
+      .metavar("CTC");
     ap.arg("--output OUTPUT")
       .help("output file name (mandatory)")
       .metavar("OUTPUT");
     ap.arg("--seqfile SEQFILE")
       .help("image sequence file name (optional)")
       .metavar("OUTPUT");
+    ap.arg("--codec CODEC")
+      .help("video codec for video sequence output (default: libx265)")
+      .metavar("CODEC");
+    ap.arg("--mbps MBPS")
+      .help("output video with MBPS Mbit/sec (default: 8)")
+      .metavar("MBPS");
+    ap.arg("--fps FPS")
+      .help("output video FPS frames/sec (default: 60)")
+      .metavar("FPS");
     ap.arg("--itp ITP")
       .help("interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining")
       .metavar("ITP");
@@ -374,6 +510,9 @@ struct arguments
     input = ap["input"].as_string ( "" ) ;
     output = ap["output"].as_string ( "" ) ;
     seqfile = ap["seqfile"].as_string ( "" ) ;
+    codec = ap["codec"].as_string ( "libx265" ) ; 
+    mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
+    fps = ap["fps"].get<int>(60);
     itp = ap["itp"].get<int>(1);
     twine = ap["twine"].get<int>(0);
     twine_width = ap["twine_width"].get<float>(1.0);
@@ -394,6 +533,8 @@ struct arguments
     stblur = ap["stblur"].get<float> ( 0 ) ;
     height = ap["height"].get<int> ( 0 ) ;
     hfov = ap["hfov"].get<float>(0.0);
+    cbmfov = ap["cbmfov"].get<float>(90.0);
+    ctc = ap["ctc"].get<int>(0);
     if ( hfov != 0.0 )
       x0 = x1 = y0 = y1 = 0 ;
     yaw = ap["yaw"].get<float>(0.0);
@@ -409,10 +550,6 @@ struct arguments
     }
     projection = projection_t ( prj ) ;
 
-    // TODO: accept CL args
-    bitrate = 4000000 ;
-    fps = 60 ;
-    
     assert ( input != std::string() ) ;
     assert ( output != std::string() || seqfile != std::string() ) ;
     assert ( projection != PRJ_NONE ) ;
@@ -421,36 +558,94 @@ struct arguments
     if ( projection == CUBEMAP )
       assert ( height = 6 * width ) ;
 
+    cbmfov *= M_PI / 180.0 ;
+
     // some member variables in the args object are gleaned from
-    // the input image:
+    // the input image.
 
-    inp = ImageInput::open ( input ) ;
-    assert ( inp ) ;
+    // first we check for percent signs in the input filename. If
+    // we find one, we assume that the input is a cubemap consisting
+    // of six separate images following a naming scheme described by
+    // the string in 'input' which is treated as a format string.
 
-    const ImageSpec &spec = inp->spec() ;
-
-    env_width = spec.width ;
-    env_height = spec.height ;
-    nchannels = spec.nchannels ;
-
-    assert (    env_width == env_height * 2
-             || env_height == env_width * 6 ) ;
-
-    if ( env_width == env_height * 2 )
+    auto has_percent = input.find_first_of ( "%" ) ;
+    if ( has_percent != std::string::npos )
     {
-      env_projection = SPHERICAL ;
-      env_step = 2.0 * M_PI / env_width ;
+      // input must be a set of six cubeface images, that's the
+      // only way how we accept a format string.
+
+      cfs = cubeface_series ( input ) ;
+      multiple_input = cfs.valid() ;
+      if ( multiple_input )
+      {
+        // let's open the first cube face to extract the metrics.
+        // the cubemap's 'load' routine will check all images in
+        // turn, so we needn't do that here.
+
+        inp = ImageInput::open ( cfs[0] ) ;
+        assert ( inp ) ;
+
+        const ImageSpec &spec = inp->spec() ;
+
+        assert ( spec.width == spec.height ) ;
+        env_width = spec.width ;
+        env_height = spec.height * 6 ;
+        nchannels = spec.nchannels ;
+        env_projection = CUBEMAP ;
+        if ( ctc )
+        {
+          double half_md = tan ( cbmfov / 2.0 ) ;
+          half_md *= ( ( env_width + 1.0 ) / env_width ) ;
+          cbmfov = atan ( half_md ) * 2.0 ;
+          if ( verbose )
+            std::cout << "ctc is set, adjusted cbmfov to "
+                      << ( cbmfov * 180.0 / M_PI ) << std::endl ;
+        }
+        env_step = cbmfov / env_width ;
+      }
     }
-    else if ( env_width * 6 == env_height )
+
+    if ( ! multiple_input )
     {
-      env_projection = CUBEMAP ;
-      env_step = M_PI_2 / env_width ;
-    }
-    else
-    {
-      std::cerr << "input image must have 2:1 or 1:6 aspect ratio"
-                << std::endl ;
-      exit ( -1 ) ;
+      // we have a single image as input.
+
+      inp = ImageInput::open ( input ) ;
+      assert ( inp ) ;
+
+      const ImageSpec &spec = inp->spec() ;
+
+      env_width = spec.width ;
+      env_height = spec.height ;
+      nchannels = spec.nchannels ;
+
+      assert (    env_width == env_height * 2
+               || env_height == env_width * 6 ) ;
+
+      if ( env_width == env_height * 2 )
+      {
+        env_projection = SPHERICAL ;
+        env_step = 2.0 * M_PI / env_width ;
+      }
+      else if ( env_width * 6 == env_height )
+      {
+        if ( ctc )
+        {
+          double half_md = tan ( cbmfov / 2.0 ) ;
+          half_md *= ( ( env_width + 1.0 ) / env_width ) ;
+          cbmfov = atan ( half_md ) * 2.0 ;
+          if ( verbose )
+            std::cout << "ctc is set, adjusted cbmfov to "
+                      << ( cbmfov * 180.0 / M_PI ) << std::endl ;
+        }
+        env_projection = CUBEMAP ;
+        env_step = cbmfov / env_width ;
+      }
+      else
+      {
+        std::cerr << "input image must have 2:1 or 1:6 aspect ratio"
+                  << std::endl ;
+        exit ( -1 ) ;
+      }
     }
 
     if ( verbose )
@@ -534,6 +729,71 @@ struct arguments
 // 'args' object.
 
 arguments args ;
+
+// helper function to save a zimt array of pixels to an image file, or
+// to a set of six cube face images, if 'output' has a format string.
+
+template < std::size_t nchannels >
+void save_array ( const std::string & filename ,
+                  const zimt::view_t
+                    < 2 ,
+                      zimt::xel_t < float , nchannels >
+                    > & pixels ,
+                  bool is_latlon = false )
+{
+  if ( args.projection == CUBEMAP )
+  {
+    // output is a cubemap, let's see if 'output' is a format
+    // string for six separate cube faces
+
+    assert ( pixels.shape[1] == 6 * pixels.shape[0] ) ;
+
+    auto has_percent = filename.find_first_of ( "%" ) ;
+    if ( has_percent != std::string::npos )
+    {
+      // input must be a set of six cubeface images, that's the
+      // only way how we accept a format string.
+
+      cubeface_series cfs ( filename ) ;
+      if ( cfs.valid() )
+      {
+        // we'll call save_array recursively for the single images, hence:
+
+        args.projection = RECTILINEAR ;
+
+        // save six subarrays to individual images
+
+        std::size_t w = pixels.shape[0] ;
+        for ( std::size_t i = 0 ; i < 6 ; i++ )
+        {
+          save_array ( cfs[i] ,
+                       pixels.window ( { 0L , long ( i * w ) } ,
+                                       { long ( w ) , long ( ( i + 1 ) * w ) } ) ) ;
+        }
+
+        // restore the projection in 'args'
+
+        args.projection = CUBEMAP ;
+
+        // we're done.
+
+        return ;
+      }
+    }
+  }
+
+  // if we land here, we're supposed to store an ordinary single image
+
+  auto out = ImageOutput::create ( filename );
+  assert ( out != nullptr ) ;
+  ImageSpec ospec ( pixels.shape[0] , pixels.shape[1] ,
+                    nchannels , TypeDesc::HALF ) ;
+  out->open ( filename , ospec ) ;
+
+  auto success = out->write_image ( TypeDesc::FLOAT , pixels.data() ) ;
+  assert ( success ) ;
+  out->close();
+}
 
 // quick shot at encoding video: I'm using an example file from the ffmpeg
 // examples section, with some adaptations to bend the C code to C++,
@@ -662,7 +922,7 @@ struct frame_sink
         exit(1);
 
     /* put sample parameters */
-    c->bit_rate = args.bitrate ;
+    c->bit_rate = args.mbps ;
     /* resolution must be a multiple of two */
     c->width = args.width ;
     c->height = args.height ;
@@ -862,7 +1122,9 @@ struct frame_sink
 // here's our interface to the modified ffmpeg example code:
 // this function takes a frame's worth of data encoded as a
 // zimt::view, sets up the frame_sink object when first called
-// and uses it to encode one frame per call.
+// and uses it to encode one frame per call. Alternatively,
+// if 'args.output' is parsed as a format string, individual
+// frame images are produced.
 
 template < std::size_t nchannels >
 void push_video_frame ( const zimt::view_t
@@ -870,8 +1132,18 @@ void push_video_frame ( const zimt::view_t
                           zimt::xel_t < float , nchannels >
                         > & pixels )
 {
-  static frame_sink video ( "out.mp4" , "libx265" ) ;
-  video.encode_frame ( pixels ) ;
+  static image_series is ( args.output ) ;
+  static int index = 0 ;
+  if ( is.valid() )
+  {
+    save_array ( is [ index ] , pixels ) ;
+    ++index ;
+  }
+  else
+  {
+    static frame_sink video ( args.output.c_str() , args.codec.c_str() ) ;
+    video.encode_frame ( pixels ) ;
+  }
 }
 
 // environment.h has most of the 'workhorse' code for this program.
@@ -1141,7 +1413,6 @@ void dispatch()
     assert ( seqstream.good() ) ;
   }
 
-  int seqno = 0 ;
   while ( true )
   {
     if ( have_seq )
@@ -1167,10 +1438,6 @@ void dispatch()
       assert ( args.x0 < args.x1 ) ;
       assert ( args.y0 < args.y1 ) ;
       args.step = ( args.x1 - args.x0 ) / args.width ;
-      ++seqno ;
-      char buffer [ 12 ] ;
-      snprintf ( buffer , 12 , "%03d" , seqno ) ;
-      args.output = "seq" + std::string(buffer) + ".jpg" ;
       args.twine = 0 ;
     }
 

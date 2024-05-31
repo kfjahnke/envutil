@@ -79,12 +79,22 @@ too dark.
 
 Any image file which has 2:1 aspect ratio will be accepted as lat/lon environment
 map, and any image file with 1:6 aspect ratio will be accepted as a cubemap.
-See --6 for a way to load a cubemap from six separate cube face image files. 
+If you pass a string containing a percent sign, extract will consider this as
+a format string which can be used to specify six separate cube face images.
+The string will be used like a 'normal' C format string to generate six filenames,
+passing the strings "left", "right", "top", "bottom", "front" and "back", in turn,
+to replace the format sequence in the string - you'd typically just use '%s' here.
+Only one percent sign is allowed, and the images are all treated alike. And they
+must, of course, all exist and have 1:1 aspect ratio. Once they've been loaded
+into the internal representation, processing continues as if the input had been
+a single cubemap image. When invoked with an input containing a percent sign,
+extract first tries to find the left cube face image. If that fails, the attempt
+to load six images is aborted and instead extract will assume you have actually
+passed a filename containing a verbatim percent sign and proceed accordingly.
 
 ## --output OUTPUT       output file name (mandatory)
 
-The output will be stored under this name. See --6 for a way to store cubemaps
-to six separate cube face image files.
+The output will be stored under this name.
 
 ## --save_ir INTERNAL    save IR image to this file
 
@@ -299,6 +309,9 @@ you figure out which 'flavour' your cubemaps are.
 # extract
 # utility to extract a reprojected image from an environment.
 
+As work on this program continues, it can provide more and more functions
+which envutil also provides, to a point where envutil becomes redundant.
+
 This program takes a 2:1 lat/lon environment or a 1:6 cubemap image as input
 and produces output in the specified orientation, projection, field of view
 and extent. For CL arguments, try 'extract --help'. Panorama photographers
@@ -321,7 +334,13 @@ X degrees field of view extend over just as many of these small areas as
 the image is wide and high. A different notion is 'center-to-center'
 measuring, where the X degrees refer to the area enclosed between the
 marginal pixels seen as points in space (the convex hull) - this notion
-is not currently supported in extract.
+is not currently supported in extract. Cubemaps can also be passed as
+six single cube face images. The images have to follow a naming scheme
+which is encoded in a format string. You pass the format string as
+input, and it's used to generate six filenames, where the format string
+is expanded with "left", "right"... for the six cube faces. All six
+image file names generated in this fashion must resolve to square
+images of equal size.
 
 The output projection can be one of "spherical", "cylindrical",
 "rectilinear", "stereographic", "fisheye" or "cubemap". The geometrical
@@ -341,8 +360,23 @@ and for the reverse operation, pass --hfov 90 and --projection cubemap.
 The parameterization for cubemaps is not quite as flexible as what
 envutil offers (e.g. the --ctc option is missing) but otherwise
 extract can do roughly the same job, and I may opt to discontinue
-envutil in it's favour. Another feature which extract doesn't currently
-offer is processing of six separate single cube face images.
+envutil in it's favour. Export of a cubemap as six separate images
+can be achieved by passing a format string - the same mechanism
+as for input is used.
+
+extract can also extract image series. The individual images are all
+created from the same environment, but the horizontal field of view
+and yaw, pitch and roll of the virtual camera for each image are taken
+from a 'sequence file', passed as --seqfile. The four values are given
+four in a line, each line provides settings for one image. If you
+pass a format string for the output, the images will be named accordingly;
+use format specs like %03d (to make the images lexically sortable).
+If output is not a format string, it's interpreted as a video file name,
+and the consecutive images are used to create a video with ffmpeg.
+This is a handy way to create video sequences of zooms and pans,
+but you'll want a script to produce the seqfile - it's a bit like a
+slicer file for a 3D printer - you don't want to write that by hand,
+either. Default is H265 with 60 fps and 4 Mbit/sec.
 
 You can choose several different interpolation methods with the --itp
 command line argument. The default is --itp 1, which uses bilinear
@@ -355,7 +389,8 @@ All of OIIO's interpolation, mip-mapping and wrapping modes can be
 selected by using the relevant additional parameters. Finally, --itp -2
 uses 'twining' - inlined oversampling with subsequent weighted pixel
 binning. The default with this method is to use a simple 2X2 box filter
-on a signal which is interpolated with bilinear interpolation, and oversampled by a factor of four. Additional parameters can change the
+on a signal which is interpolated with bilinear interpolation, and
+oversampled by a factor of four. Additional parameters can change the
 amount of oversampling and add gaussian weights to the filter
 parameters. Twining is quite fast (if the number of filter taps isn't
 very large); when down-scaling, the parameter 'twine' should be at
@@ -366,7 +401,11 @@ new and this is a first approach. The method is intrinsically very
 flexible (it's based on a generalization of convolution), and the full
 flexibility isn't accessible in 'extract' with the parameterization
 as it stands now, but it's already quite useful with the few parameters
-I offer.
+I offer. If you choose twining, but don't pass --twine (or pass --twine 0),
+the twining parameters are set automatically. This also happens for
+video output, where fixed twining parameters would fail to adapt to
+changing hfov. Use of twining or OIIO's lookup is strongly recommended
+for video output to avoid aliasing.
 
 The program uses [zimt](https://github.com/kfjahnke/zimt) as it's 'strip-mining' and SIMD back-end, and
 sets up the pixel pipelines using zimt's functional composition tools.
@@ -397,11 +436,15 @@ and passing --help will produce this command line argument synopsis:
     --input INPUT                      input file name (mandatory)
     --output OUTPUT                    output file name (mandatory)
     --seq SEQFILE                      image sequence file name (optional)
+    --codec CODEC                      video codec for video sequence output (default: libx265)
+    --mbps MBPS                        output video with MBPS Mbit/sec (default: 8)
+    --fps FPS                          output video FPS frames/sec (default: 60)
     --itp ITP                          interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining
     --width EXTENT                     width of the output
     --height EXTENT                    height of the output
     --projection PRJ                   target projection
     --hfov ANGLE                       horiziontal field of view of the output (in degrees)
+    --cbmfov ANGLE                     horiziontal field of view of cubemap input (in degrees)
     --yaw ANGLE                        yaw of the virtual camera (in degrees)
     --pitch ANGLE                      pitch of the virtual camera (in degrees)
     --roll ANGLE                       roll of the virtual camera (in degrees)
@@ -429,6 +472,14 @@ Any image file which has 2:1 aspect ratio will be accepted as lat/lon environmen
 map, and any image file with 1:6 aspect ratio will be accepted as a cubemap.
 See --6 for a way to load a cubemap from six separate cube face image files. 
 
+## --cbmfov ANGLE        horiziontal field of view of cubemap input (in degrees)
+
+If the environment given as input is a cubemap, you can specify the horizontal
+field of view of the cube face images with this parameter. The default is
+precisely ninety degrees, but values greate than ninety are allowed as well.
+You can create such wider-angle cubemaps by passing --hfov greater than ninety
+when creating a cubemap with extract.
+
 ## --output OUTPUT       output file name (mandatory)
 
 The output will be stored under this name. See --6 for a way to store cubemaps
@@ -438,12 +489,31 @@ to six separate cube face image files.
 
 Alternative output of an image sequence with hfov, yaw, pitch and roll given
 as four consecutive numbers per line, one line per image. This is a new
-experimental feature, output is jpg only and named seq + number + .jpg
-Needs some tweaking - e.g. should generate image file names from a given
-pattern (format string). I intend to evolve this into a tool to produce
-video output - for now I just combine the single frames with ffmpeg, like
+experimental feature, output files are numbered consecutively when 'output'
+can be interpreted as a format string (use something like --output img%03d.jpg).
+If 'output' is not a format string, it's interpreted as the name of a video
+file, which is put together from the image sequence using ffmpeg and the
+codec given with --codec (default is libx265).
+
+Single images can be combined into a video with ffmpeg, like so:
 
 ffmpeg -f image2 -pattern_type glob -framerate 60 -i 'seq*.jpg' -s 960x540 -c:v libx264 foo.mp4
+
+This may be preferable, because all ffmpeg options can be exploited that way.
+
+## --codec CODEC         video codec for video sequence output (default: libx265)
+
+This is a string passed to ffmpeg to specify the video codec. Internally, frames
+for video are encoded in YUV, which may not work with other codecs than the
+hevc family (H264, H265). If direct video output fails, pass a format string
+as output and then combine the separate imeges with ffmpeg (see --seqfile, above)
+for H264 output, pass libx264.
+
+## --mbps MBPS           output video with MBPS Mbit/sec (default: 8)
+## --fps FPS             output video FPS frames/sec (default: 60)
+
+These two options set the compression rate and frames per second for video
+output.
 
 ## --itp ITP
 
@@ -495,7 +565,7 @@ on a bit of content which is stretched extremely in radial direction. For
 cubemaps, you should specify ninety degrees hfov, but you can produce
 cubemaps with different hfov - they just won't conform to any standards
 and won't be usable with other software unless that software offers
-suitable options.
+suitable options. extract supports wider-angle cubemaps, see --cbmfov
 
 ## --yaw ANGLE       yaw of the virtual camera (in degrees)
 ## --pitch ANGLE     pitch of the virtual camera (in degrees)
