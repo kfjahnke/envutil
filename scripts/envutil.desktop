@@ -1,0 +1,19 @@
+[Desktop Entry]
+Comment=utility for lat/lon environemnts and cubemaps
+X-Category=Graphics
+Categories=Graphics;2DGraphics;
+Exec=envutil
+GenericName=utility for lat/lon environemnts and cubemaps
+MimeType=image/x-exr;image/tiff;image/png;image/jpeg;image/bmp;
+Name=envutil
+NoDisplay=true
+Icon=lux
+# Path=
+StartupNotify=true
+Terminal=false
+# TerminalOptions=
+Type=Application
+X-DBUS-ServiceName=
+X-DBUS-StartupType=
+X-KDE-SubstituteUID=false
+X-KDE-Username=

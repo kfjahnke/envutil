@@ -1372,10 +1372,7 @@ class latlon
                                zimt::xel_t < U , C > ,
                                L >
 {
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 1 > > > pa1 ;
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 2 > > > pa2 ;
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 3 > > > pa3 ;
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 4 > > > pa4 ;
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , C > > > pa ;
 
 public:
   
@@ -1399,54 +1396,15 @@ public:
       std::cout << "input has 2:1 aspect ratio, assuming latlon"
                 << std::endl ;
 
-    if ( C >= 4 )
-    {
-      typedef zimt::xel_t < float , 4 > in_px_t ;
-      pa4 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-        ( shape ) ;
+    typedef zimt::xel_t < float , C > in_px_t ;
+    pa = std::make_shared < zimt::array_t < 2 , in_px_t > >
+      ( shape ) ;
 
-      bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                      TypeDesc::FLOAT , pa4->data() ) ;
-      assert ( success ) ;
+    bool success = inp->read_image ( 0 , 0 , 0 , C ,
+                                    TypeDesc::FLOAT , pa->data() ) ;
+    assert ( success ) ;
 
-      env = zimt::grok_type < ray_t , px_t , L > ( eval_env<C>() ) ;
-    }
-    else if ( C == 3 )
-    {
-      typedef zimt::xel_t < float , 3 > in_px_t ;
-      pa3 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-        ( shape ) ;
-
-      bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                      TypeDesc::FLOAT , pa3->data() ) ;
-      assert ( success ) ;
-
-      env = zimt::grok_type < ray_t , px_t , L > ( eval_env<C>() ) ;
-    }
-    else if ( C == 2 )
-    {
-      typedef zimt::xel_t < float , 2 > in_px_t ;
-      pa2 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-        ( shape ) ;
-    
-      bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                      TypeDesc::FLOAT , pa2->data() ) ;
-      assert ( success ) ;
-    
-      env = zimt::grok_type < ray_t , px_t , L > ( eval_env<C>() ) ;
-    }
-    else if ( C == 1 )
-    {
-      typedef zimt::xel_t < float , 1 > in_px_t ;
-      pa1 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-        ( shape ) ;
-    
-      bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                      TypeDesc::FLOAT , pa2->data() ) ;
-      assert ( success ) ;
-    
-      env = zimt::grok_type < ray_t , px_t , L > ( eval_env<C>() ) ;
-    }
+    env = zimt::grok_type < ray_t , px_t , L > ( eval_env<C>() ) ;
   }
 
   void eval ( const typename zimt::grok_type < ray_t , px_t , L >::in_v & in ,
@@ -1463,10 +1421,7 @@ class cubemap
                                zimt::xel_t < U , C > ,
                                L >
 {
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 1 > > > pa1 ;
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 2 > > > pa2 ;
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 3 > > > pa3 ;
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 4 > > > pa4 ;
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , C > > > pa4 ;
 
 public:
   
@@ -1519,70 +1474,19 @@ public:
       std::cout << "input has 1:6 aspect ratio, assuming cubemap"
                 << std::endl ;
     }
-    if ( C >= 4 )
-    {
-      sixfold_t<4> sf ( w , args.cbmfov ) ;
-      if ( args.multiple_input )
-        sf.load ( args.cfs.get_filenames() ) ;
-      else
-        sf.load ( inp ) ;
-      inp->close() ;
-      sf.mirror_around() ;
-      sf.fill_support ( 1 ) ;
-      sf.gen_texture ( args.tsoptions ) ;
-      std::cout << "cbm set env 4" << std::endl ;
 
-      env =   cbm_to_px_t2 < 4 > ( sf , batch_options )
-            + repix < U , 4 , C , L > () ;
-    }
-    else if ( C == 3 )
-    {
-      sixfold_t<3> sf ( w , args.cbmfov ) ;
-      if ( args.multiple_input )
-        sf.load ( args.cfs.get_filenames() ) ;
-      else
-        sf.load ( inp ) ;
-      inp->close() ;
-      sf.mirror_around() ;
-      sf.fill_support ( 1 ) ;
-      sf.gen_texture ( args.tsoptions ) ;
-      std::cout << "cbm set env 3" << std::endl ;
-
-      env =   cbm_to_px_t2 < 3 > ( sf , batch_options )
-            + repix < U , 3 , C , L > () ;
-    }
-    else if ( C == 2 )
-    {
-      sixfold_t<2> sf ( w , args.cbmfov ) ;
-      if ( args.multiple_input )
-        sf.load ( args.cfs.get_filenames() ) ;
-      else
-        sf.load ( inp ) ;
-      inp->close() ;
-      sf.mirror_around() ;
-      sf.fill_support ( 1 ) ;
-      sf.gen_texture ( args.tsoptions ) ;
-      std::cout << "cbm set env 2" << std::endl ;
-
-      env =   cbm_to_px_t2 < 2 > ( sf , batch_options )
-            + repix < U , 2 , C , L > () ;
-    }
+    sixfold_t<C> sf ( args.env_width , args.cbmfov ,
+                      args.support_min , args.tile_size ) ;
+    if ( args.multiple_input )
+      sf.load ( args.cfs.get_filenames() ) ;
     else
-    {
-      sixfold_t<1> sf ( w , args.cbmfov ) ;
-      if ( args.multiple_input )
-        sf.load ( args.cfs.get_filenames() ) ;
-      else
-        sf.load ( inp ) ;
-      inp->close() ;
-      sf.mirror_around() ;
-      sf.fill_support ( 1 ) ;
-      sf.gen_texture ( args.tsoptions ) ;
-      std::cout << "cbm set env 1" << std::endl ;
+      sf.load ( inp ) ;
+    inp->close() ;
+    sf.mirror_around() ;
+    sf.fill_support ( 1 ) ;
+    sf.gen_texture ( args.tsoptions ) ;
 
-      env =   cbm_to_px_t2 < 1 > ( sf , batch_options )
-            + repix < U , 1 , C , L > () ;
-    }
+    env =   cbm_to_px_t2 < C > ( sf , batch_options ) ;
   }
 
   void eval ( const typename zimt::grok_type < ray_t , px_t , L >::in_v & in ,
@@ -1605,10 +1509,7 @@ class environment
                                zimt::xel_t < U , C > ,
                                L >
 {
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 1 > > > pa1 ;
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 2 > > > pa2 ;
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 3 > > > pa3 ;
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , 4 > > > pa4 ;
+  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , C > > > pa ;
 
 public:
   
@@ -1632,62 +1533,16 @@ public:
         std::cout << "input has 2:1 aspect ratio, assuming latlon"
                   << std::endl ;
 
-      if ( C >= 4 )
-      {
-        typedef zimt::xel_t < float , 4 > in_px_t ;
-        pa4 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-          ( shape ) ;
+      typedef zimt::xel_t < float , C > in_px_t ;
+      pa = std::make_shared < zimt::array_t < 2 , in_px_t > >
+        ( shape ) ;
 
-        bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                         TypeDesc::FLOAT , pa4->data() ) ;
-        assert ( success ) ;
+      bool success = inp->read_image ( 0 , 0 , 0 , C ,
+                                        TypeDesc::FLOAT , pa->data() ) ;
+      assert ( success ) ;
 
-        env =   ray_to_ll_t()
-              + eval_latlon < 4 > ( *pa4 )
-              + repix < U , 4 , C , L > () ;
-      }
-      else if ( C == 3 )
-      {
-        typedef zimt::xel_t < float , 3 > in_px_t ;
-        pa3 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-          ( shape ) ;
-
-        bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                         TypeDesc::FLOAT , pa3->data() ) ;
-        assert ( success ) ;
-
-        env =   ray_to_ll_t()
-              + eval_latlon < 3 > ( *pa3 )
-              + repix < U , 3 , C , L > () ;
-      }
-      else if ( C == 2 )
-      {
-        typedef zimt::xel_t < float , 2 > in_px_t ;
-        pa2 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-          ( shape ) ;
-     
-        bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                         TypeDesc::FLOAT , pa2->data() ) ;
-        assert ( success ) ;
-      
-        env =   ray_to_ll_t()
-              + eval_latlon < 2 > ( *pa2 )
-              + repix < U , 2 , C , L > () ;
-      }
-      else
-      {
-        typedef zimt::xel_t < float , 1 > in_px_t ;
-        pa1 = std::make_shared < zimt::array_t < 2 , in_px_t > >
-          ( shape ) ;
-     
-        bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                         TypeDesc::FLOAT , pa1->data() ) ;
-        assert ( success ) ;
-      
-        env =   ray_to_ll_t()
-              + eval_latlon < 1 > ( *pa1 )
-              + repix < U , 1 , C , L > () ;
-      }
+      env =   ray_to_ll_t()
+            + eval_latlon < C > ( *pa ) ;
     }
     else if ( h == 6 * w )
     {
@@ -1696,66 +1551,17 @@ public:
         std::cout << "input has 1:6 aspect ratio, assuming cubemap"
                   << std::endl ;
       }
-      if ( C >= 4 )
-      {
-        sixfold_t<4> sf ( w , args.cbmfov ) ;
-        if ( args.multiple_input )
-          sf.load ( args.cfs.get_filenames() ) ;
-        else
-          sf.load ( inp ) ;
-        inp->close() ;
-        sf.mirror_around() ;
-        sf.fill_support ( 1 ) ;
-        std::cout << "cbm set env 4" << std::endl ;
-
-        env =   cbm_to_px_t < 4 > ( sf )
-              + repix < U , 4 , C , L > () ;
-      }
-      else if ( C == 3 )
-      {
-        sixfold_t<3> sf ( w , args.cbmfov ) ;
-        if ( args.multiple_input )
-          sf.load ( args.cfs.get_filenames() ) ;
-        else
-          sf.load ( inp ) ;
-        inp->close() ;
-        sf.mirror_around() ;
-        sf.fill_support ( 1 ) ;
-        std::cout << "cbm set env 3" << std::endl ;
-
-        env =   cbm_to_px_t < 3 > ( sf )
-              + repix < U , 3 , C , L > () ;
-      }
-      else if ( C == 2 )
-      {
-        sixfold_t<2> sf ( w , args.cbmfov ) ;
-        if ( args.multiple_input )
-          sf.load ( args.cfs.get_filenames() ) ;
-        else
-          sf.load ( inp ) ;
-        inp->close() ;
-        sf.mirror_around() ;
-        sf.fill_support ( 1 ) ;
-        std::cout << "cbm set env 2" << std::endl ;
-
-        env =   cbm_to_px_t < 2 > ( sf )
-              + repix < U , 2 , C , L > () ;
-      }
+      sixfold_t<C> sf ( args.env_width , args.cbmfov ,
+                        args.support_min , args.tile_size ) ;
+      if ( args.multiple_input )
+        sf.load ( args.cfs.get_filenames() ) ;
       else
-      {
-        sixfold_t<1> sf ( w , args.cbmfov ) ;
-        if ( args.multiple_input )
-          sf.load ( args.cfs.get_filenames() ) ;
-        else
-          sf.load ( inp ) ;
-        inp->close() ;
-        sf.mirror_around() ;
-        sf.fill_support ( 1 ) ;
-        std::cout << "cbm set env 1" << std::endl ;
+        sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support ( 1 ) ;
 
-        env =   cbm_to_px_t < 1 > ( sf )
-              + repix < U , 1 , C , L > () ;
-      }
+      env =   cbm_to_px_t < C > ( sf ) ;
     }
   }
 

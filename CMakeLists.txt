@@ -134,10 +134,8 @@ set( required_libraries
       ${required_libraries} OpenImageIO OpenImageIO_Util )
 
 add_executable(${_project_name} envutil.cc)
-add_executable(extract extract.cc)
 
-target_link_libraries(${_project_name} pthread ${required_libraries})
-target_link_libraries(extract pthread ${required_libraries} avutil avcodec swscale)
+target_link_libraries(${_project_name} pthread ${required_libraries} avutil avcodec swscale)
 
 # TODO: currently, optimization with -Ofast does not work
 
@@ -145,13 +143,13 @@ target_link_libraries(extract pthread ${required_libraries} avutil avcodec swsca
 
 #      "-O3 -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
 
-set_source_files_properties ( envutil.cc extract.cc PROPERTIES COMPILE_FLAGS
+set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
       "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
       # "-O3 -Wno-enum-compare ${SIMD_LIBRARY}") # uses SSE only 
 
 # install the 'useful' binaries (stepper is only a demo)
 
-install(TARGETS envutil extract DESTINATION bin)
+install(TARGETS envutil DESTINATION bin)
 
 # Some more options for building debian packages. The first one - with
 
@@ -173,7 +171,7 @@ set(CPACK_PACKAGE_DESCRIPTION_FILE
   "${CMAKE_SOURCE_DIR}/brief_description.txt")
 
 set(CPACK_DEBIAN_PACKAGE_DESCRIPTION
-  "envutil, extract: utility programs for 360X180 degree images")
+  "envutil: utility program for 360X180 degree images")
 
 set(CPACK_DEBIAN_PACKAGE_SECTION "universe/graphics")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
@@ -195,7 +193,7 @@ set(CPACK_PACKAGE_VENDOR "Kay F. Jahnke")
 set(CPACK_STRIP_FILES 1)
 set(CPACK_PACKAGE_VERSION_MAJOR 0)
 set(CPACK_PACKAGE_VERSION_MINOR 1)
-set(CPACK_PACKAGE_VERSION_PATCH 0)
+set(CPACK_PACKAGE_VERSION_PATCH 1)
 
 set(CPACK_PACKAGE_CONTACT "Kay F. Jahnke <kfjahnke+envutil@gmail.com>")
 
@@ -213,7 +211,7 @@ install(FILES scripts/1024X1024/lux.png
 install(FILES scripts/envutil.desktop 
         DESTINATION share/applications)
 
-# envutil and extract are MIT-licensed
+# envutil is MIT-licensed
 
 set(CPACK_DEBIAN_PACKAGE_LICENSE "MIT License")
 set(CPACK_PACKAGE_LICENSE "MIT License")
