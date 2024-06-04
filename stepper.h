@@ -122,7 +122,7 @@ struct stepper_base
   typedef zimt::xel_t < T , 2 > crd2_t ;
   typedef zimt::simdized_type < crd2_t , L > crd2_v ;
   typedef zimt::simdized_type < T , L > f_v ;
-  typedef zimt::xel_t < long , 2 > crd_t ;
+  typedef zimt::xel_t < int , 2 > crd_t ;
   typedef zimt::simdized_type < crd_t , L > crd_v ;
   typedef typename crd_v::value_type crd_ele_v ;
 
@@ -165,7 +165,7 @@ struct stepper_base
   // extent can be sampled with any horizontal and vertical
   // resolution.
 
-  const long width , height ;
+  const int width , height ;
 
   // stepper_base's standard c'tor receives the width and height,
   // and the image's extent, given as the extrema first in
@@ -173,7 +173,7 @@ struct stepper_base
   // edge-to-edge semantics to place the planar coordinates
   // inside the extent.
 
-  stepper_base ( std::size_t _width , std::size_t _height ,
+  stepper_base ( int _width , int _height ,
                  T _a0 , T _a1 , T _b0 , T _b1 )
   : width ( _width ) ,
     height ( _height) ,
@@ -181,8 +181,8 @@ struct stepper_base
     fx0 ( _a0 / ( 2.0 * _width ) ) ,
     fy1 ( _b1 / ( 2.0 * _height ) ) ,
     fy0 ( _b0 / ( 2.0 * _height ) ) ,
-    delta ( L * ( _a1 - _a0 ) / long ( _width ) ) ,
-    iota2 ( 2L * crd_ele_v::iota() )
+    delta ( L * ( _a1 - _a0 ) / T ( _width ) ) ,
+    iota2 ( 2 * crd_ele_v::iota() )
   { }
 
   // init sets up the internal state ('planar') resulting from
@@ -202,13 +202,13 @@ struct stepper_base
 
   void init ( const crd_t & crd )
   {
-    auto ll0 = iota2 + ( crd[0] * 2L + 1L ) ;
+    auto ll0 = iota2 + ( crd[0] * 2 + 1 ) ;
 
-    planar[0] = ll0 * fx1 + ( 2L * width - ll0 ) * fx0 ;
+    planar[0] = ll0 * fx1 + ( 2 * width - ll0 ) * fx0 ;
 
-    auto ll1 = crd[1] * 2L + 1L ;
+    auto ll1 = crd[1] * 2 + 1 ;
 
-    planar[1] = ll1 * fy1 + ( 2L * height - ll1 ) * fy0 ;
+    planar[1] = ll1 * fy1 + ( 2 * height - ll1 ) * fy0 ;
   }
 
   // increase modifies it's argument to contain the next value
@@ -1077,7 +1077,7 @@ struct deriv_stepper
   typedef zimt::xel_t < T , 2 > crd2_t ;
   typedef zimt::simdized_type < crd2_t , L > crd2_v ;
   typedef zimt::simdized_type < T , L > f_v ;
-  typedef zimt::xel_t < long , 2 > crd_t ;
+  typedef zimt::xel_t < int , 2 > crd_t ;
   typedef zimt::simdized_type < crd_t , L > crd_v ;
   typedef typename crd_v::value_type crd_ele_v ;
 
