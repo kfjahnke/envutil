@@ -453,7 +453,9 @@ struct metrics_t
     target =    in_face_coordinate // in (-1,1)
               + refc_md ;          // center of the cube face
 
-    target[1] += face_index * section_md ;
+    // problem on my mac: can't multiply int vector and double
+
+    target[1] += face_index * float ( section_md ) ;
 
     // move from model space units to pixel units. This yields us
     // a coordinate in pixel units pertaining to the section.
