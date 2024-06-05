@@ -44,8 +44,8 @@
 
 typedef zimt::xel_t < int , 2 > v2i_t ;
 typedef zimt::xel_t < int , 3 > v3i_t ;
-typedef zimt::xel_t < long , 2 > index_type ;
-typedef zimt::xel_t < std::size_t , 2 > shape_type ;
+typedef zimt::xel_t < int , 2 > index_type ;
+typedef zimt::xel_t < int , 2 > shape_type ;
 
 typedef zimt::xel_t < float , 2 > v2_t ;
 typedef zimt::xel_t < float , 3 > v3_t ;

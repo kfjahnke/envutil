@@ -91,9 +91,6 @@
 #include "zimt/zimt.h"
 #include "geometry.h"
 
-typedef zimt::xel_t < double , 2 > crd2_t ;
-typedef zimt::xel_t < double , 3 > crd3_t ;
-
 // we set up a base class for 'steppers' which encodes the '2D part'
 // of setting up a sampling: We have a horizontal and a vertical
 // range of 2D coordinates pertaining to the 2D manifold 'draped'
@@ -202,13 +199,13 @@ struct stepper_base
 
   void init ( const crd_t & crd )
   {
-    auto ll0 = iota2 + ( crd[0] * 2 + 1 ) ;
+    auto ll0 = iota2 + T ( crd[0] * 2 + 1 ) ;
 
-    planar[0] = ll0 * fx1 + ( 2 * width - ll0 ) * fx0 ;
+    planar[0] = ll0 * fx1 + ( T ( 2 * width ) - ll0 ) * fx0 ;
 
     auto ll1 = crd[1] * 2 + 1 ;
 
-    planar[1] = ll1 * fy1 + ( 2 * height - ll1 ) * fy0 ;
+    planar[1] = ll1 * fy1 + T ( 2 * height - ll1 ) * fy0 ;
   }
 
   // increase modifies it's argument to contain the next value
@@ -320,8 +317,8 @@ public:
   // is handled by the base type.
 
   spherical_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
-                      std::size_t _width ,
-                      std::size_t _height ,
+                      int _width ,
+                      int _height ,
                       T _a0 = - M_PI ,
                       T _a1 = M_PI ,
                       T _b0 = - M_PI_2 ,
@@ -456,8 +453,8 @@ struct cylindrical_stepper
 public:
 
   cylindrical_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
-                        std::size_t _width ,
-                        std::size_t _height ,
+                        int _width ,
+                        int _height ,
                         T _a0 ,
                         T _a1 ,
                         T _b0 ,
@@ -571,8 +568,8 @@ struct rectilinear_stepper
 public:
 
   rectilinear_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
-                        std::size_t _width ,
-                        std::size_t _height ,
+                        int _width ,
+                        int _height ,
                         T _a0 ,
                         T _a1 ,
                         T _b0 ,
@@ -676,8 +673,8 @@ struct fisheye_stepper
   f_v x , r , y , z ;
   crd3_v yyy ; 
   fisheye_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
-                    std::size_t _width ,
-                    std::size_t _height ,
+                    int _width ,
+                    int _height ,
                     T _a0 ,
                     T _a1 ,
                     T _b0 ,
@@ -800,8 +797,8 @@ struct stereographic_stepper
   f_v x , r , y , z ;
   crd3_v yyy ; 
   stereographic_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
-                    std::size_t _width ,
-                    std::size_t _height ,
+                    int _width ,
+                    int _height ,
                     T _a0 ,
                     T _a1 ,
                     T _b0 ,
@@ -923,8 +920,8 @@ struct cubemap_stepper
 public:
 
   cubemap_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
-                    std::size_t _width ,
-                    std::size_t _height ,
+                    int _width ,
+                    int _height ,
                     T _a0 ,
                     T _a1 ,
                     T _b0 ,
@@ -1086,8 +1083,8 @@ struct deriv_stepper
   S < T , L > r01 ; // yields ray coordinates with y -= 1
 
   deriv_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
-                  std::size_t _width ,
-                  std::size_t _height ,
+                  int _width ,
+                  int _height ,
                   T _a0 ,
                   T _a1 ,
                   T _b0 ,

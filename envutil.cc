@@ -1531,9 +1531,9 @@ void dispatch()
 
     // orthonormal system of basis vectors for the view
 
-    crd3_t xx { 1.0 , 0.0 , 0.0 } ;
-    crd3_t yy { 0.0 , 1.0 , 0.0 } ;
-    crd3_t zz { 0.0 , 0.0 , 1.0 } ;
+    zimt::xel_t < double , 3 > xx { 1.0 , 0.0 , 0.0 } ;
+    zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
+    zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
 
     // the three vectors are rotated with the given yaw, pitch and
     // roll, and later passed on to the to 'steppers', the objects
@@ -1544,8 +1544,8 @@ void dispatch()
     // rays and then rotating the rays in a second step takes
     // more CPU cycles.
 
-    rotate_3d < float , 16 > r3 ( args.roll , args.pitch , args.yaw ) ;
-    
+    rotate_3d < double , 16 > r3 ( args.roll , args.pitch , args.yaw ) ;
+  
     xx = r3 ( xx ) ;
     yy = r3 ( yy ) ;
     zz = r3 ( zz ) ;

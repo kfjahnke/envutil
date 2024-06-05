@@ -68,7 +68,7 @@ struct eval_latlon
   // scaling factor to move from model space coordinates to
   // image coordinates
 
-  const double scale ;
+  const float scale ;
 
   eval_latlon ( const zimt::view_t < 2 , px_t > & _latlon )
   : latlon ( _latlon ) ,
@@ -93,7 +93,7 @@ struct eval_latlon
     // latitude in the range of [-pi/2,pi/2]. First we move
     // to image coordinates.
 
-    const zimt::xel_t < double , 2 > shift { M_PI , M_PI_2 } ;
+    const zimt::xel_t < float , 2 > shift { M_PI , M_PI_2 } ;
 
     auto in = ( _in + shift ) * scale ;
 
@@ -101,7 +101,7 @@ struct eval_latlon
     // to a pick-up point at the top or left margin of the UL
     // pixel, which is 0.5 away from it's center
 
-    in -= .5 ;
+    in -= .5f ;
 
     // now we move to discrete values for the index calculations
     // the nearest discrete coordinate with components smaller
@@ -120,7 +120,7 @@ struct eval_latlon
     // 'wl' ('weight left') is used for the opposite constituents,
     // namely ul and ll.
 
-    auto wl = 1.0 - wr ;
+    auto wl = 1.0f - wr ;
 
     // from the discrete upper left value, we derive it's three
     // neighbours downwards and to the right.
@@ -383,8 +383,9 @@ struct eval_env
 // functor to convert between pixels with different channel count.
 // currently the only case occuring in this program is the very first
 // one: the output will be the same as the input and the code is
-// optimized away. This object is not well-tested.
+// optimized away. This object is not well-tested. currently unused.
 
+/*
 template < typename T , std::size_t A , std::size_t B , std::size_t L >
 struct repix
 : public zimt::unary_functor < zimt::xel_t < T , A > ,
@@ -446,6 +447,7 @@ struct repix
     }
   }
 } ;
+*/
 
 #include "metrics.h"
 #include <filesystem>
