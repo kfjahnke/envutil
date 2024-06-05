@@ -437,7 +437,9 @@ struct metrics_t
 
     // we add the per-face offset and we're done.
 
-    target[1] += face_index * section_md ;
+    // problem on my mac: can't multiply int vector and double
+
+    target[1] += face_index * float ( section_md ) ;
   }
 
   // variant of get_pickup_coordinate which yields the pickup

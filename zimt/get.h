@@ -700,7 +700,9 @@ struct linspace_t
   typedef zimt::xel_t < T , N > value_t ;
   typedef zimt::simdized_type < value_t , L > value_v ;
   typedef typename value_v::value_type value_ele_v ;
-  typedef zimt::xel_t < long , D > crd_t ;
+  // problem on my mac: no vectorized long
+  // typedef zimt::xel_t < long , D > crd_t ;
+  typedef zimt::xel_t < int , D > crd_t ;
   typedef zimt::simdized_type < crd_t , L > crd_v ;
   typedef typename crd_v::value_type crd_ele_v ;
 

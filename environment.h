@@ -176,28 +176,32 @@ struct eval_latlon
 
     // base pointer for the gather operation
 
-    const auto * p = (float*) ( latlon.data() ) ;
+    const auto * const p = (const float* const) ( latlon.data() ) ;
+
+    // problems on my mac: vectorized long doesn't work
+    zimt::xel_t < int , 2 > llstrides ( latlon.strides ) ;
+    int nch = nchannels ;
 
     // obtain the four constituents by first truncating their
     // coordinate to int and then gathering from p.
 
     index_v idsdxl { uli[0] , uli[1] } ;
-    auto ofs = ( idsdxl * latlon.strides ) . sum() * nchannels ;
+    auto ofs = ( idsdxl * llstrides ) . sum() * nch ;
     px_v pxul ;
     pxul.gather ( p , ofs ) ;
 
     index_v idsdxr { uri[0] , uri[1] } ;
-    ofs = ( idsdxr * latlon.strides ) . sum() * nchannels ;
+    ofs = ( idsdxr * llstrides ) . sum() * nch ;
     px_v pxur ;
     pxur.gather ( p , ofs ) ;
 
     index_v idxll { lli[0] , lli[1] } ;
-    ofs = ( idxll * latlon.strides ) . sum() * nchannels ;
+    ofs = ( idxll * llstrides ) . sum() * nch ;
     px_v pxll ;
     pxll.gather ( p , ofs ) ;
 
     index_v idxlr { lri[0] , lri[1] } ;
-    ofs = ( idxlr * latlon.strides ) . sum() * nchannels ;
+    ofs = ( idxlr * llstrides ) . sum() * nch ;
     px_v pxlr ;
     pxlr.gather ( p , ofs ) ;
 
@@ -1278,6 +1282,8 @@ struct cbm_to_px_t2
 {
   // some types
 
+  typedef zimt::xel_t < float , 2 > crd2_t ;
+  typedef zimt::simdized_type < crd2_t , LANES > crd2_v ;
   typedef zimt::xel_t < float , 3 > crd3_t ;
   typedef zimt::simdized_type < crd3_t , LANES > crd3_v ;
   typedef zimt::xel_t < float , nchannels > px_t ;

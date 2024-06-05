@@ -113,13 +113,13 @@ endif()
 option(USE_GOADING "USE SIMD EMULATION WITH SMALL LOOPS" OFF)
 
 if ( NOT USE_GOADING )
-  find_package ( HWY CONFIG )
+  # find_package ( HWY CONFIG )
   if ( HWY_FOUND )
     message ( STATUS "find_package: HWY_FOUND = true" )
     # set ( required_libraries ${required_libraries} hwy )
     set ( SIMD_LIBRARY "-D USE_HWY" )
   else()
-    find_package ( Vc )
+    # find_package ( Vc )
     if ( Vc_FOUND )
       message ( STATUS "find_package: Vc_FOUND = true" )
       set ( required_libraries ${required_libraries} Vc )
@@ -128,6 +128,13 @@ if ( NOT USE_GOADING )
       set ( SIMD_LIBRARY "-D USE_STDSIMD" )
     endif()
   endif()
+endif()
+
+# on the mac, macPorts installs to /opt/local, hence:
+
+if ( APPLE )
+  link_directories ( /usr/local/lib /opt/local/lib )
+  include_directories ( /usr/local/include /opt/local/include )
 endif()
 
 set( required_libraries
