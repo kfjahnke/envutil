@@ -157,6 +157,12 @@ recommended options for the build:
 the last option is only useful if you want to build debian packages with
 'make package'. Compilation with g++/gcc may or may not work - I don't check
 regularly.
+
+With version 0.1.1, on top of building on febian12,  I have also managed to
+build envutil on on an intel mac running macOS 12.7.5 (using macPorts for the
+dependencies) and on windows 11 using mingw64. I haven't yet manages to produce
+video files with the mac build which played on my mac, but otherwise the builds
+seem viable.
     
 'make' should produce a binary named 'envutil' or 'envutil.exe''.
 

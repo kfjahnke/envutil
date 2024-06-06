@@ -55,7 +55,7 @@ endif()
 
 set(envutil_major 0)
 set(envutil_minor 1)
-set(envutil_patch 0)
+set(envutil_patch 1)
 
 message(STATUS "VERSION = ${envutil_major}.${envutil_minor}.${envutil_patch}")
 
