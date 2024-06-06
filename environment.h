@@ -293,7 +293,7 @@ struct eval_env
     assert ( interp_it != interpmode_map.end() ) ;
     batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
   
-    OIIO::ustring uenvironment ( args.input.c_str() ) ;
+    OIIO::ustring uenvironment ( args.input , 0 ) ;
     th = ts->get_texture_handle ( uenvironment ) ;
   }
 
@@ -622,7 +622,7 @@ struct sixfold_t
       // tile size.
 
       zimt::array_t < 3 , px_t >
-        buffer ( { face_px , face_px , 6UL } ) ;
+        buffer ( { face_px , face_px , std::size_t ( 6 ) } ) ;
       
       // and a view to the store with the same shape, but strides to
       // match the metrics of the target memory area in the store
@@ -630,7 +630,7 @@ struct sixfold_t
       zimt::view_t < 3 , px_t >
         target ( p_ul ,
                 { 1L , long(section_px) , long(offset_px) } ,
-                { face_px , face_px , 6UL } ) ;
+                { face_px , face_px , std::size_t ( 6 ) } ) ;
 
       // read the image data into the buffer
 
@@ -708,9 +708,9 @@ struct sixfold_t
 
     if ( verbose )
       std::cout << "saving generated texture to "
-                << texture_file.c_str() << std::endl ;
+                << texture_file.string() << std::endl ;
 
-    save_array ( texture_file.c_str() , store ) ;
+    save_array ( texture_file.string() , store ) ;
 
     // now we can create to the texture system and receive
     // a texture handle for the temporary file for fast access
@@ -726,7 +726,7 @@ struct sixfold_t
       ts->attribute ( "options" , ts_options ) ;
     }
 
-    OIIO::ustring uenvironment ( texture_file.c_str() ) ;
+    OIIO::ustring uenvironment ( texture_file.string() , 0 ) ;
     th = ts->get_texture_handle ( uenvironment ) ;
   }
 

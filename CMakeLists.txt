@@ -133,11 +133,30 @@ if ( NOT USE_GOADING )
   endif()
 endif()
 
+# For now, the only windows build is using msys2/mingw. We look at
+# a few CMake variables and set "WINDOWS" accordingly.
+
+if(WIN32)
+  message(STATUS "***** found CMake::WIN32, setting WINDOWS TRUE")
+  set(WINDOWS TRUE)
+elseif(MINGW)
+  message(STATUS "***** found CMake::MINGW, setting WINDOWS TRUE")
+  set(WINDOWS TRUE)
+elseif(CYGWIN)
+  message(STATUS "***** found CMake::CYGWIN, setting WINDOWS TRUE")
+  set(WINDOWS TRUE)
+else()
+  set(WINDOWS FALSE)
+endif()
+
 # on the mac, macPorts installs to /opt/local, hence:
 
 if ( APPLE )
   link_directories ( /usr/local/lib /opt/local/lib )
   include_directories ( /usr/local/include /opt/local/include )
+elseif ( WINDOWS )
+  include_directories ( /usr/local/include /mingw64/include )
+  link_directories ( /usr/local/lib /mingw64/lib )
 endif()
 
 set( required_libraries
