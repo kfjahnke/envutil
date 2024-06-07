@@ -170,48 +170,48 @@ envutil --help gives a summary of command line options:
 
     --help                 Print help message
     -v                     Verbose output
-  mandatory options:
-    --input INPUT          input file name (mandatory)
-    --output OUTPUT        output file name (mandatory)
-  important options which have defaults:
-    --projection PRJ       projection used for the output image(s) (default: rectilinear)
-    --hfov ANGLE           horiziontal field of view of the output (default: 90)
-    --width EXTENT         width of the output (default: 1024)
-    --height EXTENT        height of the output (default: same as width)
-  additional input parameters for cubemap input:
-    --cbmfov ANGLE         horiziontal field of view of cubemap input (default: 90)
-    --support_min EXTENT   minimal additional support around the cube face proper
-    --tile_size EXTENT     tile size for the internal representation image
-    --ctc CTC              pass '1' to interpret cbmfov as center-to-center (default 0)
-  additional parameters for single-image output:
-    --yaw ANGLE            yaw of the virtual camera
-    --pitch ANGLE          pitch of the virtual camera
-    --roll ANGLE           roll of the virtual camera
-    --x0 EXTENT            low end of the horizontal range
-    --x1 EXTENT            high end of the horizontal range
-    --y0 EXTENT            low end of the vertical range
-    --y1 EXTENT            high end of the vertical range
-  additional parameters for multi-image and video output:
-    --seqfile SEQFILE      image sequence file name (optional)
-    --codec CODEC          video codec for video sequence output (default: libx265)
-    --mbps MBPS            output video with MBPS Mbit/sec (default: 8)
-    --fps FPS              output video FPS frames/sec (default: 60)
-  interpolation options:
-    --itp ITP              interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining
-  parameters for twining (with --itp -2):
-    --twine TWINE          use twine*twine oversampling - default: automatic settings
-    --twine_width WIDTH    widen the pick-up area of the twining filter
-    --twine_sigma SIGMA    use a truncated gaussian for the twining filter (default: don't)
-    --twine_threshold THR  discard twining filter taps below this threshold
-  parameters for lookup with OpenImageIO (with --itp -1):
-    --tsoptions KVLIST     OIIO TextureSystem Options: coma-separated key=value pairs
-    --swrap WRAP           OIIO Texture System swrap mode
-    --twrap WRAP           OIIO Texture System twrap mode
-    --mip MIP              OIIO Texture System mip mode
-    --interp INTERP        OIIO Texture System interp mode
-    --stwidth EXTENT       swidth and twidth OIIO Texture Options
-    --stblur EXTENT        sblur and tblur OIIO Texture Options
-    --conservative YESNO   OIIO conservative_filter Texture Option - pass 0 or 1
+    mandatory options:
+      --input INPUT          input file name (mandatory)
+      --output OUTPUT        output file name (mandatory)
+    important options which have defaults:
+      --projection PRJ       projection used for the output image(s) (default: rectilinear)
+      --hfov ANGLE           horiziontal field of view of the output (default: 90)
+      --width EXTENT         width of the output (default: 1024)
+      --height EXTENT        height of the output (default: same as width)
+    additional input parameters for cubemap input:
+      --cbmfov ANGLE         horiziontal field of view of cubemap input (default: 90)
+      --support_min EXTENT   minimal additional support around the cube face proper
+      --tile_size EXTENT     tile size for the internal representation image
+      --ctc CTC              pass '1' to interpret cbmfov as center-to-center (default 0)
+    additional parameters for single-image output:
+      --yaw ANGLE            yaw of the virtual camera
+      --pitch ANGLE          pitch of the virtual camera
+      --roll ANGLE           roll of the virtual camera
+      --x0 EXTENT            low end of the horizontal range
+      --x1 EXTENT            high end of the horizontal range
+      --y0 EXTENT            low end of the vertical range
+      --y1 EXTENT            high end of the vertical range
+    additional parameters for multi-image and video output:
+      --seqfile SEQFILE      image sequence file name (optional)
+      --codec CODEC          video codec for video sequence output (default: libx265)
+      --mbps MBPS            output video with MBPS Mbit/sec (default: 8)
+      --fps FPS              output video FPS frames/sec (default: 60)
+    interpolation options:
+      --itp ITP              interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining
+    parameters for twining (with --itp -2):
+      --twine TWINE          use twine*twine oversampling - default: automatic settings
+      --twine_width WIDTH    widen the pick-up area of the twining filter
+      --twine_sigma SIGMA    use a truncated gaussian for the twining filter (default: don't)
+      --twine_threshold THR  discard twining filter taps below this threshold
+    parameters for lookup with OpenImageIO (with --itp -1):
+      --tsoptions KVLIST     OIIO TextureSystem Options: coma-separated key=value pairs
+      --swrap WRAP           OIIO Texture System swrap mode
+      --twrap WRAP           OIIO Texture System twrap mode
+      --mip MIP              OIIO Texture System mip mode
+      --interp INTERP        OIIO Texture System interp mode
+      --stwidth EXTENT       swidth and twidth OIIO Texture Options
+      --stblur EXTENT        sblur and tblur OIIO Texture Options
+      --conservative YESNO   OIIO conservative_filter Texture Option - pass 0 or 1
     
 The input can be either a lat/lon environment image (a.k.a. 'full spherical' or 'full equirect' or '360X180 degree panorama') - or a 'cubemap' - a set of six square images in rectilinear projection showing the view to the six cardinal directions (left, right, up, down, front, back). The cubemap can be provided as a single image with the images concatenated vertically, or as six separate images with 'left', 'right' etc. in their - otherwise identical - filenames, which are introduced via a format string.
 
