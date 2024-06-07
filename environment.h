@@ -1859,4 +1859,162 @@ struct twine_t
     }
   }
 } ;
-                               
+
+// environment9 objects mediate lookup with derivatives. Their eval
+// member function takes 'ninepacks' and provides pixels with
+// nchannels channels.
+
+template < std::size_t nchannels , std::size_t L >
+struct environment9
+: public zimt::unary_functor < zimt::xel_t < float , 9 > ,
+                               zimt::xel_t < float , nchannels > ,
+                               L
+                             >
+{
+  typedef zimt::unary_functor < zimt::xel_t < float , 9 > ,
+                                zimt::xel_t < float , nchannels > ,
+                                L
+                              > base_t ;
+
+  typedef zimt::xel_t < float , 9 > crd9_t ;
+  typedef zimt::xel_t < float , nchannels > px_t ;
+
+  // the 'act' functor's 'inner' type is variable, so we use a
+  // uniform 'outer' type by 'grokking' it (type erasure)
+
+  zimt::grok_type < crd9_t , px_t , 16 > act ;
+
+  environment9()
+  {
+    if ( args.itp == -2 )
+    {
+      // use twining (--itp -2). first create an 'environment' object.
+      // Note how this object will persist (we declare it static), so
+      // it's only created right when control flow arrives here for
+      // the very first time (parameterization is taken from 'args').
+      // This is deliberate: subsequent invocations of 'work' are
+      // supposed to use the same environment, so it would be
+      // wasteful to set up a new one - it's an expensive asset.
+
+      static environment < float , float , nchannels , 16 > env ;
+
+      // set up the twining filter
+
+      if ( args.twine == 0 )
+      {
+        // user has passed twine 0, or not passed anything - but itp
+        // is -2. We set up the twining with automatically generated
+        // parameters.
+
+        // figure out the magnification in the image center as a
+        // guideline
+
+        double mag = args.env_step / args.step ;
+
+        if ( mag > 1.0 )
+        {
+          // if the transformation magnifies, we use a moderate twine
+          // size and a twine_width equal to the magnification, to
+          // avoid the star-shaped artifacts from the bilinear
+          // interpolation used for the lookup of the contributing
+          // rays. If mag is small, the star-shaped artifacts aren't
+          // really an issue, and twine values beyond, say, five
+          // do little to improve the filter response, so we cap
+          // the twine value at five, but lower it when approaching
+          // mag 1, down to two - where the next case down starts.
+
+          args.twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
+          args.twine_width = mag ;
+        }
+        else
+        {
+          // otherwise, we use a twine size which depends on the
+          // downscaling factor (reciprocal of 'mag') and a twine_width
+          // of 1.0: we only want anti-aliasing. picking a sufficiently
+          // large twine value guarantees that we're not skipping any
+          // pixels in the source (due to undersampling).
+
+          args.twine = int ( 1.0 + 1.0 / mag ) ;
+          args.twine_width = 1.0 ;
+        }
+
+        if ( verbose )
+        {
+          std::cout << "automatic twining for magnification " << mag
+                    << ":" << std::endl ;
+          std::cout << "twine: " << args.twine
+                    << " twine_width: " << args.twine_width
+                    << std::endl ;
+        }
+      }
+      else
+      {
+        if ( verbose )
+        {
+          std::cout << "using fixed twine: " << args.twine
+                    << " twine_width: " << args.twine_width
+                    << std::endl ;
+        }
+      }
+
+      // with the given twining parameters, we can now set up a 'spread':
+      // the generalized equivalent of a filter kernel. While a 'standard'
+      // convolution kernel has pre-determined geometry (it's a matrix of
+      // coefficients meant to be applied to an equally-shaped matrix of
+      // data) - here we have three values for each coefficient: the
+      // first two define the position of the look-up relative to the
+      // 'central' position, and the third is the weight and corresponds
+      // to a 'normal' convolution coefficient.
+
+      std::vector < zimt::xel_t < float , 3 > > spread ;
+      make_spread ( spread , args.twine , args.twine ,
+                    args.twine_width , args.twine_sigma ,
+                    args.twine_threshold ) ;
+
+      // wrap the 'environment' object in a twine_t object and assign
+      // to 'act' - this 'groks' the twine_t object to act's type.
+      // Note how this object is not declared static: the twining
+      // parameters may change due to changing hfov from one invocation
+      // of 'work' to the next.
+
+      act = twine_t < nchannels , 16 > ( env , spread ) ;
+    }
+    else
+    {
+      // use OIIO's 'environment' or 'texture' lookup functions.
+      // These code paths are coded in the 'latlon' and 'cubemap'
+      // objects, which are created and also grokked to 'act'.
+      // There, the 'ninepack' is used to calculate the derivatives
+      // and then all the data needed for the look-up are passed to
+      // the relevant (batched) OIIO look-up function.
+
+      if ( args.env_width == args.env_height * 2 )
+      {
+        // set up an environment object picking up pixel values from
+        // a lat/lon image using OIIO's 'environment' function. Again
+        // we set up a static object, but it's assigned to 'act' in
+        // every invocation of 'work'.
+
+        static latlon < float , float , nchannels , 16 > ll ;
+        act = ll ;
+      }
+      else
+      {
+        // set up an environment object picking up pixel values from
+        // a texture representing the cubemap image, using OIIO's
+        // 'texture' function
+
+        static cubemap < float , float , nchannels , 16 > cbm ;
+        act = cbm ;
+      }
+    }
+  }
+
+  // 'eval' simply delegates to the grokked specific environment code
+
+  template < typename I , typename O >
+  void eval ( const I & in , O & out )
+  {
+    act.eval ( in , out ) ;
+  }
+} ;

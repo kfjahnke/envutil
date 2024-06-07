@@ -1,6 +1,6 @@
 /************************************************************************/
 /*                                                                      */
-/*    extract - extract a partial image from an environment             */
+/*   utility to convert and extract images from 360 degree environments */
 /*                                                                      */
 /*            Copyright 2024 by Kay F. Jahnke                           */
 /*                                                                      */
@@ -39,7 +39,11 @@
 // A utility to extract an image from an environment. This program takes
 // a 2:1 lat/lon environment or a 1:6 cubemap image as input and produces
 // output in the specified orientation, projection, field of view and
-// extent. For CL arguments, try 'extract --help'.
+// extent. For CL arguments, try 'envutil --help'. The program can also
+// create environment images - just pass 'spherical' or 'cubemap' as
+// output projection, 360 or 90 degrees hfov, respectively, and an
+// appropriate output size. This ability can be used to convert from
+// one environment to another, optionally with an arbitrary 3D rotation.
 //
 // The output projection can be one of "spherical", "cylindrical",
 // "rectilinear", "stereographic", "fisheye" or "cubemap". The geometrical
@@ -63,11 +67,11 @@
 // All of OIIO's interpolation, mip-mapping and wrapping modes can be
 // selected by using the relevant additional parameters. Finally, --itp -2
 // uses 'twining' - inlined oversampling with subsequent weighted pixel
-// binning. The default with this method is to use a simple 2X2 box filter
-// on a signal which is oversampled by a factor of four. Additional
-// parameters can change the smaount of oversampling and add gaussian
+// binning. The default with this method is to use a simple box filter
+// whose specific parameterization is set up automatically. Additional
+// parameters can change the amount of oversampling and add gaussian
 // weights to the filter parameters. 'twining' is quite fast (if the number
-// of filter taps isn't very large - when down-scaling, the parameter
+// of filter taps isn't very large. When down-scaling, the parameter
 // 'twine' should be at least the same as the scaling factor to avoid
 // aliasing. When upscaling, larger twining values will slighly soften
 // the output and suppress the star-shaped artifacts typical for bilinear
@@ -95,6 +99,11 @@
 // is to use std::simd, and even that can be turned off if you want to
 // rely on autovectorization; zimt structures the processing so that it's
 // autovectorization-friendly and performance is still quite good that way.
+// I have managed to build envutil on Linux, macOS (on intel CPUs) and
+// Windows. The build adapts to the given system and expects a set of
+// dependencies (OpenImageIO, Imath, ffmpeg), zimt code is provided in
+// this repository. The macOS build fulfilled the dependencies with
+// macPorts, the Windows build used msys2/mingw64.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,6 +117,7 @@ extern "C"
 } ;
 
 #include <fstream>
+
 #include "stepper.h"
 
 // To conveniently rotate with a rotational quaternion, we employ
@@ -154,7 +164,9 @@ struct rotate_3d
     }
   }
 
-  // eval applies the quaternion
+  // eval applies the quaternion, reinterpret-casting the zimt 'xel'
+  // data we use throughoutthe program to Imath::Vec3 - both types
+  // are compatible.
 
   template < typename U >
   void eval ( const zimt::xel_t < U , 3 > & in ,
@@ -328,9 +340,8 @@ struct cubeface_series
   }
 } ;
 
-// from the envutil project, we use geometry.h for the coordinate
-// transformations needed when dealing with environment images,
-// especially cubemaps.
+// geometry.h has the coordinate transformations needed when
+// dealing with environment images, especially cubemaps.
 
 #include "geometry.h"
 
@@ -420,6 +431,8 @@ struct arguments
 
     // mandatory options
 
+    ap.separator("  mandatory options:");
+
     ap.arg("--input INPUT")
       .help("input file name (mandatory)")
       .metavar("INPUT");
@@ -428,23 +441,28 @@ struct arguments
       .help("output file name (mandatory)")
       .metavar("OUTPUT");
 
+    // important options which have defaults
+
+    ap.separator("  important options which have defaults:");
+
     ap.arg("--projection PRJ")
-      .help("projection used for the output image(s) (mandatory)")
+      .help("projection used for the output image(s) (default: rectilinear)")
       .metavar("PRJ");
 
     ap.arg("--hfov ANGLE")
-      .help("horiziontal field of view of the output (mandatory)")
+      .help("horiziontal field of view of the output (default: 90)")
       .metavar("ANGLE");
 
     ap.arg("--width EXTENT")
-      .help("width of the output (mandatory)")
+      .help("width of the output (default: 1024)")
       .metavar("EXTENT");
 
     ap.arg("--height EXTENT")
-      .help("height of the output (mandatory)")
+      .help("height of the output (default: same as width)")
       .metavar("EXTENT");
 
     // additional input parameters for cubemap input
+    ap.separator("  additional input parameters for cubemap input:");
   
     ap.arg("--cbmfov ANGLE")
       .help("horiziontal field of view of cubemap input (default: 90)")
@@ -463,6 +481,7 @@ struct arguments
       .metavar("CTC");
 
     // parameters for single-image output
+    ap.separator("  additional parameters for single-image output:");
 
     ap.arg("--yaw ANGLE")
       .help("yaw of the virtual camera")
@@ -493,6 +512,7 @@ struct arguments
       .metavar("EXTENT");
 
     // parameters for multi-image and video output
+    ap.separator("  additional parameters for multi-image and video output:");
 
     ap.arg("--seqfile SEQFILE")
       .help("image sequence file name (optional)")
@@ -511,12 +531,14 @@ struct arguments
       .metavar("FPS");
 
     // interpolation options
+    ap.separator("  interpolation options:");
 
     ap.arg("--itp ITP")
       .help("interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining")
       .metavar("ITP");
 
     // parameters for twining (with --itp -2)
+    ap.separator("  parameters for twining (with --itp -2):");
 
     ap.arg("--twine TWINE")
       .help("use twine*twine oversampling - default: automatic settings")
@@ -535,6 +557,7 @@ struct arguments
       .metavar("THR");
 
     // parameters for lookup with OpenImageIO (with --itp -1)
+    ap.separator("  parameters for lookup with OpenImageIO (with --itp -1):");
 
     ap.arg("--tsoptions KVLIST")
       .help("OIIO TextureSystem Options: coma-separated key=value pairs")
@@ -568,7 +591,16 @@ struct arguments
       .help("OIIO conservative_filter Texture Option - pass 0 or 1")
       .metavar("YESNO");
 
-    
+    // coming soon:
+
+    // ap.separator("  parameters for mounted image input:");
+    // 
+    // std::string mount_image , mount_prj ;
+    // float mount_hfov ;
+    // ap.add_argument("--mount %s:IMAGE %s:PROJECTION %f:HFOV",
+    //                 &mount_image , &mount_prj, &mount_hfov)
+    //   .help("load non-environment source image") ;
+
     if (ap.parse(argc, argv) < 0 ) {
         std::cerr << ap.geterror() << std::endl;
         ap.print_help();
@@ -886,11 +918,13 @@ void save_array ( const std::string & filename ,
 // quick shot at encoding video: I'm using an example file from the ffmpeg
 // examples section, with some adaptations to bend the C code to C++,
 // and additions to convert the float RGB data from the pixel pieline 
-// to YUV for encoding with h64. C++ style comments (begining with //)
+// to YUV for encoding with h264. C++ style comments (begining with //)
 // are mine, to explain where I made alterations of the original C
 // code or added stuff - and why.
 
-// The code example's end is marked with 'end ffmpeg example code'
+// The code example's end is marked with 'end of copied ffmpeg example
+// code'
+
 // Begin copied example code:
 
 /*
@@ -1137,7 +1171,9 @@ struct frame_sink
     // pipeline in the 'act' functor. But this conversion isn't the most
     // time-consuming operation, it's running the H265 codec (at least
     // here - my GPU doesn't have it).
-    // Note that the code seems to expect sRGB data.
+    // Note that the code seems to expect sRGB data. There is no provision
+    // for processing linear RGB yet, this should be added later, plus,
+    // eventually, handling of other colour spaces.
 
     unsigned char buffer [ args.width * args.height * 3 ] ;
     for ( int y = 0 ; y < args.height ; y++ )
@@ -1205,7 +1241,7 @@ struct frame_sink
   }
 } ;
 
-// end copied ffmpeg example code
+// end of copied ffmpeg example code
 
 // here's our interface to the modified ffmpeg example code:
 // this function takes a frame's worth of data encoded as a
@@ -1234,170 +1270,30 @@ void push_video_frame ( const zimt::view_t
   }
 }
 
-// environment.h has most of the 'workhorse' code for this program.
-// it provides functional constructs to yield pixels for coordinates.
-// These functors are used with zimt::process to populate the output.
+// 'work' is the function where the state we've built up in the
+// code below it culminates in the call to zimt::process, which
+// obtains pick-up coordinates from the 'get' object, produces
+// pixels for these coordinates with the 'act' object and stores
+// these pixels with a zimt::storer, which is set up in this
+// function. All the specificity of the code has now moved to
+// the types get_t and act_t - the dispatch is complete and we
+// can code a single 'work' template which is good for all
+// variants.
 
-#include "environment.h"
-
-// because we specialize for different channel counts with a template
-// argument (for maximum efficiency), the 'workhorse' code is in a
-// function template 'work'. There are two overloads:
-
-// 'work' overload to produce source data from a lat/lon environment
-// image using OIIO's 'environment' or 'texture' function, or bilinear
-// interpolation with 'twining'. All these lookup methods use 'ninepacks'
-// which are used to glean the derivatives of the coordinate
-// transformation, on top of the actual pick-up coordinate.
-
-template < std::size_t nchannels >
-void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
+template < typename get_t , typename act_t >
+void work ( get_t & get , act_t & act )
 {
-  // the 'act' functor is fed 'ninepacks' - sets of three 3D ray
-  // coordinates, holding information to allow the calculations
-  // of the coordinate transformation's derivatives. This is
-  // done inside the 'env' object and depends on it's specific
-  // type - the 'act' functor yields pixels, so here we don't
-  // have to deal with it's internal workings.
+  typedef typename act_t::out_type px_t ;
+  static const size_t nchannels = px_t::size() ;
 
-  typedef zimt::xel_t < float , 9 > crd9_t ;
-  typedef zimt::xel_t < float , nchannels > px_t ;
-
-  // the 'act' functor's 'inner' type is variable, so we use a
-  // uniform 'outer' type by 'grokking' it (type erasure)
-
-  zimt::grok_type < crd9_t , px_t , 16 > act ;
-
-  if ( args.itp == -2 )
-  {
-    // use twining (--itp -2). first create an 'environment' object.
-    // Note how this object will persist (we declare it static), so
-    // it's only created right when control flow arrives here for
-    // the very first time (parameterization is taken from 'args').
-    // This is deliberate: subsequent invocations of 'work' are
-    // supposed to use the same environment, so it would be
-    // wasteful to set up a new one - it's an expensive asset.
-
-    static environment < float , float , nchannels , 16 > env ;
-
-    // set up the twining filter
-
-    if ( args.twine == 0 )
-    {
-      // user has passed twine 0, or not passed anything - but itp
-      // is -2. We set up the twining with automatically generated
-      // parameters.
-
-      // figure out the magnification in the image center as a
-      // guideline
-
-      double mag = args.env_step / args.step ;
-
-      if ( mag > 1.0 )
-      {
-        // if the transformation magnifies, we use a moderate twine
-        // size and a twine_width equal to the magnification, to
-        // avoid the star-shaped artifacts from the bilinear
-        // interpolation used for the lookup of the contributing
-        // rays. If mag is small, the star-shaped artifacts aren't
-        // really an issue, and twine values beyond, say, five
-        // do little to improve the filter response, so we cap
-        // the twine value at five, but lower it when approaching
-        // mag 1, down to two - where the next case down starts.
-
-        args.twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
-        args.twine_width = mag ;
-      }
-      else
-      {
-        // otherwise, we use a twine size which depends on the
-        // downscaling factor (reciprocal of 'mag') and a twine_width
-        // of 1.0: we only want anti-aliasing. picking a sufficiently
-        // large twine value guarantees that we're not skipping any
-        // pixels in the source (due to undersampling).
-
-        args.twine = int ( 1.0 + 1.0 / mag ) ;
-        args.twine_width = 1.0 ;
-      }
-
-      if ( verbose )
-      {
-        std::cout << "automatic twining for magnification " << mag
-                  << ":" << std::endl ;
-        std::cout << "twine: " << args.twine
-                  << " twine_width: " << args.twine_width
-                  << std::endl ;
-      }
-    }
-    else
-    {
-      if ( verbose )
-      {
-        std::cout << "using fixed twine: " << args.twine
-                  << " twine_width: " << args.twine_width
-                  << std::endl ;
-      }
-    }
-
-    // with the given twining parameters, we can now set up a 'spread':
-    // the generalized equivalent of a filter kernel. While a 'standard'
-    // convolution kernel has pre-determined geometry (it's a matrix of
-    // coefficients meant to be applied to an equally-shaped matrix of
-    // data) - here we have three values for each coefficient: the
-    // first two define the position of the look-up relative to the
-    // 'central' position, and the third is the weight and corresponds
-    // to a 'normal' convolution coefficient.
-
-    std::vector < zimt::xel_t < float , 3 > > spread ;
-    make_spread ( spread , args.twine , args.twine ,
-                  args.twine_width , args.twine_sigma ,
-                  args.twine_threshold ) ;
-
-    // wrap the 'environment' object in a twine_t object and assign
-    // to 'act' - this 'groks' the twine_t object to act's type.
-    // Note how this object is not declared static: the twining
-    // parameters may change due to changing hfov from one invocation
-    // of 'work' to the next.
-
-    act = twine_t < nchannels , 16 > ( env , spread ) ;
-  }
-  else
-  {
-    // use OIIO's 'environment' or 'texture' lookup functions.
-    // These code paths are coded in the 'latlon' and 'cubemap'
-    // objects, which are created and also grokked to 'act'.
-    // There, the 'ninepack' is used to calculate the derivatives
-    // and then all the data needed for the look-up are passed to
-    // the relevant (batched) OIIO look-up function.
-
-    if ( args.env_width == args.env_height * 2 )
-    {
-      // set up an environment object picking up pixel values from
-      // a lat/lon image using OIIO's 'environment' function. Again
-      // we set up a static object, but it's assigned to 'act' in
-      // every invocation of 'work'.
-
-      static latlon < float , float , nchannels , 16 > ll ;
-      act = ll ;
-    }
-    else
-    {
-      // set up an environment object picking up pixel values from
-      // a texture representing the cubemap image, using OIIO's
-      // 'texture' function
-
-      static cubemap < float , float , nchannels , 16 > cbm ;
-      act = cbm ;
-    }
-  }
-
-  // we have the 'act' functor set up. now we set up an array to
+  // we have the functors set up. now we set up an array to
   // receive the output pixels. Again we use a static object:
   // the output size will remain the same, so the array can be
   // re-used every time and we don't have to deallocate and then
   // reallocate the memory.
 
-  static zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
+  static zimt::array_t < 2 , px_t >
+    trg ( { args.width , args.height } ) ;
   
   // set up a zimt::storer to populate the target array with
   // zimt::process. This is the third component needed for
@@ -1410,9 +1306,10 @@ void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
   // the state we have built up is finally put to use, running
   // a multithreaded pipeline which fills the target image.
   
-  zimt::process ( trg.shape , get_ray , act , cstor ) ;
+  zimt::process ( trg.shape , get , act , cstor ) ;
   
-  // store the result to disk
+  // store the result to disk - either as a single frame added
+  // to the video file, or as a single image stored individually.
 
   if ( args.seqfile != std::string() )
   {
@@ -1427,182 +1324,89 @@ void work ( const zimt::grok_get_t < float , 9 , 2 , 16 > & get_ray )
   }
 }
 
-// overload using an 'environment' object directly as data source.
-// This uses bilinear interplation directly from the source image.
-// Note how the 'get_ray' object has only three input channels,
-// in contrast to the previous overload where it has nine. This
-// is the 'fast lane'.
+// environment.h has most of the 'workhorse' code for this program.
+// it provides functional constructs to yield pixels for coordinates.
+// These functors are used with zimt::process to populate the output.
 
-template < std::size_t nchannels >
-void work ( const zimt::grok_get_t < float , 3 , 2 , 16 > & get_ray )
-{
-  typedef zimt::xel_t < float , 3 > crd3_t ;
-  typedef zimt::xel_t < float , nchannels > px_t ;
+#include "environment.h"
 
-  // this is to accomodate the 'act' functor
-
-  zimt::grok_type < crd3_t , px_t , 16 > act ;
-
-  // create the 'environment' object and 'grok' it to 'act'
-
-  static environment < float , float , nchannels , 16 > env ;
-  act = env ;
-
-  // set up an array to receive the output pixels
-
-  static zimt::array_t < 2 , px_t > trg ( { args.width , args.height } ) ;
-  
-  // set up a zimt::storer to populate the target array with
-  // zimt::process
-  
-  zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
-  
-  // use the get, act and put components with zimt::process
-  // to produce the target images and store them to disk
-  
-  zimt::process ( trg.shape , get_ray , act , cstor ) ;
-
-  // save the result
-
-  if ( args.verbose )
-    std::cout << "saving output image: " << args.output << std::endl ;
-
-  if ( args.seqfile != std::string() )
-  {
-    push_video_frame ( trg ) ;
-  }
-  else
-  {
-    save_array < nchannels > ( args.output , trg ) ;
-  }
-}
-
-// to call the apprpriate template instantiation and overload of
-// 'work' we need to do some dispatching: picking types depending
+// to call the appropriate instantiation of 'work' (above)
+// we need to do some dispatching: picking types depending
 // on run-time variables. We achieve this with a staged 'dispatch'
 // routine: every stage processes one argument and dispatches to
 // specialized code. The least specialized dispatch variant is
 // the lowest one down, this here is the final stage where we have
 // the number of channels and the stepper as template arguments.
 // Here we proceed to set up more state which is common to all
-// code paths and finally call 'work' to run the pixel pipeline.
-
-template < int NCH , typename stepper_t >
-void dispatch()
-{
-  // first do some processing here which is independent from the
-  // number of channels in the pixels:
-
-  bool have_seq = ( args.seqfile != std::string() ) ;
-  std::ifstream seqstream ;
-  if ( have_seq )
-  {
-    seqstream.open ( args.seqfile ) ;
-    assert ( seqstream.good() ) ;
-  }
-
-  while ( true )
-  {
-    if ( have_seq )
-    {
-      double seq_hfov , seq_yaw , seq_pitch , seq_roll ;
-      seqstream >> seq_hfov >> seq_yaw >> seq_pitch >> seq_roll ;
-      if ( ! seqstream.good() )
-        break ;
-      std::cout << "from seqfile: hfov: " << seq_hfov
-                << " yaw: " << seq_yaw << " pitch: " << seq_pitch
-                << " roll: " << seq_roll << std::endl ;
-      args.hfov = seq_hfov * M_PI / 180.0 ;
-      args.yaw = seq_yaw * M_PI / 180.0 ;
-      args.pitch = seq_pitch * M_PI / 180.0 ;
-      args.roll = seq_roll * M_PI / 180.0 ;
-
-      auto extent = get_extent ( args.projection , args.width ,
-                                 args.height , args.hfov  ) ;
-      args.x0 = extent.x0 ;
-      args.x1 = extent.x1 ;
-      args.y0 = extent.y0 ;
-      args.y1 = extent.y1 ;
-      assert ( args.x0 < args.x1 ) ;
-      assert ( args.y0 < args.y1 ) ;
-      args.step = ( args.x1 - args.x0 ) / args.width ;
-      args.twine = 0 ;
-    }
-
-    // orthonormal system of basis vectors for the view
-
-    zimt::xel_t < double , 3 > xx { 1.0 , 0.0 , 0.0 } ;
-    zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
-    zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
-
-    // the three vectors are rotated with the given yaw, pitch and
-    // roll, and later passed on to the to 'steppers', the objects
-    // which provide 3D 'ray' coordinates. They incorporate the
-    // rotated basis in their ray generation, resulting in
-    // appropriately oriented ray coordinates which can be formed
-    // more efficiently in the steppers - first calculating the
-    // rays and then rotating the rays in a second step takes
-    // more CPU cycles.
-
-    rotate_3d < double , 16 > r3 ( args.roll , args.pitch , args.yaw ) ;
-  
-    xx = r3 ( xx ) ;
-    yy = r3 ( yy ) ;
-    zz = r3 ( zz ) ;
-
-    // set up the stepper. note the extents of the 2D manifold
-    // given in model space uits. These objects will deliver 3D
-    // 'ray' coordinates as input to the 'act' functor, or 9D
-    // ray and neighbouring rays (deriv_stepper). Note how
-    // each projection has it's distinct type of stepper, but
-    // they are all assigned to a common type, a 'grok_get_t'.
-    // This uses type erasure and captures the functionality
-    // in std::functions, and the resulting object is only
-    // characterized by it's input and output type and lane
-    // count. The uniform type allows us to pass these objects
-    // around with a common type - a convenient way of harnessing
-    // groups of types with different implementation but equal
-    // interface.
-
-    stepper_t get_ray ( xx , yy , zz , args.width , args.height ,
-                        args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-    zimt::grok_get_t < float , stepper_t::size ,  2 , 16 >
-          getter ( get_ray ) ;
-
-    // now we can call the channel-specific 'work', with the
-    // stepper-specific getter. There are two overloads:
-    // one taking the getters yielding simple single-ray
-    // coordinates and one taking the three-ray variant
-    // needed to compute the derivatives.
-
-    work < NCH > ( getter ) ;
-
-    // if we're not working a sequence, we're done now.
-
-    if ( ! have_seq )
-      break ;
-  }
-}
-
-// we already have the number of colour channels and the type of the
-// stepper as template arguments, now we dispatch depending on
-// 'ninputs': three means it's an ordinary lookup using the stepper
-// directly, and nine means it's a lookup using ninepacks and
-// working with the derivatives.
+// code paths, set up the 'act' functor which yields pixels, and
+// finally call 'work' to run the pixel pipeline.
 
 template < int NCH ,
            template < typename , std::size_t > class STP >
 void dispatch ( int ninputs )
 {
-  switch ( ninputs )
+  // set up an orthonormal system of basis vectors for the view
+
+  zimt::xel_t < double , 3 > xx { 1.0 , 0.0 , 0.0 } ;
+  zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
+  zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
+
+  // the three vectors are rotated with the given yaw, pitch and
+  // roll, and later passed on to the to 'steppers', the objects
+  // which provide 3D 'ray' coordinates. They incorporate the
+  // rotated basis in their ray generation, resulting in
+  // appropriately oriented ray coordinates which can be formed
+  // more efficiently in the steppers - first calculating the
+  // rays and then rotating the rays in a second step takes
+  // (many) more CPU cycles.
+
+  rotate_3d < double , 16 > r3 ( args.roll , args.pitch , args.yaw ) ;
+
+  xx = r3 ( xx ) ;
+  yy = r3 ( yy ) ;
+  zz = r3 ( zz ) ;
+
+  // There are two code paths: one taking the getters yielding
+  // simple single-ray 3D coordinates, and one taking the three-ray
+  // variant needed to compute the derivatives. They use specific
+  // types of 'environment' objects. The code for the environment
+  // objects is in environment.h
+
+  if ( ninputs == 3 )
   {
-    case 3:
-      dispatch < NCH , STP < float , 16 > >() ;
-      break ;
-    case 9:
-      dispatch < NCH , deriv_stepper < float , 16 , STP > >() ;
-      break ;
+    // set up a simple single-coordinate stepper of the type
+    // fixed by 'STP'. This route is taken with direct bilinear
+    // interpolation (itp 1)
+
+    STP < float , 16 > get_ray
+      ( xx , yy , zz , args.width , args.height ,
+        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+    // create a static 'environment' object. This will persist, so
+    // if we're creating an image sequence, it will be reused for
+    // each individual image.
+
+    static environment < float , float , NCH , 16 > env ;
+
+    // now we call the final 'work' template which uses the get_t
+    // and act objects we've set up so far
+
+    work ( get_ray , env ) ;
+  }
+  else // ninputs == 9
+  {
+    // do the same, but with a deriv_stepper and an 'environment9'
+    // object. This code path is taken for lookup with 'ninepacks'
+    // holding three rays - the additional two used to calculate
+    // the derivatives.
+
+    deriv_stepper < float , 16 , STP > get_ray
+      ( xx , yy , zz , args.width , args.height ,
+        args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+    static environment9 < NCH , 16 > env ;
+
+    work ( get_ray , env ) ;
   }
 }
 
@@ -1671,13 +1475,63 @@ int main ( int argc , const char ** argv )
 
   args.init ( argc , argv ) ;
 
-  // find the parameters which are type-relevant to dispatch to
-  // the specialized code
+  // are we to process a sequence file? If so, open the file
 
-  int nch = args.nchannels ;
-  int ninp = ( args.itp == 1 ) ? 3 : 9 ;
-  projection_t prj = args.projection ;
+  bool have_seq = ( args.seqfile != std::string() ) ;
+  std::ifstream seqstream ;
+  if ( have_seq )
+  {
+    seqstream.open ( args.seqfile ) ;
+    assert ( seqstream.good() ) ;
+  }
 
-  dispatch ( nch , ninp , prj ) ;
+  // This loop will iterate over the renditions of single images.
+  // If we're not running a sequence, there will only be one
+  // iteration.
+
+  do
+  {
+    // if we're running a sequence, we'll overwrite a few variables
+    // in 'args' with values derived from the current line of input
+    // read from the sequence file.
+
+    if ( have_seq )
+    {
+      double seq_hfov , seq_yaw , seq_pitch , seq_roll ;
+      seqstream >> seq_hfov >> seq_yaw >> seq_pitch >> seq_roll ;
+      if ( ! seqstream.good() )
+        break ;
+      std::cout << "from seqfile: hfov: " << seq_hfov
+                << " yaw: " << seq_yaw << " pitch: " << seq_pitch
+                << " roll: " << seq_roll << std::endl ;
+      args.hfov = seq_hfov * M_PI / 180.0 ;
+      args.yaw = seq_yaw * M_PI / 180.0 ;
+      args.pitch = seq_pitch * M_PI / 180.0 ;
+      args.roll = seq_roll * M_PI / 180.0 ;
+
+      auto extent = get_extent ( args.projection , args.width ,
+                                 args.height , args.hfov  ) ;
+      args.x0 = extent.x0 ;
+      args.x1 = extent.x1 ;
+      args.y0 = extent.y0 ;
+      args.y1 = extent.y1 ;
+      assert ( args.x0 < args.x1 ) ;
+      assert ( args.y0 < args.y1 ) ;
+      args.step = ( args.x1 - args.x0 ) / args.width ;
+      args.twine = 0 ;
+    }
+
+    // find the parameters which are type-relevant to dispatch to
+    // the specialized code above. There are several stages of
+    // 'dispatch' which move the parameterization given by run-time
+    // arguments into type information.
+
+    int nch = args.nchannels ;
+    int ninp = ( args.itp == 1 ) ? 3 : 9 ;
+    projection_t prj = args.projection ;
+
+    dispatch ( nch , ninp , prj ) ;
+  }
+  while ( have_seq ) ; // loop criterion for 'do' loop
 }
     
