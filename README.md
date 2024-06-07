@@ -12,7 +12,7 @@ may not be familiar with the term 'lat/lon environment' - to them, this is
 a 'full spherical panorama' or 'full equirect'. The difference is merely
 terminology, both are the same. Cubemaps are rarely used in panorama
 photography, but I aim at reviving them by building a code base to
-process them efficiently, hone the standard, and integrate processing of
+process them efficiently, honing the standard, and integrating processing of
 single-image cubemap format (as it is used by envutil) into [lux](https://bitbucket.org/kfj/pv), my
 image and panorama viewer - currently lux cubemaps need six separate images
 and a special litle script and the code is less optimized than the code I
@@ -27,7 +27,7 @@ X degrees field of view extend over just as many of these small areas as
 the image is wide and high. A different notion is 'center-to-center'
 measuring, where the X degrees refer to the area enclosed between the
 marginal pixels seen as points in space (the convex hull). Cubemaps with
-this type of filed of view mesurement can be processed by passing --ctc 1
+this type of field of view mesurement can be processed by passing --ctc 1
 (for 'center-to-center'). envutil can also process cubemaps with cube face
 images with larger field of view than ninety degrees (pass --cmbfov). 
 Cubemaps can also be passed as six single cube face images. The images
@@ -82,7 +82,7 @@ uses 'twining' - inlined oversampling with subsequent weighted pixel
 binning. The default with this method is to use a simple box filter
 on a signal which is interpolated with bilinear interpolation; the
 number of taps and the footprint of the pick-up are set automatically.
-Additional parameters can change the fottprint and the amount of
+Additional parameters can change the footprint and the amount of
 oversampling and add gaussian weights to the filter parameters.
 Twining is quite fast (if the number of filter taps isn't
 very large); when down-scaling, the parameter 'twine' should be at
@@ -158,9 +158,9 @@ the last option is only useful if you want to build debian packages with
 'make package'. Compilation with g++/gcc may or may not work - I don't check
 regularly.
 
-With version 0.1.1, on top of building on febian12,  I have also managed to
+With version 0.1.1, on top of building on debian12,  I have also managed to
 build envutil on on an intel mac running macOS 12.7.5 (using macPorts for the
-dependencies) and on windows 11 using mingw64. I haven't yet manages to produce
+dependencies) and on windows 11 using mingw64. I haven't yet managed to produce
 video files with the mac build which played on my mac, but otherwise the builds
 seem viable.
     
@@ -170,16 +170,20 @@ envutil --help gives a summary of command line options:
 
     --help                 Print help message
     -v                     Verbose output
+  mandatory options:
     --input INPUT          input file name (mandatory)
     --output OUTPUT        output file name (mandatory)
-    --width EXTENT         width of the output
-    --height EXTENT        height of the output
-    --projection PRJ       projection used for the output image(s)
-    --hfov ANGLE           horiziontal field of view of the output
+  important options which have defaults:
+    --projection PRJ       projection used for the output image(s) (default: rectilinear)
+    --hfov ANGLE           horiziontal field of view of the output (default: 90)
+    --width EXTENT         width of the output (default: 1024)
+    --height EXTENT        height of the output (default: same as width)
+  additional input parameters for cubemap input:
     --cbmfov ANGLE         horiziontal field of view of cubemap input (default: 90)
     --support_min EXTENT   minimal additional support around the cube face proper
     --tile_size EXTENT     tile size for the internal representation image
     --ctc CTC              pass '1' to interpret cbmfov as center-to-center (default 0)
+  additional parameters for single-image output:
     --yaw ANGLE            yaw of the virtual camera
     --pitch ANGLE          pitch of the virtual camera
     --roll ANGLE           roll of the virtual camera
@@ -187,15 +191,19 @@ envutil --help gives a summary of command line options:
     --x1 EXTENT            high end of the horizontal range
     --y0 EXTENT            low end of the vertical range
     --y1 EXTENT            high end of the vertical range
+  additional parameters for multi-image and video output:
     --seqfile SEQFILE      image sequence file name (optional)
     --codec CODEC          video codec for video sequence output (default: libx265)
     --mbps MBPS            output video with MBPS Mbit/sec (default: 8)
     --fps FPS              output video FPS frames/sec (default: 60)
+  interpolation options:
     --itp ITP              interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining
+  parameters for twining (with --itp -2):
     --twine TWINE          use twine*twine oversampling - default: automatic settings
     --twine_width WIDTH    widen the pick-up area of the twining filter
     --twine_sigma SIGMA    use a truncated gaussian for the twining filter (default: don't)
     --twine_threshold THR  discard twining filter taps below this threshold
+  parameters for lookup with OpenImageIO (with --itp -1):
     --tsoptions KVLIST     OIIO TextureSystem Options: coma-separated key=value pairs
     --swrap WRAP           OIIO Texture System swrap mode
     --twrap WRAP           OIIO Texture System twrap mode
