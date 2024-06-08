@@ -1404,7 +1404,7 @@ void dispatch ( int ninputs )
       ( xx , yy , zz , args.width , args.height ,
         args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-    static environment9 < NCH , 16 > env ;
+    environment9 < NCH , 16 > env ;
 
     work ( get_ray , env ) ;
   }

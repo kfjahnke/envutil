@@ -183,7 +183,7 @@ install(TARGETS envutil DESTINATION bin)
 # Some more options for building debian packages. The first one - with
 
 set(CPACK_DEBIAN_PACKAGE_NAME "envutil")
-set(CPACK_DEBIAN_PACKAGE_VERSION "0.1.0")
+set(CPACK_DEBIAN_PACKAGE_VERSION "0.1.1")
 
 set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CMAKE_INSTALL_PREFIX})
 set(CPACK_SET_DESTDIR "ON")
@@ -220,9 +220,9 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 set(CPACK_PACKAGE_VENDOR "Kay F. Jahnke")
 
 set(CPACK_STRIP_FILES 1)
-set(CPACK_PACKAGE_VERSION_MAJOR 0)
-set(CPACK_PACKAGE_VERSION_MINOR 1)
-set(CPACK_PACKAGE_VERSION_PATCH 1)
+set(CPACK_PACKAGE_VERSION_MAJOR ${envutil_major})
+set(CPACK_PACKAGE_VERSION_MINOR ${envutil_minor})
+set(CPACK_PACKAGE_VERSION_PATCH ${envutil_patch})
 
 set(CPACK_PACKAGE_CONTACT "Kay F. Jahnke <kfjahnke+envutil@gmail.com>")
 

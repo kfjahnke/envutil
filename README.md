@@ -696,3 +696,26 @@ each edge in the image it joins up with in the cube. If you process such cubemap
 with envutil, pass --ctc 1 (which stands for center-to-center). Otherwise, there
 will be subtle errors along the cube face edges which can easily go unnoticed.
 Make sure you figure out which 'flavour' your cubemaps are.
+
+# Style
+
+I use a coding style which avoids forward declarations, so at times it's
+better to read the code from bottom to top to follow the flow of control.
+My code formatting is quite 'old-school', with white-space-separated
+tokens and curly braces in separate lines - and generally a lot of white
+space. I think this style makes the code easier to grasp and also helps
+with reading it.
+
+The code itself is 'optimistic' - I don't make efforts to prevent errors
+from happening - if they happen, most of the time an exception will terminate
+the program. I tend not to analyze parameters and trust the user to pass
+sensible ones.
+
+The code is complex - it's template metacode, and control flow may be hard
+to grasp, due to the use of functional programming. Functional components
+follow the pattern I have established in vspline and zimt: the functors
+have an 'eval' method which takes a const reference for input and writes
+output to another reference. The eval method itself is void. Usually
+I code it as a template to avoid a verbose signature - the types are
+implicit from the functor's template arguments, and oftentimes the template
+can be used for scalar and SIMDized arguments alike.
