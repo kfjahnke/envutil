@@ -86,7 +86,10 @@ namespace zimt
   struct get_ele_t
   {
     static const size_t size = 1 ;
-    typedef UnsuitableTypeForExpandElements type ;
+    typedef typename std::conditional < std::is_fundamental < T > :: value ,
+                                        T ,
+                                        UnsuitableTypeForExpandElements 
+                                      > :: type type ;
   } ;
 
   template < typename T , std::size_t SZ >

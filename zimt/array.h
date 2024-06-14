@@ -107,8 +107,8 @@ struct view_t
   // or array with the same members.
 
   value_type * const origin ;
-  const index_type strides ;
-  const shape_type shape ;
+  index_type strides ;
+  shape_type shape ;
 
   view_t()
   : origin ( nullptr ) ,
@@ -203,9 +203,10 @@ struct view_t
   : view_t ( rhs.origin , _strides , _shape )
   { }
 
-  // copy assignment is forbidden.
+  // copy assignment used to be forbidden, but with the switch to
+  // mutabel shape and strides copy assignment is now also allowed.
 
-  view_t & operator= ( const view_t & rhs ) = delete ;
+  view_t & operator= ( const view_t & rhs ) = default ;
 
   // get the number of value_type the view refers to.
 
@@ -544,57 +545,19 @@ public:
 
   array_t & operator= ( const array_t & rhs ) = delete ;
 
-private:
-
-  void reset ( std::false_type ) // 'ordinary' T
-  {
-    base.reset ( origin ) ;
-  }
-
-  // arrays which hold T needing destruction need a deleter. The data
-  // are held as a plain chunk of memory holding T, and without the
-  // deleter, the chunk of memory is simply released with delete,
-  // which does not invoke the individual T's destructors. So the
-  // deleter must loop over the data and apply the d'tor to every
-  // datum in the array.
-
-  void reset ( std::true_type ) // non-trivially destructible T
-  {
-    typedef std::function < void ( T* ) > deleter_t ;
-
-    deleter_t dtor = [=] ( T * p_data )
-    {
-      for ( std::size_t i = 0 ; i < size() ; i++ )
-      {
-        p_data[i].~T() ;
-      }
-    } ;
-
-    base.reset ( origin , dtor ) ;
-  }
-
-public:
-
   // array allocating fresh memory. The array is now in sole possesion
   // of the memory, and unless it's copied the memory is released when
-  // the array is destructed. If the T which the array holds via it's
-  // shared_ptr 'store' has an explicit destructor, we add code to
-  // destruct all T in the store explicitly.
+  // the array is destructed. this is only allowed for trivially
+  // destructible T.
 
   array_t ( const shape_type & _shape )
-  : base_t ( new T [ _shape.prod() ] ,
+  : base_t ( nullptr ,
              make_strides ( _shape ) ,
-             _shape )
+             _shape ) ,
+    base ( new T [ _shape.prod() ] )
   {
-    // does T have a non-trivial destructor?
-
-    static const bool test =
-         std::is_destructible < T > :: value
-      && ! std::is_trivially_destructible < T > :: value ;
-
-    // dispatch accordingly. this sets 'base'.
-
-    reset ( std::integral_constant < bool , test >() ) ;
+    static_assert ( std::is_trivially_destructible < T > :: value ) ;
+    origin = base.get() ;
   }
 
   // array's window function also copies the shared_ptr, base.
