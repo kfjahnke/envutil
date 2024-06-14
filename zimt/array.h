@@ -106,7 +106,7 @@ struct view_t
   // is not allowed, only copy construction can initialize a view
   // or array with the same members.
 
-  value_type * const origin ;
+  value_type * origin ;
   index_type strides ;
   shape_type shape ;
 
@@ -540,10 +540,6 @@ public:
   : base ( rhs.base ) ,
     base_t ( rhs.origin , _strides , _shape )
   { }
-
-  // copy assignment is forbidden.
-
-  array_t & operator= ( const array_t & rhs ) = delete ;
 
   // array allocating fresh memory. The array is now in sole possesion
   // of the memory, and unless it's copied the memory is released when
