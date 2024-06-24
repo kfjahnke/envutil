@@ -212,6 +212,8 @@ envutil --help gives a summary of command line options:
       --stwidth EXTENT       swidth and twidth OIIO Texture Options
       --stblur EXTENT        sblur and tblur OIIO Texture Options
       --conservative YESNO   OIIO conservative_filter Texture Option - pass 0 or 1
+    parameters for mounted image input:
+      --mount IMAGE PROJECTION HFOV  load non-environment source image
     
 The input can be either a lat/lon environment image (a.k.a. 'full spherical' or 'full equirect' or '360X180 degree panorama') - or a 'cubemap' - a set of six square images in rectilinear projection showing the view to the six cardinal directions (left, right, up, down, front, back). The cubemap can be provided as a single image with the images concatenated vertically, or as six separate images with 'left', 'right' etc. in their - otherwise identical - filenames, which are introduced via a format string.
 
@@ -607,6 +609,23 @@ to the processing.
 
 pass this to switch on OIIO's 'conservative filter' on or off (pass 0 or 1);
 the default is to have it on.
+
+# Parameters for mounted image input
+
+## --mount IMAGE PROJECTION HFOV  load non-environment source image
+
+envutil can 'mount' images in various projections and hfov which may only cover
+a part of the full 360X180 degree environment. This routes to different code,
+because the parts of the output which don't receive input have to be masked
+out, and because projections apart from spherical (which is present for
+lat/lon environments anyway) have to be dealt with. Supported projections
+for mounted images are 'rectilinear', 'spherical', 'cylindrical',
+'stereographic'  and 'fisheye'. hfov is in degrees. All three values
+(image filename, projection and hfov) must be passed after --mount, separated
+by space. Currently, there is an issue with itp -1 (OIIO pick-up) with the
+default settings when the mounted image is a 360 degree fisheye - some artifacts
+show near the 'back pole'. Use other interpolators, or disable the code
+relying on derivatives (use --stwidth 0).
 
 # Additional Technical Notes
 

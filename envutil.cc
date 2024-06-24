@@ -368,11 +368,17 @@ struct arguments
   bool verbose ;
   std::string input ;
   std::string output ;
+  std::string mount_image ;
   double hfov ;
+  float mount_hfov ;
   std::size_t width ;
   std::size_t height ;
+  std::size_t mount_width ;
+  std::size_t mount_height ;
   std::string prj_str ;
+  std::string mount_prj_str ;
   projection_t projection ;
+  projection_t mount_prj;
 
   double cbmfov ;
   std::size_t support_min ;
@@ -403,6 +409,7 @@ struct arguments
   std::size_t env_width , env_height ;
   std::size_t nchannels ;
   std::unique_ptr<ImageInput> inp ;
+  std::unique_ptr<ImageInput> mount_inp ;
 
   // technical variables for the argument parser
 
@@ -591,15 +598,13 @@ struct arguments
       .help("OIIO conservative_filter Texture Option - pass 0 or 1")
       .metavar("YESNO");
 
-    // coming soon:
-
-    // ap.separator("  parameters for mounted image input:");
-    // 
+    ap.separator("  parameters for mounted image input:");
+    
     // std::string mount_image , mount_prj ;
     // float mount_hfov ;
-    // ap.add_argument("--mount %s:IMAGE %s:PROJECTION %f:HFOV",
-    //                 &mount_image , &mount_prj, &mount_hfov)
-    //   .help("load non-environment source image") ;
+    ap.add_argument("--mount %s:IMAGE %s:PROJECTION %f:HFOV",
+                    &mount_image , &mount_prj_str, &mount_hfov)
+      .help("load non-environment source image") ;
 
     if (ap.parse(argc, argv) < 0 ) {
         std::cerr << ap.geterror() << std::endl;
@@ -658,8 +663,22 @@ struct arguments
       ++ prj ;
     }
     projection = projection_t ( prj ) ;
-
-    assert ( input != std::string() ) ;
+    if ( mount_image != std::string() )
+    {
+      prj = 0 ;
+      for ( const auto & p : projection_name )
+      {
+        if ( p == mount_prj_str )
+          break ;
+        ++ prj ;
+      }
+      mount_prj = projection_t ( prj ) ;
+      assert ( input == std::string() ) ;
+    }
+    else
+    {
+      assert ( input != std::string() ) ;
+    }
     assert ( output != std::string() ) ;
     if ( width == 0 )
       width = 1024 ;
@@ -679,107 +698,139 @@ struct arguments
 
     cbmfov *= M_PI / 180.0 ;
 
-    // some member variables in the args object are gleaned from
-    // the input image.
-
-    // first we check for percent signs in the input filename. If
-    // we find one, we assume that the input is a cubemap consisting
-    // of six separate images following a naming scheme described by
-    // the string in 'input' which is treated as a format string.
-
-    multiple_input = false ;
-    auto has_percent = input.find_first_of ( "%" ) ;
-    if ( has_percent != std::string::npos )
+    if ( mount_image != std::string() )
     {
-      // input must be a set of six cubeface images, that's the
-      // only way how we accept a format string.
+      std::cout << "create env from mount image " << mount_image << std::endl ;
+      mount_inp = ImageInput::open ( mount_image ) ;
+      assert ( mount_inp ) ;
 
-      cfs = cubeface_series ( input ) ;
-      multiple_input = cfs.valid() ;
-      if ( multiple_input )
+      const ImageSpec &spec = mount_inp->spec() ;
+
+      mount_width = spec.width ;
+      mount_height = spec.height ;
+      nchannels = spec.nchannels ;
+      mount_hfov *= M_PI / 180.0 ;
+      switch ( mount_prj )
       {
-        // let's open the first cube face to extract the metrics.
-        // the cubemap's 'load' routine will check all images in
-        // turn, so we needn't do that here.
+        case SPHERICAL:
+        case FISHEYE:
+        case CYLINDRICAL:
+          env_step = mount_hfov / mount_width ;
+          break ;
+        case RECTILINEAR:
+          env_step = 2.0 * tan ( mount_hfov / 2.0 ) / mount_width ;
+          break ;
+        case STEREOGRAPHIC:
+          env_step = 4.0 * tan ( mount_hfov / 4.0 ) / mount_width ;
+          break ;
+        default:
+          break ;
+      }
+    }
+    else
+    {
+      // some member variables in the args object are gleaned from
+      // the input image.
 
-        inp = ImageInput::open ( cfs[0] ) ;
+      // first we check for percent signs in the input filename. If
+      // we find one, we assume that the input is a cubemap consisting
+      // of six separate images following a naming scheme described by
+      // the string in 'input' which is treated as a format string.
+
+      multiple_input = false ;
+      auto has_percent = input.find_first_of ( "%" ) ;
+      if ( has_percent != std::string::npos )
+      {
+        // input must be a set of six cubeface images, that's the
+        // only way how we accept a format string.
+
+        cfs = cubeface_series ( input ) ;
+        multiple_input = cfs.valid() ;
+        if ( multiple_input )
+        {
+          // let's open the first cube face to extract the metrics.
+          // the cubemap's 'load' routine will check all images in
+          // turn, so we needn't do that here.
+
+          inp = ImageInput::open ( cfs[0] ) ;
+          assert ( inp ) ;
+
+          const ImageSpec &spec = inp->spec() ;
+
+          assert ( spec.width == spec.height ) ;
+          env_width = spec.width ;
+          env_height = spec.height * 6 ;
+          nchannels = spec.nchannels ;
+          env_projection = CUBEMAP ;
+          if ( ctc )
+          {
+            double half_md = tan ( cbmfov / 2.0 ) ;
+            half_md *= ( ( env_width + 1.0 ) / env_width ) ;
+            cbmfov = atan ( half_md ) * 2.0 ;
+            if ( verbose )
+              std::cout << "ctc is set, adjusted cbmfov to "
+                        << ( cbmfov * 180.0 / M_PI ) << std::endl ;
+          }
+          env_step = cbmfov / env_width ;
+        }
+      }
+
+      if ( ! multiple_input )
+      {
+        // we have a single image as input.
+
+        inp = ImageInput::open ( input ) ;
         assert ( inp ) ;
 
         const ImageSpec &spec = inp->spec() ;
 
-        assert ( spec.width == spec.height ) ;
         env_width = spec.width ;
-        env_height = spec.height * 6 ;
+        env_height = spec.height ;
         nchannels = spec.nchannels ;
-        env_projection = CUBEMAP ;
-        if ( ctc )
+
+        assert (    env_width == env_height * 2
+                || env_height == env_width * 6 ) ;
+
+        if ( env_width == env_height * 2 )
         {
-          double half_md = tan ( cbmfov / 2.0 ) ;
-          half_md *= ( ( env_width + 1.0 ) / env_width ) ;
-          cbmfov = atan ( half_md ) * 2.0 ;
-          if ( verbose )
-            std::cout << "ctc is set, adjusted cbmfov to "
-                      << ( cbmfov * 180.0 / M_PI ) << std::endl ;
+          env_projection = SPHERICAL ;
+          env_step = 2.0 * M_PI / env_width ;
         }
-        env_step = cbmfov / env_width ;
-      }
-    }
-
-    if ( ! multiple_input )
-    {
-      // we have a single image as input.
-
-      inp = ImageInput::open ( input ) ;
-      assert ( inp ) ;
-
-      const ImageSpec &spec = inp->spec() ;
-
-      env_width = spec.width ;
-      env_height = spec.height ;
-      nchannels = spec.nchannels ;
-
-      assert (    env_width == env_height * 2
-               || env_height == env_width * 6 ) ;
-
-      if ( env_width == env_height * 2 )
-      {
-        env_projection = SPHERICAL ;
-        env_step = 2.0 * M_PI / env_width ;
-      }
-      else if ( env_width * 6 == env_height )
-      {
-        if ( ctc )
+        else if ( env_width * 6 == env_height )
         {
-          double half_md = tan ( cbmfov / 2.0 ) ;
-          half_md *= ( ( env_width + 1.0 ) / env_width ) ;
-          cbmfov = atan ( half_md ) * 2.0 ;
-          if ( verbose )
-            std::cout << "ctc is set, adjusted cbmfov to "
-                      << ( cbmfov * 180.0 / M_PI ) << std::endl ;
+          if ( ctc )
+          {
+            double half_md = tan ( cbmfov / 2.0 ) ;
+            half_md *= ( ( env_width + 1.0 ) / env_width ) ;
+            cbmfov = atan ( half_md ) * 2.0 ;
+            if ( verbose )
+              std::cout << "ctc is set, adjusted cbmfov to "
+                        << ( cbmfov * 180.0 / M_PI ) << std::endl ;
+          }
+          env_projection = CUBEMAP ;
+          env_step = cbmfov / env_width ;
         }
-        env_projection = CUBEMAP ;
-        env_step = cbmfov / env_width ;
+        else
+        {
+          std::cerr << "input image must have 2:1 or 1:6 aspect ratio"
+                    << std::endl ;
+          exit ( -1 ) ;
+        }
       }
-      else
-      {
-        std::cerr << "input image must have 2:1 or 1:6 aspect ratio"
-                  << std::endl ;
-        exit ( -1 ) ;
-      }
-    }
 
-    if ( verbose )
-    {
-      std::cout << "input: " << input << std::endl ;
-      std::cout << "input width: " << env_width << std::endl ;
-      std::cout << "input height: " << env_height << std::endl ;
-      std::cout << "input has " << nchannels << " channels" << std::endl ;
-      std::cout << "env_step: " << env_step << std::endl ;
-      std::cout << "interpolation: "
-              << ( itp == 1 ? "direct bilinear" : "uses OIIO" )
-              << std::endl ;
-      std::cout << "output width: " << width
-                << " height: " << height << std::endl ;
+      if ( verbose )
+      {
+        std::cout << "input: " << input << std::endl ;
+        std::cout << "input width: " << env_width << std::endl ;
+        std::cout << "input height: " << env_height << std::endl ;
+        std::cout << "input has " << nchannels << " channels" << std::endl ;
+        std::cout << "env_step: " << env_step << std::endl ;
+        std::cout << "interpolation: "
+                << ( itp == 1 ? "direct bilinear" : "uses OIIO" )
+                << std::endl ;
+        std::cout << "output width: " << width
+                  << " height: " << height << std::endl ;
+      }
     }
 
     if ( seqfile == std::string() )
@@ -808,6 +859,16 @@ struct arguments
       yaw *= M_PI / 180.0 ;
       pitch *= M_PI / 180.0 ;
       roll *= M_PI / 180.0 ;
+
+      if ( ( projection == CUBEMAP ) && ctc )
+      {
+        double half_md = tan ( hfov / 2.0 ) ;
+        half_md *= ( ( width + 1.0 ) / width ) ;
+        hfov = atan ( half_md ) * 2.0 ;
+        if ( verbose )
+          std::cout << "cubemap output: ctc is set, adjusted hfov to "
+                    << ( hfov * 180.0 / M_PI ) << std::endl ;
+      }
 
       // calculate extent - a non-zero hfov overrides x0, x1, y0, and y1
 
@@ -1306,7 +1367,9 @@ void work ( get_t & get , act_t & act )
   // the state we have built up is finally put to use, running
   // a multithreaded pipeline which fills the target image.
   
-  zimt::process ( trg.shape , get , act , cstor ) ;
+  zimt::bill_t bill ;
+  // bill.njobs = 1 ;
+  zimt::process ( trg.shape , get , act , cstor , bill ) ;
   
   // store the result to disk - either as a single frame added
   // to the video file, or as a single image stored individually.

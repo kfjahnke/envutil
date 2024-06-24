@@ -1982,11 +1982,15 @@ public:
   #define CLAMP(FNAME,REL) \
     simd_t FNAME ( const T & threshold ) const \
     { \
-      return (*this) ( *this REL threshold ) = threshold ; \
+      simd_t result ( *this ) ; \
+      result ( result REL threshold ) = threshold ; \
+      return result ; \
     } \
     simd_t FNAME ( const simd_t & threshold ) const \
     { \
-      return (*this) ( *this REL threshold ) = threshold ; \
+      simd_t result ( *this ) ; \
+      result ( result REL threshold ) = threshold ; \
+      return result ; \
     }
 
   CLAMP(at_least,<)

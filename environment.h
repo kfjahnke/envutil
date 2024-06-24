@@ -1370,9 +1370,8 @@ struct cbm_to_px_t2
 
 // the 'latlon' template codes objects which can serve as 'act'
 // functor in zimt::process. It's coded as a zimt::unary_functor
-// taking 3D 'ray' coordinates and producing pixels with C channels.
-// struct repix is used to convert the output to the desired number
-// of channels.
+// taking 'ninepack' coordinates and returning pixels with C
+// channels
 
 template < typename T , typename U , std::size_t C , std::size_t L >
 class latlon
@@ -1505,11 +1504,464 @@ public:
 
 } ;
 
+// source_t provides pixel values from a mounted 2D manifold. The
+// incoming 2D coordinates are texture coordinates guaranteed to be
+// in the range of [0,1].
+
+template < std::size_t nchannels , std::size_t ncrd , std::size_t L >
+struct source_t
+: public zimt::unary_functor < zimt::xel_t < float , ncrd > ,
+                               zimt::xel_t < float , nchannels > ,
+                               L
+                             >
+{
+  typedef zimt::unary_functor < zimt::xel_t < float , ncrd > ,
+                                zimt::xel_t < float , nchannels > ,
+                                L
+                              > base_t ;
+
+  typedef zimt::xel_t < float , ncrd > pkg_t ;
+  typedef zimt::simdized_type < pkg_t , L > pkg_v ;
+  typedef zimt::xel_t < float , 2 > crd_t ;
+  typedef zimt::simdized_type < crd_t , L > crd_v ;
+  typedef zimt::xel_t < float , nchannels > px_t ;
+  typedef zimt::simdized_type < px_t , L > px_v ;
+
+  static_assert ( ncrd == 2 || ncrd == 6 ) ;
+
+  int width ;
+  int height ;
+  zimt::xel_t < int , 2 > strides ;
+  const float * const p = nullptr ;
+  OIIO::TextureSystem * ts ;
+  OIIO::TextureSystem::TextureHandle * th ;
+  OIIO::TextureOptBatch batch_options ;
+
+  // the c'tor with atguments receives a view to image data and extracts
+  // the relevant values to access these data directly. This is the route
+  // taken for direct bilinear interpolation of the source data. Note how
+  // we cast data() to float to 'shed' the channel count from the type
+
+  source_t ( const zimt::view_t < 2 , px_t > & src )
+  : width ( src.shape [ 0 ] ) ,
+    height ( src.shape [ 1 ] ) ,
+    strides ( src.strides ) ,
+    p ( (const float* const) src.data() )
+  { }
+
+  // The c'tor without arguments routes to code using OIIO's 'texture'
+  // function to handle the lookup. Here, we rely on OIIO's TextureSystem
+  // to provide the data - we don't need to set up image storage.
+
+  source_t()
+  {
+    // itp == -1 means 'use OIIO's 'texture' function
+
+    assert ( args.itp == -1 ) ;
+
+    // transfer all OIIO-related options from the arguments. This might
+    // be factored out (the same code is also used for cubemap processing
+    // via an OIIO texture) - but one might consider using different
+    // options for the two processes, so for now I just copy and paste.
+
+    for ( int i = 0 ; i < 16 ; i++ )
+      batch_options.swidth[i] = batch_options.twidth[i]
+        = args.stwidth ;
+    
+    for ( int i = 0 ; i < 16 ; i++ )
+      batch_options.sblur[i] = batch_options.tblur[i]
+        = args.stblur ;
+
+    batch_options.conservative_filter = args.conservative_filter ;
+
+    auto wrap_it = wrap_map.find ( args.swrap ) ;
+    assert ( wrap_it != wrap_map.end() ) ;
+    batch_options.swrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+  
+    wrap_it = wrap_map.find ( args.twrap ) ;
+    assert ( wrap_it != wrap_map.end() ) ;
+    batch_options.twrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+  
+    auto mip_it = mipmode_map.find ( args.mip ) ;
+    assert ( mip_it != mipmode_map.end() ) ;
+    batch_options.mipmode = OIIO::Tex::MipMode ( mip_it->second ) ;
+  
+    auto interp_it = interpmode_map.find ( args.interp ) ;
+    assert ( interp_it != interpmode_map.end() ) ;
+    batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
+  
+    ts = OIIO::TextureSystem::create() ;
+
+    if ( args.tsoptions != std::string() )
+    {
+      if ( verbose )
+        std::cout << "adding texture system options: " << args.tsoptions
+                  << std::endl ;
+    
+      ts->attribute ( "options" , args.tsoptions ) ;
+    }
+
+    OIIO::ustring uenvironment ( args.mount_image , 0 ) ;
+    th = ts->get_texture_handle ( uenvironment ) ;
+  }
+
+  void eval ( const pkg_v & _crd , px_v & px ) const
+  {
+    // incoming is const &, hence:
+
+    pkg_v crd ( _crd ) ;
+
+    if constexpr ( ncrd == 2 )
+    {
+      // bilinear interpolation with clamping at the edges.
+      // We rely on crd being in range [0,1], but the code at hand
+      // can tolerate small (up to less than .5) overshoots.
+
+      crd[0] *= width ;
+      crd[1] *= height ;
+      crd -= .5f ;
+
+      // get the upper left neighbouring discrete coordinate
+
+      v2i_v uli { floor ( crd[0] ) , floor ( crd[1] ) } ;
+
+      // and derive weights for the bilinear interpolation
+
+      auto wr = crd - uli ;
+      auto wl = 1.0f - wr ;
+
+      // we also want the other three neighbouring dicrete coordinates
+
+      v2i_v uri ( uli ) ;
+      uri[0] += 1 ;
+      
+      v2i_v lli ( uli ) ;
+      lli[1] += 1 ;
+      
+      v2i_v lri ( lli ) ;
+      lri[0] += 1 ;
+
+      // clamp the values to [0,width-1] and [0,height-1]
+
+      uli[0] = uli[0].at_least ( 0 ) ;
+      lli[0] = lli[0].at_least ( 0 ) ;
+      
+      uli[1] = uli[1].at_least ( 0 ) ;
+      uri[1] = uri[1].at_least ( 0 ) ;
+      
+      uri[0] = uri[0].at_most ( width - 1 ) ;
+      lri[0] = lri[0].at_most ( width - 1 ) ;
+      
+      lli[1] = lli[1].at_most ( height - 1 ) ;
+      lri[1] = lri[1].at_most ( height - 1 ) ;
+
+      // now gather, apply weights, sum up
+
+      // obtain the four constituents by first truncating their
+      // coordinate to int and then gathering from p.
+
+      index_v idsdxl { uli[0] , uli[1] } ;
+      auto ofs = ( idsdxl * strides ) . sum() * nchannels ;
+      px_v pxul ;
+      pxul.gather ( p , ofs ) ;
+
+      index_v idsdxr { uri[0] , uri[1] } ;
+      ofs = ( idsdxr * strides ) . sum() * nchannels ;
+      px_v pxur ;
+      pxur.gather ( p , ofs ) ;
+
+      index_v idxll { lli[0] , lli[1] } ;
+      ofs = ( idxll * strides ) . sum() * nchannels ;
+      px_v pxll ;
+      pxll.gather ( p , ofs ) ;
+
+      index_v idxlr { lri[0] , lri[1] } ;
+      ofs = ( idxlr * strides ) . sum() * nchannels ;
+      px_v pxlr ;
+      pxlr.gather ( p , ofs ) ;
+
+      // apply the bilinear formula with the weights gleaned above
+
+      px  = wl[1] * ( wl[0] * pxul + wr[0] * pxur ) ;
+      px += wr[1] * ( wl[0] * pxll + wr[0] * pxlr ) ;
+    }
+    else // to ( ncrd == 2 )
+    {
+      // use OIIO's 'texture' function to extract the pixel value
+
+      // we have six incoming coordinate values, namely the pick-up
+      // coordinate itself and two more derived from the target
+      // coordinate's right and lower neighbour. We form an approximation
+      // of the derivative by differencing. This is not strictly correct
+      // (see the remarks about forming two vectors coplanar to the
+      // tangent plane at 'crd' elsewhere) but it's 'good enough'.
+
+      crd_v dx_tx = { abs ( crd[2] - crd[0] ) , abs ( crd[3] - crd[1] ) } ;
+      crd_v dy_tx = { abs ( crd[4] - crd[0] ) , abs ( crd[5] - crd[1] ) } ;
+
+      // OIIO's 'texture' functions requires a non-const batch_options
+      // object, the compiler should take care of that with copy elision
+
+      OIIO::TextureOptBatch _batch_options ( batch_options ) ;
+
+      // for correct wrap-around, overly large values are assumed to
+      // originate from opposite edges of the texture. (note: set twrap,
+      // swrap for 360X180 to avoid black line at the wrap-around point)
+
+      // TODO: think about this some more, re. different projections
+      // note: with 360 degree fisheyes we get flawed output near the
+      // 'back' pole with standard OIIO pickup.
+
+      dx_tx[0] ( dx_tx[0] > .9f ) = 1.0f - dx_tx[0] ;
+      dx_tx[1] ( dx_tx[1] > .9f ) = 1.0f - dx_tx[1] ;
+      dy_tx[0] ( dy_tx[0] > .9f ) = 1.0f - dy_tx[0] ;
+      dy_tx[1] ( dy_tx[1] > .9f ) = 1.0f - dy_tx[1] ;
+
+      #if defined USE_VC or defined USE_STDSIMD
+
+      // to interface with zimt's Vc and std::simd backends, we need to
+      // extract the data from the SIMDized objects and re-package the
+      // ouptut as a SIMDized object. The compiler will likely optimize
+      // this away and work the entire operation in registers, so let's
+      // call this a 'semantic manoevre'.
+
+      float scratch [ 6 * LANES + nchannels * LANES ] ;
+
+      crd[0].store ( scratch ) ;
+      crd[1].store ( scratch + LANES ) ;
+      dx_tx[0].store ( scratch + 2 * LANES ) ;
+      dx_tx[1].store ( scratch + 3 * LANES ) ;
+      dy_tx[0].store ( scratch + 4 * LANES ) ;
+      dy_tx[1].store ( scratch + 5 * LANES ) ;
+
+      bool result =
+      ts->texture ( th , nullptr , _batch_options , OIIO::Tex::RunMaskOn ,
+                    scratch , scratch + LANES ,
+                    scratch + 2 * LANES , scratch + 3 * LANES ,
+                    scratch + 4 * LANES , scratch + 5 * LANES ,
+                    nchannels , scratch + 6 * LANES ) ;
+
+      assert ( result ) ;
+      px.load ( scratch + 6 * LANES ) ;
+
+      #else
+
+      // zimt's own and the highway backend have a representation as
+      // a C vector of fundamentals and provide a 'data' function
+      // to yield it's address. This simplifies matters, we can pass
+      // these pointers to OIIO directly.
+
+      bool result =
+      ts->texture ( th , nullptr , _batch_options , OIIO::Tex::RunMaskOn ,
+                    crd[0].data() , crd[1].data() ,
+                    dx_tx[0].data() , dx_tx[1].data() ,
+                    dy_tx[0].data() , dy_tx[1].data() ,
+                    nchannels , (float*) ( px[0].data() ) ) ;
+
+      assert ( result ) ;
+      #endif
+    }
+  }
+} ;
+
+// struct mount_t provides data from a rectanglular 2D manifold holding
+// pixel data in a given projection which do not cover the entire
+// 360X180 degree environment. Typical candidates would be rectilinear
+// patches or cropped images. This class handles channel counts up to
+// four and paints pixels outside the covered range black. Four RGBA
+// pixels, 'outside' pixels are painted 0000, assuming associated alpha.
+// The 'ncrd' template argument is either three for lookups without
+// or nine for lookups with two next neighbour's coordinates which
+// can be used to find derivatives. This class relies on an 'inner'
+// functor of class source_t to actually provide pixel data, this here
+// class deals with the geometrical transformations needed for the
+// different types of projections which the mounted images can have,
+// and with masking out parts where the mounted image has no data.
+
+template < std::size_t nchannels , std::size_t ncrd ,
+           projection_t P , std::size_t L >
+struct mount_t
+: public zimt::unary_functor < zimt::xel_t < float , ncrd > ,
+                               zimt::xel_t < float , nchannels > ,
+                               L
+                             >
+{
+  typedef zimt::unary_functor < zimt::xel_t < float , ncrd > ,
+                                zimt::xel_t < float , nchannels > ,
+                                L
+                              > base_t ;
+
+  typedef zimt::xel_t < float , ncrd > ray_t ;
+  typedef zimt::simdized_type < ray_t , L > ray_v ;
+  typedef zimt::xel_t < float , 2 > crd_t ;
+  typedef zimt::xel_t < float , 3 > crd3_t ;
+  typedef zimt::simdized_type < crd_t , L > crd_v ;
+  typedef zimt::simdized_type < crd3_t , L > crd3_v ;
+  typedef zimt::xel_t < float , nchannels > px_t ;
+  typedef zimt::simdized_type < px_t , L > px_v ;
+
+  using typename base_t::in_v ;
+  using typename base_t::in_ele_v ;
+  typedef typename in_ele_v::mask_type mask_t ;
+
+  extent_type extent ;
+  crd_t center ;
+  crd_t rgirth ;
+  source_t < nchannels , 2 * ncrd / 3 , L > & inner ;
+
+  static_assert ( ncrd == 3 || ncrd == 9 ) ;
+
+  static_assert (    P == SPHERICAL
+                  || P == CYLINDRICAL
+                  || P == RECTILINEAR
+                  || P == STEREOGRAPHIC
+                  || P == FISHEYE ) ;
+
+  mount_t ( extent_type _extent ,
+            source_t < nchannels , 2 * ncrd / 3 , L > & _inner )
+  : extent ( _extent ) ,
+    center { ( _extent.x0 + _extent.x1 ) * .5 ,
+             ( _extent.y0 + _extent.y1 ) * .5 } ,
+    rgirth { 1.0  / ( _extent.x1 - _extent.x0 ) ,
+             1.0 / ( _extent.y1 - _extent.y0 ) } ,
+    inner ( _inner )
+  { }
+
+  // shade provides a pixel value for a 2D coordinate inside the
+  // 2D manifold's 'extent' by delegating to the 'inner' functor
+  // of class source_t
+
+  px_v shade ( crd_v crd ) const
+  {
+    // move to texture coordinates. The eval code uses clamping,
+    // so absolute precision isn't required and multiplying with
+    // the reciprocal girth should be sufficient.
+
+    crd[0] = ( crd[0] - extent.x0 ) * rgirth[0] ;
+    crd[1] = ( crd[1] - extent.y0 ) * rgirth[1] ;
+
+    // use 'inner' to provide the pixel
+
+    px_v result ;
+
+    inner.eval ( crd , result ) ;
+    return result ;
+  }
+
+  // plain coordinate transformation without masking. The mask is
+  // calculated one function down. The geometrical transformations
+  // are coded in 'geometry.h'.
+  
+  void get_coordinate_nomask ( const crd3_v & crd3 , crd_v & crd ) const
+  {
+    if constexpr ( P == RECTILINEAR )
+    {
+      crd[0] = crd3[0] / crd3[2] ;
+      crd[1] = crd3[1] / crd3[2] ;
+    }
+    else if constexpr ( P == SPHERICAL )
+    {
+      static ray_to_ll_t ray_to_ll ;
+      ray_to_ll.eval ( crd3 , crd ) ;
+    }
+    else if constexpr ( P == CYLINDRICAL )
+    {
+      static ray_to_cyl_t ray_to_cyl ;
+      ray_to_cyl.eval ( crd3 , crd ) ;
+    }
+    else if constexpr ( P == STEREOGRAPHIC )
+    {
+      static ray_to_ster_t ray_to_ster ;
+      ray_to_ster.eval ( crd3 , crd ) ;
+    }
+    else if constexpr ( P == FISHEYE )
+    {
+      static ray_to_fish_t ray_to_fish ;
+      ray_to_fish.eval ( crd3 , crd ) ;
+    }
+  }
+
+  // get_coordinate yields a coordinate into the mounted 2D manifold
+  // and a true mask value if the ray passes through the draped 2D
+  // manifold, or a valid coordinate (the center of the 'extent')
+  // and a false mask value if the ray does not 'hit' the 2D manifold.
+
+  mask_t get_coordinate ( const crd3_v & crd3 , crd_v & crd ) const
+  {
+    get_coordinate_nomask ( crd3 , crd ) ;
+
+    auto mask =    ( crd[0] < extent.x0 )
+                || ( crd[0] > extent.x1 )
+                || ( crd[1] < extent.y0 )
+                || ( crd[1] > extent.y1 ) ;
+
+    if constexpr ( P == RECTILINEAR )
+      mask |= ( crd3[2] <= 0.0f ) ;
+
+    crd[0] ( mask ) = center[0] ;
+    crd[1] ( mask ) = center[1] ;
+    return mask ;
+  }
+
+  // eval puts it all together and yields pixel sets with 'misses' masked
+  // out to zero.
+
+  void eval ( const in_v & ray , px_v & px ) const
+  {
+    // the first three components have the 3D pickup coordinate itself
+
+    crd3_v crd3 { ray[0] , ray[1] , ray[2] } ;
+    crd_v crd ;
+
+    auto mask = get_coordinate ( crd3 , crd ) ;
+
+    if constexpr ( ncrd == 3 )
+    {
+      // thsi is easy: just call shade
+
+      px = shade ( crd ) ;
+    }
+    else
+    {
+      // extract the 3D ray coordinates for the two adjacent locations
+
+      crd3_v dx3 { ray[3] , ray[4] , ray[5] } ;
+      crd3_v dy3 { ray[6] , ray[7] , ray[8] } ;
+
+      // obtain their corresponding 2D source image coordinates
+
+      crd_v dx2 , dy2 ;
+      get_coordinate_nomask ( dx3 , dx2 ) ;
+      get_coordinate_nomask ( dy3 , dy2 ) ;
+
+      // scale to texture coordinates
+
+      crd[0] = ( crd[0] - extent.x0 ) * rgirth[0] ;
+      dx2[0] = ( dx2[0] - extent.x0 ) * rgirth[0] ;
+      dy2[0] = ( dy2[0] - extent.x0 ) * rgirth[0] ;
+      crd[1] = ( crd[1] - extent.y0 ) * rgirth[1] ;
+      dx2[1] = ( dx2[1] - extent.y0 ) * rgirth[1] ;
+      dy2[1] = ( dy2[1] - extent.y0 ) * rgirth[1] ;
+
+      // delegate to 'inner' to glean the pixel value
+
+      inner.eval ( { crd[0] , crd[1] ,
+                     dx2[0] , dx2[1] ,
+                     dy2[0] , dy2[1] } , px ) ; 
+    }
+    // mask out 'misses' to all-zero
+
+    if ( any_of ( mask ) )
+    {
+      for ( int i = 0 ; i < nchannels ; i++ )
+        px[i] ( mask ) = 0.0f ;
+    }
+  }
+} ;
+
 // the 'environment' template codes objects which can serve as 'act'
 // functor in zimt::process. It's coded as a zimt::unary_functor
 // taking 3D 'ray' coordinates and producing pixels with C channels.
-// struct repix is used to convert the output to the desired number
-// of channels.
 
 template < typename T , typename U , std::size_t C , std::size_t L >
 class environment
@@ -1517,64 +1969,160 @@ class environment
                                zimt::xel_t < U , C > ,
                                L >
 {
+  typedef zimt::unary_functor < zimt::xel_t < T , 3 > ,
+                               zimt::xel_t < U , C > ,
+                               L > base_t ;
+
   std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , C > > > pa ;
 
 public:
   
+  using typename base_t::in_v ;
+  using typename base_t::out_v ;
+
   typedef zimt::xel_t < T , 3 > ray_t ;
   typedef zimt::xel_t < U , C > px_t ;
   typedef zimt::xel_t < std::size_t , 2 > shape_type ;
+  typedef zimt::xel_t < float , C > in_px_t ;
+
+  // this member variable will hold the type-erased functor encoding
+  // the various code paths we handle with this object. The 'eval'
+  // member function simply calls this functor.
 
   zimt::grok_type < ray_t , px_t , L > env ;
 
   environment()
   {
-    auto & inp ( args.inp ) ;
-    auto & w ( args.env_width ) ;
-    auto & h ( args.env_height ) ;
+    // we have two different code paths to deal with. The first one
+    // is for 'mounted' images in various projections. They require
+    // specific code to deal with the projection and mask out pixels
+    // which aren't covered by the source image data.
 
-    shape_type shape { w , h } ;
-
-    if ( w == 2 * h )
+    if ( args.mount_image != std::string() )
     {
-      if ( verbose )
-        std::cout << "input has 2:1 aspect ratio, assuming latlon"
-                  << std::endl ;
+      shape_type shape { args.mount_width , args.mount_height } ;
 
-      typedef zimt::xel_t < float , C > in_px_t ;
+      if ( verbose )
+        std::cout << "processing mounted image " << args.mount_image
+                  << " shape " << shape << std::endl ;
+
       pa = std::make_shared < zimt::array_t < 2 , in_px_t > >
         ( shape ) ;
 
-      bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                        TypeDesc::FLOAT , pa->data() ) ;
+      bool success = args.mount_inp->read_image
+              ( 0 , 0 , 0 , C , TypeDesc::FLOAT , pa->data() ) ;
+
       assert ( success ) ;
 
-      env =   ray_to_ll_t()
-            + eval_latlon < C > ( *pa ) ;
-    }
-    else if ( h == 6 * w )
-    {
-      if ( verbose )
-      {
-        std::cout << "input has 1:6 aspect ratio, assuming cubemap"
-                  << std::endl ;
-      }
-      sixfold_t<C> sf ( args.env_width , args.cbmfov ,
-                        args.support_min , args.tile_size ) ;
-      if ( args.multiple_input )
-        sf.load ( args.cfs.get_filenames() ) ;
-      else
-        sf.load ( inp ) ;
-      inp->close() ;
-      sf.mirror_around() ;
-      sf.fill_support ( 1 ) ;
+      static source_t < C , 2 , 16 > src ( *pa ) ;
 
-      env =   cbm_to_px_t < C > ( sf ) ;
+      // for now, we mount images to the center; other types of cropping
+      // might be added by providing suitable parameterization.
+  
+      auto extent = get_extent ( args.mount_prj , args.mount_width ,
+                                 args.mount_height , args.mount_hfov  ) ;
+
+      // we fix the projection as a template argument to class mount_t.
+
+      switch ( args.mount_prj )
+      {
+        case RECTILINEAR:
+        {
+          mount_t < C , 3 , RECTILINEAR , 16 > mnt ( extent , src ) ;
+          env = mnt ;
+          break ;
+        }
+        case SPHERICAL:
+        {
+          mount_t < C , 3 , SPHERICAL , 16 > mnt ( extent , src ) ;
+          env = mnt ;
+          break ;
+        }
+        case CYLINDRICAL:
+        {
+          mount_t < C , 3 , CYLINDRICAL , 16 > mnt ( extent , src ) ;
+          env = mnt ;
+          break ;
+        }
+        case STEREOGRAPHIC:
+        {
+          mount_t < C , 3 , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
+          env = mnt ;
+          break ;
+        }
+        case FISHEYE:
+        {
+          mount_t < C , 3 , FISHEYE , 16 > mnt ( extent , src ) ;
+          env = mnt ;
+          break ;
+        }
+        default:
+        {
+          assert ( false ) ;
+          break ;
+        }
+      }
+    }
+    else
+    {
+      // this code path is for 'true' environments which provide pixel
+      // data for the entire 360X180 degrees. For now, we accepts either
+      // a 2:1 full equirect or a 1:6 vertically stacked cubemap.
+
+      auto & inp ( args.inp ) ;
+      auto & w ( args.env_width ) ;
+      auto & h ( args.env_height ) ;
+
+      shape_type shape { w , h } ;
+
+      if ( w == 2 * h )
+      {
+        if ( verbose )
+          std::cout << "environment has 2:1 aspect ratio, assuming latlon"
+                    << std::endl ;
+
+        pa = std::make_shared < zimt::array_t < 2 , in_px_t > >
+          ( shape ) ;
+
+        bool success = inp->read_image ( 0 , 0 , 0 , C ,
+                                          TypeDesc::FLOAT , pa->data() ) ;
+        assert ( success ) ;
+
+        env =   ray_to_ll_t()
+              + eval_latlon < C > ( *pa ) ;
+      }
+      else if ( h == 6 * w )
+      {
+        if ( verbose )
+        {
+          std::cout << "environment has 1:6 aspect ratio, assuming cubemap"
+                    << std::endl ;
+        }
+        sixfold_t<C> sf ( args.env_width , args.cbmfov ,
+                          args.support_min , args.tile_size ) ;
+        if ( args.multiple_input )
+          sf.load ( args.cfs.get_filenames() ) ;
+        else
+          sf.load ( inp ) ;
+        inp->close() ;
+        sf.mirror_around() ;
+        sf.fill_support ( 1 ) ;
+
+        env =   cbm_to_px_t < C > ( sf ) ;
+      }
+      else
+      {
+        std::cerr << "environment doesn't have 2:1 or 1:6 aspect ratio"
+                  << std::endl ;
+
+        assert ( false ) ;
+      }
     }
   }
 
-  void eval ( const typename zimt::grok_type < ray_t , px_t , L >::in_v & in ,
-              typename zimt::grok_type < ray_t , px_t , L >::out_v & out )
+  // eval simply delegates to 'env'
+
+  void eval ( const in_v & in , out_v & out )
   {
     env.eval ( in , out ) ;
   }
@@ -1889,6 +2437,12 @@ struct environment9
     if ( args.itp == -2 )
     {
       // use twining (--itp -2). first create an 'environment' object.
+      // This is an object holding pixel data and using direct
+      // bilinear interpolation to get pixel values. But this
+      // object won't directly yield output data - the 'twining'
+      // will use it to obtain several pixel avlues in close
+      // vicinity and form a weighted sum from them.
+  
       // Note how this object will persist (we declare it static), so
       // it's only created right when control flow arrives here for
       // the very first time (parameterization is taken from 'args').
@@ -1986,9 +2540,61 @@ struct environment9
       // objects, which are created and also grokked to 'act'.
       // There, the 'ninepack' is used to calculate the derivatives
       // and then all the data needed for the look-up are passed to
-      // the relevant (batched) OIIO look-up function.
+      // the relevant (batched) OIIO look-up function. mounted
+      // images use an object of type 'mount_t' which, in turn,
+      // uses an 'inner functor' of type source_t. So we first
+      // set up the source_t object, then create the projection-
+      // -specific mount_t object.
 
-      if ( args.env_width == args.env_height * 2 )
+      if ( args.mount_image != std::string() )
+      {
+        static source_t < nchannels , 6 , 16 > src ;
+        auto extent = get_extent ( args.mount_prj , args.mount_width ,
+                                   args.mount_height , args.mount_hfov  ) ;
+
+        // same case switch as for the single-coordinate code path;
+        // might be factored out - for now we just copy and paste
+
+        switch ( args.mount_prj )
+        {
+          case RECTILINEAR:
+          {
+            mount_t < nchannels , 9 , RECTILINEAR , 16 > mnt ( extent , src ) ;
+            act = mnt ;
+            break ;
+          }
+          case SPHERICAL:
+          {
+            mount_t < nchannels , 9 , SPHERICAL , 16 > mnt ( extent , src ) ;
+            act = mnt ;
+            break ;
+          }
+          case CYLINDRICAL:
+          {
+            mount_t < nchannels , 9 , CYLINDRICAL , 16 > mnt ( extent , src ) ;
+            act = mnt ;
+            break ;
+          }
+          case STEREOGRAPHIC:
+          {
+            mount_t < nchannels , 9 , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
+            act = mnt ;
+            break ;
+          }
+          case FISHEYE:
+          {
+            mount_t < nchannels , 9 , FISHEYE , 16 > mnt ( extent , src ) ;
+            act = mnt ;
+            break ;
+          }
+          default:
+          {
+            assert ( false ) ;
+            break ;
+          }
+        }
+      }
+      else if ( args.env_width == args.env_height * 2 )
       {
         // set up an environment object picking up pixel values from
         // a lat/lon image using OIIO's 'environment' function. Again
@@ -2018,3 +2624,4 @@ struct environment9
     act.eval ( in , out ) ;
   }
 } ;
+

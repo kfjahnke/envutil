@@ -416,6 +416,88 @@ struct ray_to_ll_t
   }
 } ;
 
+struct ray_to_cyl_t
+: public zimt::unary_functor < v3_t , v2_t , LANES >
+{
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out ) const
+  {
+    // incoming, we have a 3D directional vector
+    
+    auto const & right ( in[RIGHT] ) ;
+    auto const & down ( in[DOWN] ) ;
+    auto const & forward ( in[FORWARD] ) ;
+
+    // outgoing, we have a 2D lat/lon coordinate.
+
+    auto & lon ( out[0] ) ;
+    auto & lat ( out[1] ) ;
+
+    auto s = sqrt ( right * right + forward * forward ) ;
+    lat = down / s ;
+    lon = atan2 ( right , forward ) ;
+  }
+} ;
+
+#include <cfloat>
+
+template < typename dtype = float >
+struct ray_to_ster_t
+: public zimt::unary_functor < v3_t , v2_t , LANES >
+{
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out ) const
+  {
+    auto reciprocal_norm = dtype ( 1.0f ) / sqrt (   in[0] * in[0]
+                                                   + in[1] * in[1]
+                                                   + in[2] * in[2] ) ;
+
+    // project 3D view ray to unit sphere surface by applying the norm
+
+    auto right = in[RIGHT] * reciprocal_norm ;
+    auto down = in[DOWN] * reciprocal_norm ;
+    auto forward = in[FORWARD] * reciprocal_norm ;
+
+    // 'factor' projects x and y to stereographic: x+1 puts us to the point
+    // on the sphere opposite the center of the view, and the 2.0 accounts for
+    // the fact that the plane is now 2u distant instead of just 1 when seen
+    // from the origin. If x gets very close to -1, we produce FLT_MAX as the
+    // result, which shoud be outside the valid range
+
+    auto factor = dtype ( 2.0f ) / ( forward + dtype ( 1.0f ) ) ;
+
+    out[0] = right * factor ;
+    out[0] ( forward <= dtype ( -1.0f ) + FLT_EPSILON ) = FLT_MAX ;
+    out[1] = down * factor ;
+    out[1] ( forward <= dtype ( -1.0f ) + FLT_EPSILON ) = FLT_MAX ;
+  }
+} ;
+
+template < typename dtype = float >
+struct ray_to_fish_t
+: public zimt::unary_functor < v3_t , v2_t , LANES >
+{
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out ) const
+  {
+    auto const & right ( in[RIGHT] ) ;
+    auto const & down ( in[DOWN] ) ;
+    auto const & forward ( in[FORWARD] ) ;
+
+    auto s = sqrt ( right * right + down * down ) ;
+
+    auto r = dtype ( M_PI_2 ) - atan2 ( forward , s ) ;
+
+    auto phi = atan2 ( down , right ) ;
+
+    out[0] = r * cos ( phi ) ;
+    out[1] = r * sin ( phi ) ;
+  }
+} ;
+
 // this functor template converts incoming in-face coordinates
 // to ray coordinates for a given face index, which is passed
 // as a template argument - so the sixfold 'if constexpr ...' is
