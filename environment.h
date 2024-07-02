@@ -2267,7 +2267,14 @@ struct environment9
       // parameters may change due to changing hfov from one invocation
       // of 'work' to the next.
 
-      act = twine_t < nchannels , 16 > ( env , spread ) ;
+      if ( args.twine_precise )
+      {
+        act = twine_t < nchannels , 16 , true > ( env , spread ) ;
+      }
+      else
+      {
+        act = twine_t < nchannels , 16 , false > ( env , spread ) ;
+      }
     }
     else
     {

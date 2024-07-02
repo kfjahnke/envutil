@@ -397,6 +397,7 @@ struct arguments
   int twine  ;
   std::string twf_file ;
   bool twine_normalize ;
+  bool twine_precise ;
   double twine_width , twine_sigma , twine_threshold ;
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
@@ -559,6 +560,9 @@ struct arguments
 
     ap.arg("--twine_normalize", &twine_normalize)
       .help("normalize twining filter weights gleaned from a file");
+
+    ap.arg("--twine_precise", &twine_precise)
+      .help("project twining basis vectors to tangent plane");
 
     ap.arg("--twine_width WIDTH")
       .help("widen the pick-up area of the twining filter")
