@@ -199,6 +199,7 @@ envutil --help gives a summary of command line options:
     interpolation options:
       --itp ITP              interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining
     parameters for twining (with --itp -2):
+      --twf_file TWF_FILE    read twining filter from a file
       --twine TWINE          use twine*twine oversampling - default: automatic settings
       --twine_width WIDTH    widen the pick-up area of the twining filter
       --twine_sigma SIGMA    use a truncated gaussian for the twining filter (default: don't)
@@ -484,6 +485,94 @@ the source image for single-point lookups, but it will perform more lookups and
 then combine several neighbouring pixels from the oversampled result into each
 target pixel.
 
+The operation of the twining filter differs conceptually from OIIO's pick-up
+with derivatives: OIIO's filter (as I understand it) looks at the difference
+of the 2D coordinates into the source texture and produces a filter with a
+footprint proportional to that. twining instead inspects the difference in
+3D coordinates and places it's sub-pickups to coincide with rays which are
+produced by processing this difference. This is a subtle difference, but it
+has an important consequence: OIIO's pick-up will encompass a sufficiently
+large area in the source texture (or one of it's mip levels) to generate an
+output pixel, so even if this area is very large, the pick-up will be
+adequately filtered. twining will spread out it's sub-pickups according to
+the number of kernel coefficients and kernel size, but the number of kernel
+coefficients does not vary with the pick-up location, only the area over
+which the sub-pickups are spread will vary. So to filter correctly with a
+twining filter (obeying the sampling theorem), the twining filter needs to
+have sufficiently many coefficients spread 'quite evenly' over the pickup
+area to avoid sampling at lower rates than the source texture's sampling
+rate. While OIIO's filter forms a weighted sum over pixels in one of the
+texture's mip levels, twining relies on a bilinear interpolation of the
+originally-sized texture as it's substrate. If the sub-pickup locations are
+'too close' to each other, the shortcomings of the bilinear interpolation
+may 'shine through' if the transformation magnifies the image (you'll see
+the typical star-shaped artifacts). If the sub-pick-ups are 'too far apart',
+you may notice aliasing - of course depending on the input's spectrum as well.
+
+Keeping this in mind, if you want to set up a twining filter yourself, either
+by passing twining-related parameters setting the number and 'spread' of
+the filter coefficients or by passing a file with filter coefficients, you
+must be careful to operate within these constraints - using automatic
+twining, on the other hand (just pass --itp -2 and no other twining-related
+arguments) will figure out a parameter set which should keep the filter
+within the constraints, so you neither get aliasing for down-scaling views
+nor bilinear artifacts in up-scaling views. When creating a twining filter
+externally, be generous: processing is fast even with many sub-pickups,
+so using a larger number than strictly necessary won't do much harm.
+
+## --twf_file TWF_FILE   read twining filter from a file
+
+Passing a twf file with this option reads the twining filter from this file,
+and ignores most other twining-related options. The file is a simple text file
+with three float values per line, let's call them x, y and w.
+
+The x and y values are offsets from the pick-up location and w is a weight.
+The x and y values are offsets in the horizontal/vertical of the target
+image (!): an offset of (1,0) will pick up from the same location as the
+unmodified source coordinate of the target pixel one step to the right.
+How far away - in source texture coordinates - this is, depends on the
+relative geometry - projection and size of the source and target image.
+
+twining is based on an approximation of the derivatives of the coordinate
+transformation at the locus of interpolation: if you calculate the pick-up
+coordinate for a pixel one step to the right or one step down, respectively,
+you can form the differences to the actual pick-up coordinate and obtainin
+two vectors xv and yv which approximate the derivative. x and y are used as
+multipliers for these vectors, resulting in offsets which are added to the
+actual pick-up coordinate for each set of x, y and w. The offsetted coordinate
+is used to obtain a pixel value, this value is multiplied with the weight, w,
+and all such products are summed up to form the final result. The vectors xv
+and yv are 3D vectors and represent the difference of two 3D rays: the ray to
+the central pickup location and a ray to another sub-pickup location in it's
+vicinity.
+
+A twining filter read from a file will apply the given weights as they are,
+there is no automatic normalization - pass 'twine_normalize' to have the
+filter values normalized after they have been read. Beware: using a filter
+with gain greater than 1 may produce invalid output! The only other parameter
+affecting a twining filter read from a file is 'twine_width': if it is not
+1.0 (the default), it will be applied as a multiplicative factor to the 'x'
+and 'y' values, modifying the filter's footprint.
+
+With an externally-generated twining filter, there is no fixed geometry,
+and any kind of non-recursive filter can be realized. envutil applies this
+filter to 3D ray coordinates rather than to the 2D coordinates which occur
+after projecting the 3D ray coordinate to a source image coordinate, so
+the effect is similar to what you get from OIIO's 'environment' lookup
+with the elliptic filter, but not limited to full spherical sources -
+it will work just the same with cubemap or mounted image input.
+
+Because the two vectors, xv and yv, are recalculated for every contributing
+coordinate, the filer adapts to the location, and handles varying local
+geometry within it's capability: the sampling theorem still has to be
+obeyed insofar as generated sub-pickups in a cluster mustn't spread out
+too far and when they are too close, shortcomings of the underlying
+bilinear interpolation will show. And there have to be sufficiently many
+sub-pickups. Automatic twining produces a 'reasonable' filter which
+tries to address all these issues - play with automatic twining and
+various magnifications to see what envutil comes up with (pass -v
+to see the filer coefficients).
+
 ## --twine TWINE         use twine*twine oversampling and box filter
 
 The effect of 'twining' is the same as oversampling and subsequent application
@@ -505,7 +594,7 @@ take the automatically calculated values as a starting point, but even if
 you pass --twine, the values will adapt in an image sequence. --twine
 only has an effect for single-image output
 
-## --twine_width TWINE_WIDTH  widen the pick-up area of the twining filter
+## --twine_width TWINE_WIDTH  alter the size of the pick-up area of the twining filter
 
 A second parameter affecting 'twining'. If the source image has smaller
 resolution than the target image, the output reflects the interpolator's
@@ -521,6 +610,15 @@ widen the area in which look-ups are done to an area which is in the
 same order of magnitude as a *source* image pixel. To get this effect,
 try and pass a twine_width up to the magnitude of the scale change,
 or rely on automatic twining, which calculates a good value for you.
+On the other hand, passing a twine_width smaller than 1.0 will make the
+kernel proportionally smaller, producing 'sharper' output, at the cost of
+poptentially producing more aliasing.
+
+twine_width is the only one of the twining-related options which also
+affect a twining filter read from a file - apart from --twf_file itself,
+obviously. The twine_width is applied as a multiplicative factor to the
+first two parameters of each coefficient, so the default of 1.0 results
+in the filter geometry being unchanged.
 
 Input with low resolution is often insufficiently band-limited which will
 result in artifacts in the output or become very blurred when you try to

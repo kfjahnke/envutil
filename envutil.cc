@@ -395,6 +395,8 @@ struct arguments
 
   int itp ;
   int twine  ;
+  std::string twf_file ;
+  bool twine_normalize ;
   double twine_width , twine_sigma , twine_threshold ;
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
@@ -551,6 +553,13 @@ struct arguments
       .help("use twine*twine oversampling - default: automatic settings")
       .metavar("TWINE");
 
+    ap.arg("--twf_file TWF_FILE")
+      .help("read twining filter kernel from TWF_FILE")
+      .metavar("TWF_FILE");
+
+    ap.arg("--twine_normalize", &twine_normalize)
+      .help("normalize twining filter weights gleaned from a file");
+
     ap.arg("--twine_width WIDTH")
       .help("widen the pick-up area of the twining filter")
       .metavar("WIDTH");
@@ -622,6 +631,7 @@ struct arguments
     input = ap["input"].as_string ( "" ) ;
     output = ap["output"].as_string ( "" ) ;
     seqfile = ap["seqfile"].as_string ( "" ) ;
+    twf_file = ap["twf_file"].as_string ( "" ) ;
     codec = ap["codec"].as_string ( "libx265" ) ; 
     mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
     fps = ap["fps"].get<int>(60);
