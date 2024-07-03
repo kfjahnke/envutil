@@ -55,6 +55,14 @@ and for the reverse operation, pass --hfov 90 and --projection cubemap.
 Export of a cubemap as six separate images can be achieved by passing a
 format string - the same mechanism as for input is used.
 
+envutil can also 'mount' images in the supported five projections as
+input (use --mount ...) - currently, the images have to be cropped
+symmetrically, meaning that the optical axis is taken to pass through
+the image center. For mounted input, you can specify the horizontal
+filed of view and the projection together with the image filename.
+If the view 'looks at' areas not covered by the mounted image, it's
+painted black or transparent black for RGBA.
+
 envutil can also produce image series. The individual images are all
 created from the same environment, but the horizontal field of view
 and yaw, pitch and roll of the virtual camera for each image are taken
@@ -97,6 +105,10 @@ I offer. Automatic twining is also used for video output, where fixed
 twining parameters would fail to adapt to changing hfov. Use of twining
 or OIIO's lookup (which also adapts to the field of view) is strongly
 recommended for video output to avoid aliasing.
+
+There is now code to read the twining filter kernel from a file
+(use --twf_file); this filter can be scalled by additionally passing
+--twine_width. This allows for arbitrary filters.
 
 The program uses [zimt](https://github.com/kfjahnke/zimt) as it's 'strip-mining' and SIMD back-end, and
 sets up the pixel pipelines using zimt's functional composition tools.
@@ -836,3 +848,34 @@ output to another reference. The eval method itself is void. Usually
 I code it as a template to avoid a verbose signature - the types are
 implicit from the functor's template arguments, and oftentimes the template
 can be used for scalar and SIMDized arguments alike.
+
+# An Aside - Image Pyramids Reloaded
+
+Image pyramids are a popular method of providing multi-resolution
+representations of images. The traditional method to generate an image
+pyramid is to apply a low-pass filter to the image, then decimate it
+to obtain the next level. This level is again low-pass-filtered and
+decimated, and this is repeated until only one or a few pixels are left.
+
+With a scalable filter (like twining) there is an alternative approach,
+which I find promising and which has the potential to produce better
+pyramids: You start out with a twining kernel with many coefficients
+(say, 16X16) and directly produce the first few pyramid levels by
+producing a scaled-down output from the original (level-0) image,
+halving the size with each rendition and at the same time doubling the
+kernel width (by passing a doubled 'twine_width' parameter). Depending
+on the kernel, you may want to start with a twine_width less than one
+for the first rendition and start doubling from that - e.g .125, .25 ...
+Finally, you reach a point where another doubling of the kernel width
+would violate the sampling theorem (kernel coefficients further apart
+than the source image's sampling step), and *only then* you start using
+the next level of the pyramid as input, now keeping twine_width constant
+for successive renditions, rather than carrying on with the doubling
+of the kernel width. By using a large kernel on a level 'a few steps
+down' you obtain better quality pyramid levels, because they suffer less
+from the inevitable degradation due to decimation, which necessarily
+introduces some aliasing, because the low-pass never successfully
+eliminates the upper half of the frequency band completely. By the
+time you 'reach down' to a level 'a few steps down', no intermediate
+decimations have taken place, so the only effect is what the twining
+filter does to the signal.
