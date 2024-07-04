@@ -2228,6 +2228,17 @@ struct environment9
             args.twine_width = 1.0 ;
           }
 
+          if ( args.twine_density != 1.0f )
+          {
+            // if the user has passed twine_density, we use it as a
+            // multiplicative factor to change args.twine - typically
+            // twine_density will be larger than one, so we'll get
+            // more filter taps.
+
+            double twine = args.twine * args.twine_density ;
+            args.twine = std::round ( twine ) ;
+          }
+
           if ( verbose )
           {
             std::cout << "automatic twining for magnification " << mag

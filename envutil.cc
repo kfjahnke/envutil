@@ -398,7 +398,7 @@ struct arguments
   std::string twf_file ;
   bool twine_normalize ;
   bool twine_precise ;
-  double twine_width , twine_sigma , twine_threshold ;
+  double twine_width , twine_density , twine_sigma , twine_threshold ;
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
   bool conservative_filter ;
@@ -568,6 +568,10 @@ struct arguments
       .help("widen the pick-up area of the twining filter")
       .metavar("WIDTH");
 
+    ap.arg("--twine_density DENSITY")
+      .help("increase tap count of an 'automatic' twining filter")
+      .metavar("DENSITY");
+
     ap.arg("--twine_sigma SIGMA")
       .help("use a truncated gaussian for the twining filter (default: don't)")
       .metavar("SIGMA");
@@ -642,6 +646,7 @@ struct arguments
     itp = ap["itp"].get<int>(1);
     twine = ap["twine"].get<int>(0);
     twine_width = ap["twine_width"].get<float>(1.0);
+    twine_density = ap["twine_density"].get<float>(1.0);
     twine_sigma = ap["twine_sigma"].get<float>(0.0);
     twine_threshold = ap["twine_threshold"].get<float>(0.0);
     swrap = ap["swrap"].as_string ( "WrapDefault" ) ;

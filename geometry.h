@@ -416,6 +416,9 @@ struct ray_to_ll_t
   }
 } ;
 
+// more transformations from 3D ray coordinates to various
+// 2D projections: cylindrical, stereographic and fisheye
+
 struct ray_to_cyl_t
 : public zimt::unary_functor < v3_t , v2_t , LANES >
 {

@@ -211,9 +211,12 @@ envutil --help gives a summary of command line options:
     interpolation options:
       --itp ITP              interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining
     parameters for twining (with --itp -2):
-      --twf_file TWF_FILE    read twining filter from a file
       --twine TWINE          use twine*twine oversampling - default: automatic settings
+      --twf_file TWF_FILE    read twining filter kernel from TWF_FILE
+      --twine_normalize      normalize twining filter weights gleaned from a file
+      --twine_precise        project twining basis vectors to tangent plane
       --twine_width WIDTH    widen the pick-up area of the twining filter
+      --twine_density DENSITY increase tap count of an 'automatic' twining filter
       --twine_sigma SIGMA    use a truncated gaussian for the twining filter (default: don't)
       --twine_threshold THR  discard twining filter taps below this threshold
     parameters for lookup with OpenImageIO (with --itp -1):
@@ -585,6 +588,17 @@ tries to address all these issues - play with automatic twining and
 various magnifications to see what envutil comes up with (pass -v
 to see the filer coefficients).
 
+## --twine_normalize   normalize twining filter weights gleaned from a file
+
+If you pass a file with twining kernel values, the default is to use
+them as they are: you are free to apply any possible twining filter,
+including, e.g. differentiators which may yield negative output. Most of
+the time, though, your kernel's weights will all be positive and the
+filter will have unit gain, meaning that all weights add up to one.
+At times it's easier to just calculate filter weights without making
+sure that the sum of the weights is one. Pass --twine_normalize to let
+envutil do the normalization for you.
+
 ## --twine TWINE         use twine*twine oversampling and box filter
 
 The effect of 'twining' is the same as oversampling and subsequent application
@@ -673,6 +687,84 @@ and finally the thresholding eliminates small weights.
 After thresholding, the weights are 'normalized' to produce a filter with 'unit
 gain' - you can see that all the weights add up to 1.0 precisely. Without the
 normlization, just eliminating the sub-threshold taps would darken the output.
+
+## --twine_precise      project twining basis vectors to tangent plane
+
+This parameter affects all twining filters, but it's effect is rarely
+noticeable. To explain what this parameter does, a bit of explanation
+is needed. When envutil does a lookup from an environment, it starts out
+with the target coordinate - the discrete coordinate where an output
+pixel will appear. Next, it figures out a 3D 'ray' coordinate which
+encodes the direction where the lookup should 'look for' content. This
+obviously depends on the target projection and the orientation of the
+virtual camera. With 'simple' interpolation - like the bilinear
+interpolation you get with --itp 1, the next step is to find a 2D
+coordinate into the source image which has the content corresponding
+to the given ray and interpolate a pixel value from the source image
+at that coordinate.
+
+The more sophisticated lookup methods in envutil use 'derivatives':
+they don't merely look at the single lookup point, but take into
+account what happens when the lookup progresses to the next neighbours
+of the target point, both in the horizontal and the vertical: the
+neighbours have different corresponding rays and therefore different
+corresponding 2D source image coordinates. A simple way to obtain the
+derivative is to subtract the current pick-up coordinate from those
+corresponding to it's neighbours, yielding two 2D differences which
+encode an approximation of the derivative. But there is also a
+different way: the difference can be formed between the 3D ray
+coordinates, and this yields two 3D differences. These differences
+are (usually small) vectors from one point on the sphere to another.
+envutil's twining filter uses these two vectors to place the pick-up
+coordinates for each kernel coefficient: it multiplies the first one
+with the 'x' value of the kernel coefficient, the second one with the
+'y' value', and adds the result to the current pickup ray coordinate,
+yielding a slightly altered ray which is used as sub-pick-up. But there
+is a problem here: The two small difference vectors are not perpendicular
+to the current pick-up ray, because they are not on it's tangent plane,
+but instead connect two points on a spherical surface. If the difference
+is small, they are still almost parallel to the tangent plane and this
+distinction is irrelevant, but to be very precise, and for larger
+differences, it's better to project the difference vectors onto the
+tangent plane and use the resulting vectors to calculate the sub-pick-up
+rays. Without this projection to the tangent plane, the pattern of
+3D ray coordinates is tilted slightly off the tangent plane, and a
+sub-pick-up with negative kernel x and y values is not at precisely
+the same distance from the current pick-up location as one with positive
+x and y of equal magnitude. --twine_precise takes care of this problem
+and does the projection to the tangent sphere. The calculation needs to
+be done once per target pixel, so with increasing kernel size it does
+not require additional computations. Most of the time the change which
+results from this parameter is so minimal that it's not worth the extra
+effort, that's why it's not the default.
+
+So what's the point of calculating the 'derivative' as a 3D vector, vs.
+a 2D difference in source image coordinates? Suppose you have a sub-pick
+whose ray is substantially different from the current pick-up location.
+What if it's projection to the source image plane lands outside the source
+image, or on the opposite edge (which can happen e.g. with full
+spherical source images)? To deal with this situation, you need to add
+code which recognizes and mends this problem, and you need code for each
+type of projection to handle such issues properly. Because this is all
+inner-loop code and introduces conditionals, it's detrimental to performance,
+where you want conditional-free stencil code which is the same for each
+coordinate. Calculating the 'derivatives' in 3D avoids this problem:
+only the 3D ray coordinates of each sub-pick-up are projected to source
+image coordinates and the current pick-up coordinate is never 'taken
+all the way' to the source image - the result pixel is a weighted sum
+of the sub-pick-ups. The sub-pick-ups either yield a pixel value or they
+don't, the 2D difference never occurs and therefore doesn't produce any
+problems.
+
+## --twine_density DENSITY increase tap count of an 'automatic' twining filter
+
+'automatic' twining uses a number of twining kernel coefficients which
+is deemed sufficient to produce an artifact-free result (or to keep the
+unavoidable artifacts so small that they won't be noticeable). You may
+want to be 'more generous' and increase the number of kernel coefficients,
+and twine_density does that: if your twining kernel is generated
+automatically, it multiplies the 'twine' value with this factor, rounds,
+and assigns the result to 'twine'.
 
 # OpenImageIO-specific options
 
