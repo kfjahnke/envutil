@@ -49,16 +49,22 @@
 
 */
 
-#ifndef VC_SIMD_TYPE_H
-#define VC_SIMD_TYPE_H
+#if defined(VC_SIMD_TYPE_H) == defined(HWY_TARGET_TOGGLE)
+  #ifdef VC_SIMD_TYPE_H
+    #undef VC_SIMD_TYPE_H
+  #else
+    #define VC_SIMD_TYPE_H
+  #endif
 
 #include <iostream>
 #include <Vc/Vc>
 
 #include "gen_simd_type.h"
 
-namespace simd
-{
+HWY_BEFORE_NAMESPACE() ;
+BEGIN_ZIMT_SIMD_NAMESPACE(zimt)
+
+using ZIMT_SIMD_ISA::gen_simd_type ;
 
 template < typename _value_type ,
            std::size_t _vsize >
@@ -131,6 +137,13 @@ struct vc_simd_type
   using tag_t::backend ;
 
   typedef Vc::SimdArray < _value_type , _vsize > base_t ;
+
+  // we need to alow access to new and delete of the base class
+
+  using base_t::operator new ;
+  using base_t::operator new[] ;
+  using base_t::operator delete ;
+  using base_t::operator delete[] ;
 
   // access the underlying base type
 
@@ -434,6 +447,7 @@ struct vc_simd_type
 
   // broadcasting functions processing single value_type
 
+  typedef std::function < value_type ( const std::size_t & ) > idx_f ;
   typedef std::function < value_type() > gen_f ;
   typedef std::function < value_type ( const value_type & ) > mod_f ;
   typedef std::function < value_type ( const value_type & , const value_type & ) > bin_f ;
@@ -447,11 +461,29 @@ struct vc_simd_type
     return *this ;
   }
 
+  vc_simd_type & index_broadcast ( idx_f f )
+  {
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      (*this)[i] = f ( i ) ;
+    }
+    return *this ;
+  }
+
   vc_simd_type & broadcast ( mod_f f )
   {
     for ( std::size_t i = 0 ; i < size() ; i++ )
     {
       (*this)[i] = f ( (*this)[i] ) ;
+    }
+    return *this ;
+  }
+
+  vc_simd_type & broadcast ( mod_f f , const vc_simd_type & rhs )
+  {
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      (*this)[i] = f ( rhs[i] ) ;
     }
     return *this ;
   }
@@ -540,7 +572,6 @@ struct vc_simd_type
 
   BROADCAST_STD_FUNC(sin)
   BROADCAST_STD_FUNC(cos)
-  // BROADCAST_STD_FUNC(tan)
   BROADCAST_STD_FUNC(asin)
   BROADCAST_STD_FUNC(acos)
   BROADCAST_STD_FUNC(atan)
@@ -573,6 +604,8 @@ struct vc_simd_type
     }
 
   BROADCAST_STD_FUNC2(atan2)
+  BROADCAST_STD_FUNC2(min)
+  BROADCAST_STD_FUNC2(max)
 
   #undef BROADCAST_STD_FUNC2
 
@@ -591,7 +624,7 @@ struct vc_simd_type
   // TODO: might relax constraints by using 'std::is_convertible'
 
   #define INTEGRAL_ONLY \
-    static_assert ( std::is_integral < value_type > :: value , \
+    static_assert ( is_integral < value_type > :: value , \
                     "this operation is only allowed for integral types" ) ;
 
   #define BOOL_ONLY \
@@ -805,23 +838,22 @@ struct vc_simd_type
   // member functions at_least and at_most. These functions provide the
   // same functionality as max, or min, respectively. Given vc_simd_type X
   // and some threshold Y, X.at_least ( Y ) == max ( X , Y )
-  // Having the functionality as a member function makes it easy to
-  // implement, e.g., min as: min ( X , Y ) { return X.at_most ( Y ) ; }
 
-  #define CLAMP(FNAME,REL) \
-    vc_simd_type FNAME ( const vc_simd_type & threshold ) const \
-    { \
-      return REL ( to_base() , threshold.to_base() ) ; \
-    } \
-    vc_simd_type FNAME ( const value_type & threshold ) const \
-    { \
-      return REL ( to_base() , threshold ) ; \
-    } \
+  vc_simd_type at_least ( const vc_simd_type & threshold ) const
+  {
+    return max ( *this , threshold ) ;
+  }
 
-  CLAMP(at_least,Vc::max)
-  CLAMP(at_most,Vc::min)
+  vc_simd_type at_most ( const vc_simd_type & threshold ) const
+  {
+    return min ( *this , threshold ) ;
+  }
 
-  #undef CLAMP
+  vc_simd_type clamp ( const vc_simd_type & lower ,
+                       const vc_simd_type & upper ) const
+  {
+    return min ( max ( *this , lower ) , upper ) ;
+  }
 
   // sum of vector elements. Note that there is no type promotion; the
   // summation is done to value_type. Caller must make sure that overflow
@@ -833,21 +865,144 @@ struct vc_simd_type
   }
 } ;
 
-template < typename T , std::size_t N >
-struct allocator_traits < vc_simd_type < T , N > >
-{
-  typedef Vc::Allocator < vc_simd_type < T , N > >
-    type ;
-} ;
+// template < typename T , std::size_t N >
+// struct allocator_traits < vc_simd_type < T , N > >
+// {
+//   typedef Vc::Allocator < vc_simd_type < T , N > >
+//     type ;
+// } ;
 
-} ; // namespace simd
+namespace detail
+{
+
+// Here we have some collateral code to use Vc's InterleavedMemoryWrapper.
+// This is a specialized way of accessing interleaved but unstrided data,
+// which uses several SIMD loads, then reshuffles the data. This should
+// be quicker than using a set of gather operations.
+
+// fetch of interleaved, but unstrided data located at _data
+// into a TinyVector of zimt::simdized_types using InterleavedMemoryWrapper.
+// uses SimdArrays containing K full hardware SIMD Vectors
+
+template < typename T , size_t N , size_t K , size_t ... seq >
+void fetch ( xel_t
+             < vc_simd_type < T , K * Vc::Vector<T>::size() > , N > & v ,
+             const xel_t < T , N > * _data ,
+             const size_t & sz ,
+             Vc::index_sequence < seq ... > )
+{
+  const Vc::InterleavedMemoryWrapper < const xel_t < T , N > ,
+                                       Vc::Vector<T> > data ( _data ) ;
+
+  // as_v1_type is a type holding K Vc::Vector<T> in a TinyVector.
+  // we reinterpret the incoming reference to have as_v1_type
+  // as value_type - instead of an equally-sized SimdArray. With
+  // this interpretation of the data we can use the
+  // InterleavedMemoryWrapper, which operates on Vc::Vectors
+  // only.
+
+  // KFJ 2018-02-20 given VS as the size of a Vc::Vector<T>, I had initially
+  // coded as if a SimdArray<T,VS*K> had a size of VS*K, so just as much as
+  // K Vc::Vector<T> occupy. This is not necessarily so, the SimdArray may
+  // be larger. Hence this additional bit of size arithmetics to make the
+  // reinterpret_cast below succeed for all K, which calculates the number
+  // of Vc::Vectors, nv, which occupy the same space as the SimdArray
+
+  enum { nv =   sizeof ( vc_simd_type < T , K * Vc::Vector < T > :: size() > )
+              / sizeof ( Vc::Vector < T > ) } ;
+
+  typedef xel_t < Vc::Vector < T > , nv > as_v1_type ;
+  typedef xel_t < as_v1_type , N > as_vn_type ;
+
+  as_vn_type & as_vn = reinterpret_cast < as_vn_type & > ( v ) ;
+
+  // we fill the SimdArrays in as_vn round-robin. Note the use of
+  // Vc::tie - this makes the transition effortless.
+
+  for ( size_t k = 0 ; k < K ; k++ )
+  {
+    Vc::tie ( as_vn [ seq ] [ k ] ... )
+      = ( data [ sz + k * Vc::Vector<T>::size() ] ) ;
+  }
+}
+
+template < typename T , size_t N , size_t K , size_t ... seq >
+void stash ( const xel_t
+             < vc_simd_type < T , K * Vc::Vector<T>::size() > , N > & v ,
+             xel_t < T , N > * _data ,
+             const size_t & sz ,
+             Vc::index_sequence < seq ... > )
+{
+  Vc::InterleavedMemoryWrapper < xel_t < T , N > ,
+                                 Vc::Vector<T> > data ( _data ) ;
+
+  // we reinterpret the incoming reference to have as_v1_type
+  // as value_type, just as in 'fetch' above.
+
+  // KFJ 2018-02-20 given VS as the size of a Vc::Vector<T>, I had initially
+  // coded as if a SimdArray<T,VS*K> had a size of VS*K, so just as much as
+  // K Vc::Vector<T> occupy. This is not necessarily so, the SimdArray may
+  // be larger. Hence this additional bit of size arithmetics to make the
+  // reinterpret_cast below succeed for all K, which calculates the number
+  // of Vc::Vectors, nv, which occupy the same space as the SimdArray
+
+  enum { nv =   sizeof ( vc_simd_type < T , K * Vc::Vector < T > :: size() > )
+              / sizeof ( Vc::Vector < T > ) } ;
+
+  typedef xel_t < Vc::Vector < T > , nv > as_v1_type ;
+  typedef xel_t < as_v1_type , N > as_vn_type ;
+
+  const as_vn_type & as_vn = reinterpret_cast < const as_vn_type & > ( v ) ;
+
+  // we unpack the SimdArrays in as_vn round-robin. Note, again, the use
+  // of Vc::tie - I found no other way to assign to data[...] at all.
+
+  for ( size_t k = 0 ; k < K ; k++ )
+  {
+    data [ sz + k * Vc::Vector<T>::size() ]
+      = Vc::tie ( as_vn [ seq ] [ k ] ... ) ;
+  }
+}
+
+} ; // end of namespace detail
+
+/// de/interleave overloads, which are only enabled if vsz is a multiple
+/// of the SIMD vector capacity. delegates to detail::fetch, which
+/// handles the data acquisition with a Vc::InterleavedMemoryWrapper.
+/// This overload is only for unstrided multichannel data and overrides
+/// the deinterleave template in xel.h which uses gather/scatter
+
+template < typename ele_type , std::size_t chn , std::size_t vsz >
+typename std::enable_if < vsz % Vc::Vector<ele_type>::size() == 0 > :: type
+deinterleave ( const xel_t < ele_type , chn > * const & src ,
+        xel_t < vc_simd_type < ele_type , vsz > , chn > & trg )
+{
+  enum { K = vsz / Vc::Vector<ele_type>::size() } ;
+
+  detail::fetch < ele_type , chn , K >
+    ( trg , src , 0 , Vc::make_index_sequence<chn>() ) ;
+}
+
+template < typename ele_type , std::size_t chn , std::size_t vsz >
+typename std::enable_if < vsz % Vc::Vector<ele_type>::size() == 0 > :: type
+interleave ( const xel_t < vc_simd_type < ele_type , vsz > , chn > & src ,
+        xel_t < ele_type , chn > * const & trg )
+{
+  enum { K = vsz / Vc::Vector<ele_type>::size() } ;
+
+  detail::stash < ele_type , chn , K >
+    ( src , trg , 0 , Vc::make_index_sequence<chn>() ) ;
+}
+
+END_ZIMT_SIMD_NAMESPACE
+HWY_AFTER_NAMESPACE() ;
 
 namespace std
 {
   template < typename T , std::size_t N >
-  struct allocator_traits < simd::vc_simd_type < T , N > >
+  struct allocator_traits < ZIMT_ENV::vc_simd_type < T , N > >
   {
-    typedef Vc::Allocator < simd::vc_simd_type < T , N > >
+    typedef Vc::Allocator < ZIMT_ENV::vc_simd_type < T , N > >
       allocator_type ;
   } ;
 } ;
@@ -855,11 +1010,10 @@ namespace std
 
 namespace zimt
 {
-
   template < typename T , size_t N >
-  struct is_integral < simd::vc_simd_type < T , N > >
+  struct is_integral < zimt::vc_simd_type < T , N > >
   : public std::is_integral < T >
   { } ;
-
 } ;
-#endif // #define VC_SIMD_TYPE_H
+
+#endif // sentinel

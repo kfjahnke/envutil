@@ -83,9 +83,108 @@
 #include <cstring>
 
 #ifndef ZIMT_ARRAY_H
+#define ZIMT_ARRAY_H
 
 namespace zimt
 {
+// coordinate iterators. For now, we don't implement 'proper'
+// c++ standard iterators, but just two stripped-down ones.
+// zimt views are suitable for random access iteration, but it
+// would require extra coding effort to provide the usual
+// begin/end semantics - I may add this later.
+
+// stripped-down version of vigra::MultiCoordinateIterator which only
+// produces the nth nD index into an array of given shape. This class
+// is used in wielding.h. use of the modulo and division make this
+// quite slow, so it's best not used for iterations over arrays.
+// in wielding.h it's only used to produce the start address for
+// each line, so it's not time-critical there.
+// Note that if the data are contiguous in memory, it can be much
+// more efficient to iterate over the data directly - or over a 1D
+// view of the data.
+// Why do we need this iterator? For multithreading. There, the worker
+// threads obtain 'joblet numbers' from an atomic and decode these
+// numbers to segments of data which need to be processed. And the
+// decoding is where this iterator is used.
+
+template  < std::size_t D >
+struct mci_t
+: public xel_t < long , D >
+{
+  static const std::size_t dimension = D ;
+
+  typedef xel_t < long , D > index_type ;
+  const index_type & shape ;
+
+  template < typename T >
+  mci_t ( xel_t < T , D >  _shape )
+  : index_type ( _shape ) ,
+    shape ( *this )
+  { }
+
+  // accept any argument as long as can be converted to index_type
+  // TODO: this is very permissive - might be better to restrict to
+  // fixed-size containers of some integral type
+
+  template < typename T >
+  mci_t ( T _shape )
+  : index_type ( _shape ) ,
+    shape ( *this )
+  { }
+
+  template < typename T >
+  mci_t ( const std::initializer_list < T > & rhs )
+  : index_type ( rhs ) ,
+    shape ( *this )
+  { }
+
+  index_type operator[] ( long i )
+  {
+    index_type result ;
+
+    for ( std::size_t d = 0 ; d < dimension ; d++ )
+    {
+      result [ d ] = i % shape [ d ] ;
+      i /= shape [ d ] ;
+    }
+    return result ;
+  }
+} ;
+
+// similar to mci_t, but this class is for walking through a sequence
+// of nD coordinates. It's not for random access. For now, forward
+// only. Here there are no division or modulo operations.
+
+template  < std::size_t D >
+struct mcs_t
+: public mci_t < D >
+{
+  typedef mci_t < D > base_t ;
+  using base_t::base_t ;
+  using base_t::dimension ;
+  using typename base_t::index_type ;
+  using base_t::shape ;
+
+  index_type current = 0L ;
+
+  // operator() yields the current value and updates 'current'.
+
+  index_type operator() ()
+  {
+    // a bit verbose, let the optimizer figure it out
+
+    auto result = current ;
+    for ( std::size_t d = 0 ; d < dimension ; d++ )
+    {
+      if ( ++ current [ d ] == shape [ d ] )
+        current [ d ] = 0 ;
+      else
+        break ;
+    }
+    return result ;
+  }
+} ;
+
 class view_flag { } ;
 
 // view_t is a view to an array. Like vigra, zimt uses view_t
@@ -102,9 +201,11 @@ struct view_t
   typedef xel_t < std::size_t , dimension > shape_type ;
   typedef xel_t < long , dimension > index_type ;
 
-  // we keep the members const. assignment between views and arrays
-  // is not allowed, only copy construction can initialize a view
-  // or array with the same members.
+  // strides and shape used to be const members, but this has been
+  // relaxed because it made some operations difficult. I think that
+  // this won't reduce performance, and user code can work with const
+  // views instead of being forced to have immutable shape and strides
+  // in the views.
 
   value_type * origin ;
   index_type strides ;
@@ -179,6 +280,13 @@ struct view_t
     shape ( _shape )
     { }
 
+  view_t ( value_type * const _origin ,
+           const shape_type & _shape )
+  : origin ( _origin ) ,
+    strides ( make_strides ( _shape ) ) ,
+    shape ( _shape )
+    { }
+
   // special case producing a 'fake view' with invalid origin and
   // strides, and only a valid shape
 
@@ -234,17 +342,52 @@ struct view_t
     return origin [ offset ( crd ) ] ;
   }
 
-  template < typename index_type >
-  const T & operator[] ( const index_type & crd ) const
+  // we set up a 'lure' for calls to operator[] with integral indices
+  // but prevent it's use for other than 1D arrays with a static
+  // assertion. This is to block such 1D indices form being converted
+  // to index_type, which is not wanted: if you were using a[3] on a
+  // 2D array, this would convert to a[(3,3)].
+  // vigra::MultiArrayView allows such indexing, but interprets the
+  // index as an iterator. In zimt, this has to be done explicitly.
+  // On the other hand, if the array is indeed 1D, indexing with an
+  // integral fundamental is most effective, saving the offset
+  // calculation.
+
+  template < typename E ,
+             typename = typename std::enable_if
+               <    std::is_fundamental < E > :: value
+                 && std::is_integral < E > :: value
+               > :: type
+            >
+  const T & operator[] ( const E & crd ) const
   {
-    return origin [ offset ( crd ) ] ;
+    static_assert ( D == 1 , "use fundamental indexes only for 1D arrays" ) ;
+    return origin [ crd ] ;
   }
 
-  template < typename index_type >
-  T & operator[] ( const index_type & crd )
+  template < typename E ,
+             typename = typename std::enable_if
+               <    std::is_fundamental < E > :: value
+                 && std::is_integral < E > :: value
+               > :: type
+            >
+  T & operator[] ( const E & crd )
   {
-    return origin [ offset ( crd ) ] ;
+    static_assert ( D == 1 , "use fundamental indexes only for 1D arrays" ) ;
+    return origin [ crd ] ;
   }
+
+//   template < typename index_type >
+//   const T & operator[] ( const index_type & crd ) const
+//   {
+//     return origin [ offset ( crd ) ] ;
+//   }
+//   
+//   template < typename index_type >
+//   T & operator[] ( const index_type & crd )
+//   {
+//     return origin [ offset ( crd ) ] ;
+//   }
 
   // 'peek' function giving access to the view's origin
 
@@ -264,18 +407,56 @@ struct view_t
                     end - start ) ;
   }
 
+  // convert a view to xel data to a view to fundamentals. The new
+  // dimension is added as dimension zero unless a different value
+  // is passed.
+
+  view_t < D + 1 , ET < value_type > >
+    expand_elements ( std::size_t axis = 0 ) const
+  {
+    xel_t < std::size_t , D + 1 > xshape ;
+    xel_t < std::size_t , D + 1 > xstrides ;
+
+    assert ( axis < D ) ;
+    std::size_t nchannels = EN < value_type > :: value ;
+    typedef ET < value_type > ele_t ;
+
+    // process axes below the desired new axis, raising the stride
+
+    for ( std::size_t d = 0 ; d < axis ; d++ )
+    {
+      xshape [ d ] = shape [ d ] ;
+      xstrides [ d ] = strides [ d ] * nchannels ;
+    }
+
+    // insert the new axis. It's extent is the number of channels
+    // of value_type and it's stride is one.
+
+    xshape [ axis ] = nchannels ;
+    xstrides [ axis ] = 1 ;
+
+    // add the higer axes with increased strides
+
+    for ( std::size_t d = axis + 1 ; d <= D ; d++ )
+    {
+      xshape [ d ] = shape [ d - 1 ] ;
+      xstrides [ d ] = strides [ d - 1 ] * nchannels ;
+    }
+
+    ele_t * p_base = ( ele_t * ) origin ;
+    view_t < D + 1 , ele_t > result { p_base , xstrides , xshape } ;
+
+    assert ( result.size() == nchannels * size() ) ;
+    return result ;
+  }
+
 private:
 
   // now the slicing operation. it creates a subdimensional view
   // coinciding with a window with dimension d having extent 1.
   // If 'this' view already is 1D, the only dimension left is
-  // dimension 0, and the only meaningful argument 'k' is zero.
-  // This is not enforced - it's assumed that no sane code will
-  // attempt to slice 1D views - but the 1D case is handled
-  // saparately and returns the same view.
-  // TODO: might consider a 1D view a 2D view with extent 1
-  // in the second axis. Then, d could be 0 or 1, and k would
-  // be meaningful.
+  // dimension 0. The returned slice is a 1D view with only one
+  // element - the one at position k.
 
   slice_t _slice ( std::size_t d , long k , std::false_type ) const
   {
@@ -296,7 +477,7 @@ private:
 
   slice_t _slice ( std::size_t d , long k , std::true_type ) const
   {
-    return slice_t ( origin , strides , 1 ) ; // shape ) ;
+    return slice_t ( origin + k * strides [ 0 ] , 1 , 1 ) ;
   }
 
 public:
@@ -452,6 +633,49 @@ public:
     _set_data ( rhs , std::integral_constant < bool , is_1d >() ) ;
   }
 
+  template < typename F >
+  void traverse ( const F & f )
+  {
+    mcs_t < D > mcs ( shape ) ;
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      auto crd = mcs() ;
+      (*this) [ crd ] = f ( (*this) [ crd ] ) ;
+    }
+  }
+
+  template < typename F >
+  void combine ( const F & f ,
+                 const view_t & lhs ,
+                 const view_t & rhs )
+  {
+    mcs_t < D > mcs ( shape ) ;
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      auto crd = mcs() ;
+      (*this) [ crd ] = f ( lhs [ crd ] , rhs [ crd ] ) ;
+    }
+  }
+
+
+  template < typename F >
+  void opeq ( const F & f , const view_t & rhs )
+  {
+    mcs_t < D > mcs ( shape ) ;
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      auto crd = mcs() ;
+      (*this) [ crd ] = f ( (*this) [ crd ] , rhs [ crd ] ) ;
+    }
+  }
+
+  view_t subarray ( const index_type & start ,
+                    const index_type & end )
+  {
+    return view_t ( & ( (*this) [ start ] ) ,
+                    strides ,
+                    end - start ) ;
+  }
 } ;
 
 // array_t 'holds' memory holding the array's data. This done via a
@@ -488,9 +712,11 @@ public:
 
   // add a shared_ptr to the data the view is 'based on', meaning that
   // the chunk of memory the shared_ptr points to envelopes the data
-  // the view refers to.
+  // the view refers to. Note the template argument 'T[]' - initially
+  // I used plain T, but that did not work for non-trivial types T.
+  // Using T[] instead, all seems well.
 
-  std::shared_ptr < T > base ;
+  std::shared_ptr < T[] > base ;
 
   using typename base_t::value_type ;
   using typename base_t::shape_type ;
@@ -507,7 +733,7 @@ public:
   // in, and if the array is destroyed, the memory is only released
   // if this was the last copy of the shared_ptr in circulation
 
-  array_t ( std::shared_ptr < T > _base ,
+  array_t ( std::shared_ptr < T[] > _base ,
             const shape_type & _shape )
   : base_t ( _base.get() ,
              make_strides ( _shape ) ,
@@ -517,7 +743,7 @@ public:
 
   // array based on a shared_ptr and a view
 
-  array_t ( std::shared_ptr < T > _base ,
+  array_t ( std::shared_ptr < T[] > _base ,
             const base_t & view )
   : base_t ( view ) ,
     base ( _base )
@@ -543,8 +769,7 @@ public:
 
   // array allocating fresh memory. The array is now in sole possesion
   // of the memory, and unless it's copied the memory is released when
-  // the array is destructed. this is only allowed for trivially
-  // destructible T.
+  // the array is destructed.
 
   array_t ( const shape_type & _shape )
   : base_t ( nullptr ,
@@ -552,7 +777,6 @@ public:
              _shape ) ,
     base ( new T [ _shape.prod() ] )
   {
-    static_assert ( std::is_trivially_destructible < T > :: value ) ;
     origin = base.get() ;
   }
 
@@ -581,104 +805,6 @@ public:
     base_t const & v ( *this ) ;
     auto slc = v.slice ( d , i ) ;
     return slice_t ( base , slc ) ;
-  }
-} ;
-
-// coordinate iterators. For now, we don't implement 'proper'
-// c++ standard iterators, but just two stripped-down ones.
-// zimt views are suitable for random access iteration, but it
-// would require extra coding effort to provide the usual
-// begin/end semantics - I may add this later.
-
-// stripped-down version of vigra::MultiCoordinateIterator which only
-// produces the nth nD index into an array of given shape. This class
-// is used in wielding.h. use of the modulo and division make this
-// quite slow, so it's best not used for iterations over arrays.
-// in wielding.h it's only used to produce the start address for
-// each line, so it's not time-critical there.
-// Note that if the data are contiguous in memory, it can be much
-// more efficient to iterate over the data directly - or over a 1D
-// view of the data.
-// Why do we need this iterator? For multithreading. There, the worker
-// threads obtain 'joblet numbers' from an atomic and decode these
-// numbers to segments of data which need to be processed. And the
-// decoding is where this iterator is used.
-
-template  < std::size_t D >
-struct mci_t
-: public xel_t < long , D >
-{
-  static const std::size_t dimension = D ;
-
-  typedef xel_t < long , D > index_type ;
-  const index_type & shape ;
-
-  template < typename T >
-  mci_t ( xel_t < T , D >  _shape )
-  : index_type ( _shape ) ,
-    shape ( *this )
-  { }
-
-  // accept any argument as long as can be converted to index_type
-  // TODO: this is very permissive - might be better to restrict to
-  // fixed-size containers of some integral type
-
-  template < typename T >
-  mci_t ( T _shape )
-  : index_type ( _shape ) ,
-    shape ( *this )
-  { }
-
-  template < typename T >
-  mci_t ( const std::initializer_list < T > & rhs )
-  : index_type ( rhs ) ,
-    shape ( *this )
-  { }
-
-  index_type operator[] ( long i )
-  {
-    index_type result ;
-
-    for ( std::size_t d = 0 ; d < dimension ; d++ )
-    {
-      result [ d ] = i % shape [ d ] ;
-      i /= shape [ d ] ;
-    }
-    return result ;
-  }
-} ;
-
-// similar to mci_t, but this class is for walking through a sequence
-// of nD coordinates. It's not for random access. For now, forward
-// only. Here there are no division or modulo operations.
-
-template  < std::size_t D >
-struct mcs_t
-: public mci_t < D >
-{
-  typedef mci_t < D > base_t ;
-  using base_t::base_t ;
-  using base_t::dimension ;
-  using typename base_t::index_type ;
-  using base_t::shape ;
-
-  index_type current = 0L ;
-
-  // operator() yields the current value and updates 'current'.
-
-  index_type operator() ()
-  {
-    // a bit verbose, let the optimizer figure it out
-
-    auto result = current ;
-    for ( std::size_t d = 0 ; d < dimension ; d++ )
-    {
-      if ( ++ current [ d ] == shape [ d ] )
-        current [ d ] = 0 ;
-      else
-        break ;
-    }
-    return result ;
   }
 } ;
 
@@ -717,6 +843,5 @@ array_t < D + 1 , T > get_vector_buffer
 
 } ;
 
-#define ZIMT_ARRAY_H
 #endif
 

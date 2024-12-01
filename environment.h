@@ -236,8 +236,8 @@ mipmode_map
   { "MipModeOneLevel" , OIIO::TextureOpt::MipModeOneLevel } ,
   { "MipModeTrilinear" , OIIO::TextureOpt::MipModeTrilinear } ,
   { "MipModeAniso" , OIIO::TextureOpt::MipModeAniso } ,
-  { "MipModeStochasticTrilinear" , OIIO::TextureOpt::MipModeStochasticTrilinear } ,
-  { "MipModeStochasticAniso" , OIIO::TextureOpt::MipModeStochasticAniso }
+  // { "MipModeStochasticTrilinear" , OIIO::TextureOpt::MipModeStochasticTrilinear } ,
+  // { "MipModeStochasticAniso" , OIIO::TextureOpt::MipModeStochasticAniso }
 } ;
 
 std::map < std::string , OIIO::TextureOpt::InterpMode >
@@ -256,7 +256,7 @@ struct eval_env
      zimt::xel_t < float , nchannels > ,
      LANES >
 {
-  OIIO::TextureSystem * ts ;
+  std::shared_ptr<OIIO::TextureSystem> ts ;
   OIIO::TextureOptBatch batch_options ;
   OIIO::TextureSystem::TextureHandle * th ;
 
@@ -474,7 +474,7 @@ struct sixfold_t
   // 'texture' function.
 
   std::filesystem::path texture_file ;
-  OIIO::TextureSystem * ts ;
+  std::shared_ptr<OIIO::TextureSystem> ts ;
   OIIO::TextureSystem::TextureHandle * th ;
 
   // This array holds all the image data. I'll refer to this
@@ -1533,7 +1533,7 @@ struct source_t
   int height ;
   zimt::xel_t < int , 2 > strides ;
   const float * const p = nullptr ;
-  OIIO::TextureSystem * ts ;
+  std::shared_ptr<OIIO::TextureSystem> ts ;
   OIIO::TextureSystem::TextureHandle * th ;
   OIIO::TextureOptBatch batch_options ;
 
@@ -2163,7 +2163,7 @@ struct environment9
       // This is an object holding pixel data and using direct
       // bilinear interpolation to get pixel values. But this
       // object won't directly yield output data - the 'twining'
-      // will use it to obtain several pixel avlues in close
+      // will use it to obtain several pixel values in close
       // vicinity and form a weighted sum from them.
   
       // Note how this object will persist (we declare it static), so

@@ -47,14 +47,13 @@
 
 */
 
-#ifndef ZIMT_STD_SIMD_TYPE_H
-#define ZIMT_STD_SIMD_TYPE_H
+#if defined(STD_SIMD_TYPE_H) == defined(HWY_TARGET_TOGGLE)
+  #ifdef STD_SIMD_TYPE_H
+    #undef STD_SIMD_TYPE_H
+  #else
+    #define STD_SIMD_TYPE_H
+  #endif
 
-#ifndef ZIMT_VECTOR_NBYTES
-
-#define ZIMT_VECTOR_NBYTES 64
-
-#endif
 
 #include <iostream>
 #include <experimental/simd>
@@ -62,8 +61,9 @@
 #include "simd_tag.h"
 #include "../common.h"
 
-namespace simd
-{
+HWY_BEFORE_NAMESPACE() ;
+BEGIN_ZIMT_SIMD_NAMESPACE(zimt)
+
 /// class template std_simd_type provides a fixed-size SIMD type.
 /// This implementation of zimt::std_simd_type uses std::simd as
 /// base class. This class is used as a stand-in for gen_simd_type.
@@ -90,9 +90,9 @@ struct std_simd_type
           < _value_type ,
             std::experimental::simd_abi::fixed_size < _vsize >
           > ,
-  public simd::simd_tag < _value_type , _vsize , simd::STDSIMD >
+  public zimt::simd_tag < _value_type , _vsize , zimt::STDSIMD >
 {
-  typedef simd::simd_tag < _value_type , _vsize , simd::STDSIMD > tag_t ;
+  typedef zimt::simd_tag < _value_type , _vsize , zimt::STDSIMD > tag_t ;
   using typename tag_t::value_type ;
   // using tag_t::vsize ; // works with clang++, but not with g++, hence:
   static const std::size_t vsize = _vsize ;
@@ -103,7 +103,13 @@ struct std_simd_type
   typedef std::size_t size_type ;
 
   typedef std::experimental::simd < value_type , abi_t > base_t ;
-  typedef std::experimental::simd < int , abi_t > index_type ;
+
+  // we use a std::simd_type of integers as index_type, to be able to
+  // manipulate it with zimt functions - If we were to use the base
+  // type, idioms like indexes(mask) = ... would not work.
+
+  typedef std_simd_type < int , _vsize > index_type ;
+
   using typename base_t::mask_type ;
 
   // provide the size as a constexpr
@@ -263,7 +269,7 @@ struct std_simd_type
   // the std_simd_type. Some of these operations have corresponding
   // c'tors which use the member function to initialize to_base().
 
-  // load delegates to std::simd::copy_from. TODO: consider
+  // load delegates to std::zimt::copy_from. TODO: consider
   // overalignment
 
   void load ( const value_type * const p_src )
@@ -395,20 +401,8 @@ struct std_simd_type
       return FUNC ( arg.to_base() ) ; \
     }
 
-    // TODO: getting zero back for negative args, hence no BROADCAST_STD_FUNC
-    // this happens with clang++ only, I opened an issue with VcDevel/std-simd:
-    // https://github.com/VcDevel/std-simd/issues/31
-
-//   BROADCAST_STD_FUNC(abs)
-
-  friend std_simd_type abs ( std_simd_type arg )
-  {
-    arg ( arg < 0 ) = - arg ;
-    return arg ;
-  }
-
+  BROADCAST_STD_FUNC(abs)
   BROADCAST_STD_FUNC(trunc)
-
   BROADCAST_STD_FUNC(round)
   BROADCAST_STD_FUNC(floor)
   BROADCAST_STD_FUNC(ceil)
@@ -428,9 +422,9 @@ struct std_simd_type
   BROADCAST_STD_FUNC(acos)
   BROADCAST_STD_FUNC(atan)
 
-  // TODO: odd: with clang++, sin and cos don't perform as expected;
-  // using a loop does the trick:
-
+//   // TODO: odd: with clang++, sin and cos don't perform as expected;
+//   // using a loop does the trick:
+// 
 // #ifdef __clang__
 // 
 //   friend std_simd_type cos ( std_simd_type arg )
@@ -460,7 +454,7 @@ struct std_simd_type
 
   #define BROADCAST_STD_FUNC2(FUNC) \
     friend std_simd_type FUNC ( std_simd_type arg1 , \
-                                std_simd_type arg2 ) \
+                            std_simd_type arg2 ) \
     { \
       return FUNC ( arg1.to_base() , arg2.to_base() ) ; \
     }
@@ -472,13 +466,15 @@ struct std_simd_type
 
   BROADCAST_STD_FUNC2(atan2)
   BROADCAST_STD_FUNC2(pow)
+  BROADCAST_STD_FUNC2(min)
+  BROADCAST_STD_FUNC2(max)
 
   #undef BROADCAST_STD_FUNC2
 
   #define BROADCAST_STD_FUNC3(FUNC) \
     friend std_simd_type FUNC ( std_simd_type arg1 , \
-                                std_simd_type arg2 , \
-                                std_simd_type arg3 ) \
+                            std_simd_type arg2 , \
+                            std_simd_type arg3 ) \
     { \
       return FUNC ( arg1.to_base() , arg2.to_base() , arg3.to_base() ) ; \
     }
@@ -487,16 +483,6 @@ struct std_simd_type
 
   #undef BROADCAST_STD_FUNC3
 
-  // AFAICT std::simd doesn't offer sincos
-
-  friend void sincos ( const std_simd_type & x ,
-                       std_simd_type & s ,
-                       std_simd_type & c )
-  {
-    s = sin ( x ) ;
-    c = cos ( x ) ;
-  }
-
   // macros used for the parameter 'CONSTRAINT' in the definitions
   // further down. Some operations are only allowed for integral types
   // or boolans. This might be enforced by enable_if, here we use a
@@ -504,7 +490,7 @@ struct std_simd_type
   // TODO: might relax constraints by using 'std::is_convertible'
 
   #define INTEGRAL_ONLY \
-    static_assert ( std::is_integral < value_type > :: value , \
+    static_assert ( is_integral < value_type > :: value , \
                     "this operation is only allowed for integral types" ) ;
 
   #define BOOL_ONLY \
@@ -733,23 +719,22 @@ struct std_simd_type
   // member functions at_least and at_most. These functions provide the
   // same functionality as max, or min, respectively. Given std_simd_type X
   // and some threshold Y, X.at_least ( Y ) == max ( X , Y )
-  // Having the functionality as a member function makes it easy to
-  // implement, e.g., min as: min ( X , Y ) { return X.at_most ( Y ) ; }
 
-  #define CLAMP(FNAME,REL) \
-    std_simd_type FNAME ( std_simd_type threshold ) const \
-    { \
-      return REL ( to_base() , threshold.to_base() ) ; \
-    } \
-    std_simd_type FNAME ( value_type threshold ) const \
-    { \
-      return REL ( to_base() , threshold ) ; \
-    } \
+  std_simd_type at_least ( const std_simd_type & threshold ) const
+  {
+    return max ( *this , threshold ) ;
+  }
 
-  CLAMP(at_least,max)
-  CLAMP(at_most,min)
+  std_simd_type at_most ( const std_simd_type & threshold ) const
+  {
+    return min ( *this , threshold ) ;
+  }
 
-  #undef CLAMP
+  std_simd_type clamp ( const std_simd_type & lower ,
+                        const std_simd_type & upper ) const
+  {
+    return min ( max ( *this , lower ) , upper ) ;
+  }
 
   // sum of vector elements. Note that there is no type promotion; the
   // summation is done to value_type. Caller must make sure that overflow
@@ -763,50 +748,72 @@ struct std_simd_type
     return s ;
   }
 
-// broadcasting functions processing single value_type
+  // broadcasting functions processing single value_type
 
-typedef std::function < value_type() > gen_f ;
-typedef std::function < value_type ( const value_type & ) > mod_f ;
-typedef std::function < value_type ( const value_type & , const value_type & ) > bin_f ;
+  typedef std::function < value_type ( const std::size_t & ) > idx_f ;
+  typedef std::function < value_type() > gen_f ;
+  typedef std::function < value_type ( const value_type & ) > mod_f ;
+  typedef std::function < value_type ( const value_type & , const value_type & ) > bin_f ;
 
-std_simd_type & broadcast ( gen_f f )
-{
-  for ( std::size_t i = 0 ; i < size() ; i++ )
+  std_simd_type & broadcast ( gen_f f )
   {
-    (*this)[i] = f() ;
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      (*this)[i] = f() ;
+    }
+    return *this ;
   }
-  return *this ;
-}
 
-std_simd_type & broadcast ( mod_f f )
-{
-  for ( std::size_t i = 0 ; i < size() ; i++ )
+  std_simd_type & index_broadcast ( idx_f f )
   {
-    (*this)[i] = f ( (*this)[i] ) ;
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      (*this)[i] = f ( i ) ;
+    }
+    return *this ;
   }
-  return *this ;
-}
 
-std_simd_type & broadcast ( bin_f f , const std_simd_type & rhs )
-{
-  for ( std::size_t i = 0 ; i < size() ; i++ )
+  std_simd_type & broadcast ( mod_f f )
   {
-    (*this)[i] = f ( (*this)[i] , rhs[i] ) ;
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      (*this)[i] = f ( (*this)[i] ) ;
+    }
+    return *this ;
   }
-  return *this ;
-}
+
+  std_simd_type & broadcast ( mod_f f , const std_simd_type & rhs )
+  {
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      (*this)[i] = f ( rhs[i] ) ;
+    }
+    return *this ;
+  }
+
+  std_simd_type & broadcast ( bin_f f , const std_simd_type & rhs )
+  {
+    for ( std::size_t i = 0 ; i < size() ; i++ )
+    {
+      (*this)[i] = f ( (*this)[i] , rhs[i] ) ;
+    }
+    return *this ;
+  }
 
 } ;
 
-} ;
+template < typename T , std::size_t N >
+using gen_simd_type = std_simd_type < T , N > ;
+
+END_ZIMT_SIMD_NAMESPACE
+HWY_AFTER_NAMESPACE() ;
 
 namespace zimt
 {
-
   template < typename T , size_t N >
-  struct is_integral < simd::std_simd_type < T , N > >
+  struct is_integral < ZIMT_ENV::std_simd_type < T , N > >
   : public std::is_integral < T >
   { } ;
-
 } ;
-#endif // #define ZIMT_SIMD_TYPE_H
+
+#endif // sentinel

@@ -83,7 +83,7 @@
 // have to move to model space units for the internal caclculations,
 // so 'feeding' model space units is more efficient. extract.cc
 // can accept a horizontal field of view on the command line and
-// calculates the extent's limits from t. This should be the most
+// calculates the extent's limits from it. This should be the most
 // common way to go - the extent values produced in this way are
 // symmetrical and isotropic. Here, in the implementation, we
 // process the extent values, because they allow more flexibility.
