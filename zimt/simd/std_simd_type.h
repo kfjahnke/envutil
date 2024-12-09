@@ -483,6 +483,14 @@ struct std_simd_type
 
   #undef BROADCAST_STD_FUNC3
 
+  friend void sincos ( const std_simd_type & x ,
+                       std_simd_type & s ,
+                       std_simd_type & c )
+  {
+    s = sin ( x ) ;
+    c = cos ( x ) ;
+  }
+
   // macros used for the parameter 'CONSTRAINT' in the definitions
   // further down. Some operations are only allowed for integral types
   // or boolans. This might be enforced by enable_if, here we use a

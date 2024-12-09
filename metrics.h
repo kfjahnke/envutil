@@ -377,8 +377,9 @@ struct metrics_t
 
   // The function is coded as a template to allow for scalar
   // and SIMDized pickups alike. Incoming we have face index(es)
-  // and in-face coordinate(s) in model space units, and outgoing
-  // we have a coordinate in pixel units pertaining to the entire
+  // (in the range (0, 5)) and in-face coordinate(s) in model
+  // space units (in the range (-1, 1)), and outgoing we have
+  // a coordinate in pixel units pertaining to the entire
   // IR image. Note that the outgoing value is in pixel units,
   // but it's not discrete.
 
@@ -401,9 +402,12 @@ struct metrics_t
 
     // add the per-section offset - Doing this after the move to
     // pixel units makes the calculation more precise, because
-    // we can derive the offset from integer values.
+    // we can derive the offset from integer values. Here we reap
+    // the benefit of using a fixed layout: the face index(es)
+    // translate neatly into an offset/offsets in a single SIMD
+    // multiplication, without any more case-switching.
 
-    target[1] += f_v ( face_index * int(section_px) ) ;
+    target[1] += ( face_index * int(section_px) ) ;
 
     // Subtract 0.5 - we look at pixels as small squares with an
     // extent of 1 pixel unit, and an incoming coordinate which
@@ -425,7 +429,8 @@ struct metrics_t
     target -= .5f ;
   }
 
-  // variant to get the pick-up coordinate in model space units
+  // variant to get the pick-up coordinate in model space units.
+  // This isn't likely to be useful, but I leave it in for now.
 
   template < typename face_index_t , typename crd_t >
   void get_pickup_coordinate_md ( const face_index_t & face_index ,
@@ -439,11 +444,14 @@ struct metrics_t
 
     // problem on my mac: can't multiply int vector and double
 
-    target[1] += face_index * float ( section_md ) ;
+    target[1] += ( face_index * float ( section_md ) ) ;
   }
 
   // variant of get_pickup_coordinate which yields the pickup
-  // coordinate in texture units with extent in [0,1].
+  // coordinate in texture units with extent in [0,1]. Same as
+  // above, with an added multiplication to move from model space
+  // coordinates to texture coordinates, taking into account the
+  // non-square shape of the IR texture.
 
   template < typename face_index_t , typename crd_t >
   void get_pickup_coordinate_tx ( const face_index_t & face_index ,
@@ -455,7 +463,7 @@ struct metrics_t
 
     // problem on my mac: can't multiply int vector and double
 
-    target[1] += face_index * float ( section_md ) ;
+    target[1] += ( face_index * float ( section_md ) ) ;
 
     // move from model space units to pixel units. This yields us
     // a coordinate in pixel units pertaining to the section.

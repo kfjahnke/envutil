@@ -40,9 +40,14 @@
 #define GEOMETRY_H
 
 // This header has all the geometrical transformations used to convert
-// between lat/lon and cubemap coordinates. Then it proceeds to give
-// conversions from coordinates pertaining to the IR image to 3D 'ray'
-// coordinates, both in lux and openEXR convention.
+// 2D coordinates in several projections to 3D 'ray' coordinates and
+// back. To make this code as versatile as possible, the functors for
+// the transformations also provide a scalar 'eval' variant - when used
+// with zimt::process, this is not used, but it's nice to have.
+// To test the code, there is a simple test program 'geometry.cc' which
+// uses all the functors in both scalar and simdized form. The actual
+// code for the transformations is largely from lux, except for the
+// cubemap code which is largely from the envutil project itself.
 
 #include "common.h"
 
@@ -122,14 +127,19 @@ const char * const projection_name[]
   "cubemap"
 } ;
 
+// extent_type is a handy struct to contain the horizontal and
+// vertical extent of a rectangular section of the plane.
+
 struct extent_type
 {
   double x0 , x1 , y0 , y1 ;
 } ;
 
-// assuming an isotropic image (same sampling resolution in the horizontal
+// assuming isotropic sampling (same sampling resolution in the horizontal
 // and vertical), calculate the vertical field of view from the horizontal
 // field of view, under the given projection.
+// Note that this function is for centered images only
+// (x0 == -x1), (y0 == -y1)
 
 double get_vfov ( projection_t projection ,
                   int width ,
@@ -166,6 +176,10 @@ double get_vfov ( projection_t projection ,
       vfov = hfov * height / width ;
       break ;
     }
+    case CUBEMAP:
+    {
+      vfov = 2.0 * M_PI ;
+    }
     default:
     {
       vfov = hfov ; // debatable...
@@ -181,8 +195,12 @@ double get_vfov ( projection_t projection ,
 // will be usable at non-central points (e.g. for spherical
 // images along the horizon). In any case it can be used as a
 // 'rule of thumb' indicator of the image's resolution.
-// If we have the 'extent' already, we can calculate the step
-// as ( x1 - x0 ) / width.
+// If we have the 'extent' of a spherical or cylindrical image
+// already, we can calculate the step as hfov / width;
+// for other projections this simple formula doesn't apply.
+// Note that this function is for centered images only
+// (x0 == -x1), (y0 == -y1)
+// currently unused.
 
 double get_step ( projection_t projection ,
                   int width ,
@@ -195,7 +213,7 @@ double get_step ( projection_t projection ,
     case RECTILINEAR:
     case CUBEMAP:
     {
-      step = 2.0 * tan ( hfov / 2.0 ) / width ;
+      step = atan ( 2.0 * tan ( hfov / 2.0 ) / width ) ;
       break ;
     }
     case SPHERICAL:
@@ -207,7 +225,7 @@ double get_step ( projection_t projection ,
     }
     case STEREOGRAPHIC:
     {
-      step = 4.0 * tan ( hfov / 4.0 ) / width ;
+      step = atan ( 4.0 * tan ( hfov / 4.0 ) / width ) ;
       break ;
     }
     default:
@@ -221,7 +239,7 @@ double get_step ( projection_t projection ,
 // extract internally uses the notion of an image's 'extent' in 'model
 // space'. The image is thought to be 'draped' to an 'archetypal 2D
 // manifold' - the surface of a sphere or cylinder with unit radius
-// ar a plane at unit distance forward - where the sample points are
+// or a plane at unit distance forward - where the sample points are
 // placed on the 2D manifold so that rays from the origin to the
 // scene point which corresponds with the sample point intersect there.
 // To put it differently: the sample point cloud is scaled and shifted
@@ -311,14 +329,66 @@ extent_type get_extent ( projection_t projection ,
 template < typename T = float , std::size_t L = LANES >
 struct ll_to_ray_t
 : public zimt::unary_functor
-    < zimt::xel_t < T , 2 > ,
-      zimt::xel_t < T , 3 > ,
-      L
-    >
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
 {
-  typedef zimt::simdized_type < T , L > f_v ;
+  typedef zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L > base_t ;
 
-  template < typename in_type , typename out_type >
+  using typename base_t::in_type ;
+  using typename base_t::in_ele_v ;
+  using typename base_t::in_v ;
+
+  using typename base_t::out_type ;
+  using typename base_t::out_v ;
+
+  void eval ( const in_v & in ,
+              out_v & out ) const
+  {
+    // incoming, we have lon/lat coordinates.
+
+    auto const & lon ( in[0] ) ;
+    auto const & lat ( in[1] ) ;
+
+    // outgoing, we have a directional vector.
+
+    auto & right   ( out [ RIGHT   ] ) ;
+    auto & down    ( out [ DOWN    ] ) ;
+    auto & forward ( out [ FORWARD ] ) ;
+
+    // we measure angles so that a view to directly ahead (0,0,1)
+    // corresponds to latitude and longitude zero. longitude increases
+    // into positive values when the view moves toward the right and
+    // latitude increases into positive values when the view moves
+    // downwards from the view straight ahead.
+    // The code benefits from using sincos, where available. Back-ends
+    // lacking direct sincos support will map to use of sin and cos.
+
+    in_ele_v sinlat , coslat , sinlon , coslon ;
+    sincos ( lat , sinlat , coslat ) ;
+    sincos ( lon , sinlon , coslon ) ;
+
+    // the x component, pointing to the right in lux, is zero at
+    // longitude zero, which is affected by the sine term. The
+    // cosine term affects a scaling of this 'raw' value which
+    // is one for latitude zero and decreases both ways.
+
+    right = sinlon * coslat ;
+
+    // The z component, pointing forward, is one at longitude and
+    // latitude zero, and decreases with both increasing and decreasing
+    // longitude and latitude.
+
+    forward = coslon * coslat ;
+
+    // The y component, pointing down, is zero for the view straight
+    // ahead and increases with the latitude. For latitudes above
+    // the equator, we'll see negative values, and positive values
+    // for views into the 'southern hemisphere'. This component is not
+    // affected by the longitude.
+
+    down = sinlat ;
+  }
+
   void eval ( const in_type & in ,
               out_type & out ) const
   {
@@ -338,22 +408,12 @@ struct ll_to_ray_t
     // into positive values when the view moves toward the right and
     // latitude increases into positive values when the view moves
     // downwards from the view straight ahead.
-    // The code benefits from using sincos, where available.
+    // The code benefits from using sincos, where available. Back-ends
+    // lacking direct sincos support will map to use of sin and cos.
 
-    // #if defined USE_HWY or defined USE_VC
-
-      f_v sinlat , coslat , sinlon , coslon ;
-      sincos ( lat , sinlat , coslat ) ;
-      sincos ( lon , sinlon , coslon ) ;
-
-    // #else
-    // 
-    //   f_v sinlat = sin ( lat ) ;
-    //   f_v coslat = cos ( lat ) ;
-    //   f_v sinlon = sin ( lon ) ;
-    //   f_v coslon = cos ( lon ) ;
-    // 
-    // #endif
+    T sinlat , coslat , sinlon , coslon ;
+    sincos ( lat , &sinlat , &coslat ) ;
+    sincos ( lon , &sinlon , &coslon ) ;
 
     // the x component, pointing to the right in lux, is zero at
     // longitude zero, which is affected by the sine term. The
@@ -392,8 +452,10 @@ struct ll_to_ray_t
 // to the upper hemisphere, the values increase as the ray proceeds
 // from zenith to nadir.
 
+template < typename T = float , std::size_t L = LANES >
 struct ray_to_ll_t
-: public zimt::unary_functor < v3_t , v2_t , LANES >
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
 {
   template < typename in_type , typename out_type >
   void eval ( const in_type & in ,
@@ -417,10 +479,74 @@ struct ray_to_ll_t
 } ;
 
 // more transformations from 3D ray coordinates to various
-// 2D projections: cylindrical, stereographic and fisheye
+// 2D projections: rectilinear, cylindrical, stereographic
+// and fisheye
 
+template < typename T = float , std::size_t L = LANES >
+struct ray_to_rect_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
+{
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out ) const
+  {
+    // incoming, we have a 3D directional vector
+    
+    auto const & right ( in[RIGHT] ) ;
+    auto const & down ( in[DOWN] ) ;
+    auto const & forward ( in[FORWARD] ) ;
+
+    // outgoing, we have a 2D rectilinear coordinate.
+
+    auto & horizontal ( out[0] ) ;
+    auto & vertical ( out[1] ) ;
+
+    // dividing by the z coordinate projects the rays to a plane
+    // at unit distance. Note that we don't handle unsuitable input:
+    // forward == 0 will result in Inf values, and rays pointing
+    // to the 'back' hemisphere (negative z coordinate) will
+    // also produce output.
+
+    horizontal = right / forward ;
+    vertical = down / forward ;
+  }
+} ;
+
+// reverse operation, mapping a point on a plane to a 3D ray
+// coordinate. The plane is taken to be at unit distance forward.
+// The resulting 3D ray coordinate is not normalized.
+
+template < typename T = float , std::size_t L = LANES >
+struct rect_to_ray_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
+{
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out ) const
+  {
+    // incoming, we have a 2D planar coordinate
+    
+    auto const & horizontal ( in[0] ) ;
+    auto const & vertical ( in[1] ) ;
+
+    // outgoing, we have a 3D ray coordinate.
+
+    auto & right ( out[RIGHT] ) ;
+    auto & down ( out[DOWN] ) ;
+    auto & forward ( out[FORWARD] ) ;
+
+    right = horizontal ;
+    down = vertical ;
+    forward = 1 ;
+  }
+} ;
+
+template < typename T = float , std::size_t L = LANES >
 struct ray_to_cyl_t
-: public zimt::unary_functor < v3_t , v2_t , LANES >
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
 {
   template < typename in_type , typename out_type >
   void eval ( const in_type & in ,
@@ -443,19 +569,50 @@ struct ray_to_cyl_t
   }
 } ;
 
-#include <cfloat>
+// reverse operation
 
-template < typename dtype = float >
-struct ray_to_ster_t
-: public zimt::unary_functor < v3_t , v2_t , LANES >
+template < typename T = float , std::size_t L = LANES >
+struct cyl_to_ray_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
 {
   template < typename in_type , typename out_type >
   void eval ( const in_type & in ,
               out_type & out ) const
   {
-    auto reciprocal_norm = dtype ( 1.0f ) / sqrt (   in[0] * in[0]
-                                                   + in[1] * in[1]
-                                                   + in[2] * in[2] ) ;
+    // incoming, we have a 2D planar coordinate
+    
+    auto const & horizontal ( in[0] ) ;
+    auto const & vertical ( in[1] ) ;
+
+    // outgoing, we have a 3D ray coordinate.
+
+    auto & right ( out[RIGHT] ) ;
+    auto & down ( out[DOWN] ) ;
+    auto & forward ( out[FORWARD] ) ;
+
+    // TODO: test
+
+    forward = cos ( horizontal ) ;
+    right = sin ( horizontal ) ;
+    down = vertical ;
+  }
+} ;
+
+#include <cfloat> // we need sqrt
+
+template < typename T = float , std::size_t L = LANES >
+struct ray_to_ster_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
+{
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out ) const
+  {
+    auto reciprocal_norm = T ( 1 ) / sqrt (   in[0] * in[0]
+                                            + in[1] * in[1]
+                                            + in[2] * in[2] ) ;
 
     // project 3D view ray to unit sphere surface by applying the norm
 
@@ -469,18 +626,53 @@ struct ray_to_ster_t
     // from the origin. If x gets very close to -1, we produce FLT_MAX as the
     // result, which shoud be outside the valid range
 
-    auto factor = dtype ( 2.0f ) / ( forward + dtype ( 1.0f ) ) ;
+    auto factor = T ( 2 ) / ( forward + T ( 1 ) ) ;
 
     out[0] = right * factor ;
-    out[0] ( forward <= dtype ( -1.0f ) + FLT_EPSILON ) = FLT_MAX ;
+    // TODO: out[0] ( forward <= T ( -1 ) + FLT_EPSILON ) = FLT_MAX ;
     out[1] = down * factor ;
-    out[1] ( forward <= dtype ( -1.0f ) + FLT_EPSILON ) = FLT_MAX ;
+    // TODO: out[1] ( forward <= T ( -1 ) + FLT_EPSILON ) = FLT_MAX ;
   }
 } ;
 
-template < typename dtype = float >
+// reverse operation
+
+template < typename T = float , std::size_t L = LANES >
+struct ster_to_ray_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
+{
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out ) const
+  {
+    // incoming, we have a 2D planar coordinate
+    
+    auto const & horizontal ( in[0] ) ;
+    auto const & vertical ( in[1] ) ;
+
+    // outgoing, we have a 3D ray coordinate.
+
+    auto & right ( out[RIGHT] ) ;
+    auto & down ( out[DOWN] ) ;
+    auto & forward ( out[FORWARD] ) ;
+
+    // TODO: test
+
+    auto r = sqrt ( horizontal * horizontal + vertical * vertical ) ;
+    auto theta = atan ( r / 2.0 ) * 2.0f ;
+    auto phi = atan2 ( horizontal , - vertical ) ;
+
+    forward = cos ( theta ) ;
+    down = - sin ( theta ) * cos ( phi ) ;
+    right = sin ( theta ) * sin ( phi ) ;
+  }
+} ;
+
+template < typename T = float , std::size_t L = LANES >
 struct ray_to_fish_t
-: public zimt::unary_functor < v3_t , v2_t , LANES >
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
 {
   template < typename in_type , typename out_type >
   void eval ( const in_type & in ,
@@ -492,12 +684,45 @@ struct ray_to_fish_t
 
     auto s = sqrt ( right * right + down * down ) ;
 
-    auto r = dtype ( M_PI_2 ) - atan2 ( forward , s ) ;
+    auto r = T ( M_PI_2 ) - atan2 ( forward , s ) ;
 
     auto phi = atan2 ( down , right ) ;
 
     out[0] = r * cos ( phi ) ;
     out[1] = r * sin ( phi ) ;
+  }
+} ;
+
+// reverse operation
+
+template < typename T = float , std::size_t L = LANES >
+struct fish_to_ray_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
+{
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out ) const
+  {
+    // incoming, we have a 2D planar coordinate
+    
+    auto const & horizontal ( in[0] ) ;
+    auto const & vertical ( in[1] ) ;
+
+    // outgoing, we have a 3D ray coordinate.
+
+    auto & right ( out[RIGHT] ) ;
+    auto & down ( out[DOWN] ) ;
+    auto & forward ( out[FORWARD] ) ;
+
+    // TODO: test
+
+    auto r = sqrt ( horizontal * horizontal + vertical * vertical ) ;
+    auto phi = atan2 ( horizontal , - vertical ) ;
+
+    forward = cos ( r ) ;
+    down = - sin ( r ) * cos ( phi ) ;
+    right = sin ( r ) * sin ( phi ) ;
   }
 } ;
 
@@ -509,9 +734,10 @@ struct ray_to_fish_t
 // specializations for the six possible face indices.
 // currently unused.
 
-template < face_index_t F >
+template < face_index_t F  , typename T = float , std::size_t L = LANES >
 struct in_face_to_ray
-: public zimt::unary_functor < v2_t , v3_t , LANES >
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
 {
   // incoming, we have a 2D in-face coordinate in model space
   // units. For a cubemap with no additional support, the in-face
@@ -571,14 +797,14 @@ struct in_face_to_ray
 } ;
 
 // this functor converts incoming 2D coordinates pertaining
-// to the entire IR array to 3D ray coordinates in lux convention.
+// to the entire IR image to 3D ray coordinates in lux convention.
 // This functor can serve to populate the IR image: set up a
 // functor yielding model space coordinates pertaining to pixels
 // in the IR image, pass these model space coordinates to this
 // functor, receive ray coordinates, then glean pixel values
 // for the given ray by evaluating some functor taking ray
 // coordinates and yielding pixels.
-// The functor takes two arguments: first the 'section size':
+// The c'tor takes two arguments: first the 'section size':
 // this is equal to the IR image's width, expressed in model
 // space units. If the IR image does not have additional support
 // and holds cube face images of precisely ninety degrees fov,
@@ -588,25 +814,48 @@ struct in_face_to_ray
 // cube face image's center. If the cube face image has even width,
 // this is precisely half the section size, but with odd width,
 // this isn't possible, hence the extra argument.
+// To accept UL-base coordinates, instantiate with
+// use_centered_coordinates false.
 
-struct ir_to_ray
-: public zimt::unary_functor < v2_t , v3_t , LANES >
+template < typename T = float ,
+           std::size_t L = LANES ,
+           bool use_centered_coordinates = true >
+struct ir_to_ray_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
 {
+  typedef zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L > base_t ;
+
+  using typename base_t::in_type ;
+  using typename base_t::in_ele_v ;
+  using typename base_t::in_v ;
+
+  using typename base_t::out_type ;
+  using typename base_t::out_v ;
+
   const double section_md ;
   const double refc_md ;
+  const zimt::xel_t < T , 2 > ul2c ;
 
-  ir_to_ray ( double _section_md , double _refc_md )
+  ir_to_ray_t ( double _section_md = 2.0 , double _refc_md = 1.0 )
   : section_md ( _section_md ) ,
-    refc_md ( _refc_md )
+    refc_md ( _refc_md ) ,
+    ul2c { _refc_md , 3 * _section_md }
   { }
 
-  // incoming, we have 2D model space coordinates, with the origin
-  // at the (total!) IR image's upper left corner.
+  // incoming, we have 2D model space coordinates.
+  // Tthis functor takes centered planar cordinates - note the
+  // addition of ul2c at the beginning of the eval functions, which
+  // converts the coordinates from to center-based to ul-based for
+  // processing.
 
-  template < typename I , typename O >
-  void eval ( const I & _crd2 , O & crd3 ) const
+  void eval ( const in_v & _crd2 , out_v & crd3 ) const
   {
-    I crd2 ( _crd2 ) ;
+    in_v crd2 ( _crd2 ) ;
+
+    if constexpr ( use_centered_coordinates )
+      crd2 += ul2c ;
 
     // The numerical constants for the cube faces/sections are set
     // up so that a simple division of the y coordinate yields the
@@ -682,17 +931,99 @@ struct ir_to_ray
       }
     }
   }
+
+  // for completeness' sake, the scalar eval
+
+  void eval ( const in_type & _crd2 , out_type & crd3 ) const
+  {
+    in_type crd2 ( _crd2 ) ;
+
+    if constexpr ( use_centered_coordinates )
+      crd2 += ul2c ;
+
+    // The numerical constants for the cube faces/sections are set
+    // up so that a simple division of the y coordinate yields the
+    // corresponding section index.
+
+    int section ( crd2[1] / section_md ) ;
+
+    // The incoming coordinates are relative to the upper left
+    // corner of the IR image. Now we move to in-face coordinates,
+    // which are centered on the cube face we're dealing with.
+
+    crd2[1] -= section * section_md ;
+    crd2    -= refc_md ;
+
+    // the section number can also yield the 'dominant' axis
+    // by dividing the value by two (another property which is
+    // deliberate):
+
+    int dom ( section >> 1 ) ;
+
+    // again we use a conditional to avoid lengthy calculations
+    // when there aren't any populated lanes for the given predicate
+
+    if ( dom == 0 )
+    {
+      if ( section == CM_RIGHT )
+      {
+        crd3[RIGHT] =     1.0f ;
+        crd3[DOWN] =      crd2[DOWN] ;
+        crd3[FORWARD] = - crd2[RIGHT] ;
+      }
+      else
+      {
+        crd3[RIGHT] =   - 1.0f ;
+        crd3[DOWN] =      crd2[DOWN] ;
+        crd3[FORWARD] =   crd2[RIGHT] ;
+      }
+    }
+    else if ( dom == 1 )
+    {
+      if ( section == CM_BOTTOM )
+      {
+        crd3[RIGHT] =   - crd2[RIGHT] ;
+        crd3[DOWN] =      1.0f ;
+        crd3[FORWARD] =   crd2[DOWN] ;
+      }
+      else
+      {
+        crd3[RIGHT] =   - crd2[RIGHT] ;
+        crd3[DOWN] =    - 1.0f ;
+        crd3[FORWARD] = - crd2[DOWN] ;
+      }
+    }
+    else
+    {
+      if ( section == CM_FRONT )
+      {
+        crd3[RIGHT]   =   crd2[RIGHT] ;
+        crd3[DOWN]    =   crd2[DOWN] ;
+        crd3[FORWARD] =   1.0f ;
+      }
+      else
+      {
+        crd3[RIGHT]   = - crd2[RIGHT] ;
+        crd3[DOWN]    =   crd2[DOWN] ;
+        crd3[FORWARD] = - 1.0f ;
+      }
+    }
+  }
 } ;
 
 // to make the conversion efficient and transparent, I refrain from
-// using ir_to_ray_gen and a subsequent coordinate transformation
-// in favour of this dedicated functor, which is basically a copy of
+// using ir_to_ray and a subsequent coordinate transformation in
+// favour of this dedicated functor, which is basically a copy of
 // the one above, but with different component indexes and signs
 // inverted where necessary (namely for the left and up direction,
 // which are the negative of zimt's right and down).
 
+// currently unused.
+/*
+template < typename T = float , std::size_t L = LANES >
 struct ir_to_exr
-: public zimt::unary_functor < v2_t , v3_t , LANES >
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
 {
   const double section_md ;
   const double refc_md ;
@@ -785,6 +1116,7 @@ struct ir_to_exr
     }
   }
 } ;
+*/
 
 // given a 3D 'ray' coordinate, find the corresponding cube face
 // and the in-face coordinate - note the two references which take
@@ -792,12 +1124,17 @@ struct ir_to_exr
 // to be normalized. The resulting in-face coordinates are in the
 // range of [-1,1] - in 'model space units' pertaining to planes
 // 'draped' at unit distance from the origin and perpendicular
-// to one of the axes. This function is coded as pure SIMD code,
-// we don't need it for scalars.
+// to one of the axes.
+// Note how the results of this functor can be fed to one of the 
+// get_pickup_coordinate_... functions provided in metrics.h to
+// get 2D coordinates pertaining to a cubemap's IR representation.
+// first, the simdized version:
 
-void ray_to_cubeface ( const crd3_v & c ,
-                       i_v & face ,
-                       crd2_v & in_face )
+template < typename T , std::size_t L >
+void ray_to_cubeface
+  ( const zimt::xel_t < zimt::simdized_type < T , L > , 3 > & c ,
+          zimt::simdized_type < int , L > & face ,
+          zimt::xel_t < zimt::simdized_type < T , L > , 2 > & in_face )
 {
   // form three masks with relations of the numerical values of
   // the 'ray' coordinate. These are sufficient to find out which
@@ -859,6 +1196,22 @@ void ray_to_cubeface ( const crd3_v & c ,
     in_face[1] ( dom ) = c[DOWN] / abs ( c[RIGHT] ) ;
   }
 
+  // set dom true where the z axis (pointing forward) has the
+  // largest numerical value
+  
+  dom = ( ! m2 ) & ( ! m3 ) ;
+
+  if ( any_of ( dom ) )
+  {
+    // test for front and back faces
+
+    face ( dom ) = CM_FRONT ;
+    face ( dom & ( c[FORWARD] < 0 ) ) = CM_BACK ;
+
+    in_face[0] ( dom ) = c[RIGHT] / c[FORWARD] ;
+    in_face[1] ( dom ) = c[DOWN] / abs ( c[FORWARD] ) ;
+  }
+
   // now set dom true where the y axis (pointing down) has the
   // largest numerical value
 
@@ -888,21 +1241,74 @@ void ray_to_cubeface ( const crd3_v & c ,
 
   }
 
-  // set dom true where the z axis (pointing forward) has the
-  // largest numerical value
-  
-  dom = ( ! m2 ) & ( ! m3 ) ;
+}
 
-  if ( any_of ( dom ) )
+// the scalar version is much simpler:
+
+template < typename T >
+void ray_to_cubeface ( const zimt::xel_t < T , 3 > & c ,
+                       int & face ,
+                       zimt::xel_t < T , 2 > & in_face )
+{
+  auto m1 = ( std::abs ( c[RIGHT] ) >= std::abs ( c[DOWN] ) ) ;
+  auto m2 = ( std::abs ( c[RIGHT] ) >= std::abs ( c[FORWARD] ) ) ;
+
+  if ( m1 & m2 )
   {
-    // finally the front and back faces
+    face = ( ( c[RIGHT] < 0 ) ? CM_LEFT : CM_RIGHT ) ;
 
-    face ( dom ) = CM_FRONT ;
-    face ( dom & ( c[FORWARD] < 0 ) ) = CM_BACK ;
-
-    in_face[0] ( dom ) = c[RIGHT] / c[FORWARD] ;
-    in_face[1] ( dom ) = c[DOWN] / abs ( c[FORWARD] ) ;
+    in_face[0] = - c[FORWARD] / c[RIGHT] ;
+    in_face[1] = c[DOWN] / std::abs ( c[RIGHT] ) ;
   }
+  else
+  {
+    auto m3 = ( std::abs ( c[DOWN] )  >= std::abs ( c[FORWARD] ) ) ;
+
+    if ( ( ! m2 ) & ( ! m3 ) )
+    {
+      face = ( ( c[FORWARD] < 0 ) ? CM_BACK : CM_FRONT ) ;
+
+      in_face[0] = c[RIGHT] / c[FORWARD] ;
+      in_face[1] = c[DOWN] / std::abs ( c[FORWARD] ) ;
+    }
+    else
+    {
+      face = ( ( c[DOWN] < 0 ) ? CM_TOP : CM_BOTTOM ) ;
+
+      in_face[0] = - c[RIGHT] / std::abs ( c[DOWN] ) ;
+      in_face[1] =   c[FORWARD] / c[DOWN] ;
+
+    }
+  }
+
+  // alternative:
+
+  // if ( std::abs ( c[RIGHT] ) >= std::abs ( c[DOWN] ) )
+  // {
+  //   if ( std::abs ( c[RIGHT] ) >= std::abs ( c[FORWARD] ) )
+  //   {
+  //     face = ( ( c[RIGHT] < 0 ) ? CM_LEFT : CM_RIGHT ) ;
+  // 
+  //     in_face[0] = - c[FORWARD] / c[RIGHT] ;
+  //     in_face[1] = c[DOWN] / std::abs ( c[RIGHT] ) ;
+  //     return ;
+  //   }
+  // }
+  // else
+  // {
+  //   if ( std::abs ( c[DOWN] )  >= std::abs ( c[FORWARD] ) )
+  //   {
+  //     face = ( ( c[DOWN] < 0 ) ? CM_TOP : CM_BOTTOM ) ;
+  // 
+  //     in_face[0] = - c[RIGHT] / std::abs ( c[DOWN] ) ;
+  //     in_face[1] =   c[FORWARD] / c[DOWN] ;
+  //     return ;
+  //   }
+  // }
+  // face = ( ( c[FORWARD] < 0 ) ? CM_BACK : CM_FRONT ) ;
+  // 
+  // in_face[0] = c[RIGHT] / c[FORWARD] ;
+  // in_face[1] = c[DOWN] / std::abs ( c[FORWARD] ) ;
 }
 
 // variant which takes a given face vector. This is used to
@@ -917,94 +1323,78 @@ void ray_to_cubeface ( const crd3_v & c ,
 // result.
 // So, incoming, we have a 3D ray coordinate and a set of cube
 // face indices, and we'll get in-face coordinates as output.
+// Note how the different use case results in the second argument
+// being a const&, in contrast to the previous function, where
+// it is a non-const reference - a result value.
 
-void ray_to_cubeface_fixed ( const crd3_v & c ,
-                             const i_v & face ,
-                             crd2_v & in_face )
+template < typename T , std::size_t L >
+void ray_to_cubeface_fixed
+  ( const zimt::xel_t < zimt::simdized_type < T , L > , 3 > & c ,
+    const zimt::simdized_type < int , L > & face ,
+          zimt::xel_t < zimt::simdized_type < T , L > , 2 > & in_plane )
 {
   // form a mask which is true where a specific axis is 'dominant'.
   // since we have the face indices already, this is simple: it's
   // the face indices shifted to the right to remove their least
   // significant bit, which codes for the sign along the dominant
-  // axis.
+  // axis. We benefit from working with a strictly codified setup;
+  // the nubering of the face indices is designed specifically to
+  // make such calculations as efficient as possible. The reaminder
+  // of the function proceeds as above, but note how due to the
+  // fact that we prescribe given target planes, the resulting
+  // in-plane coordinates are no longer necessarily in (-1, 1) as
+  // the in-face coordinates yielded by the previous functor.
+  // We silently assume that the incoming rays are 'not very far
+  // off' the face prescribed for them - e.g. not oriented so
+  // that they can't intersect with the prescribed plane.
 
   auto dom_v = face >> 1 ;
 
-  // we divide the two non-dominant coordinate values by the
-  // dominant one. One of the axes comes out just right when
-  // dividing by the absolute value - e.g. the vertical axis
-  // points downwards for all the four cube faces around
-  // the center. The other axis is divided by the 'major'
-  // coordinate value as-is; the resulting coordinate runs
-  // one way for positive major values and backwards for
-  // negative ones. Note that we might capture the absolute
-  // values (which we've used before) in variables, but the
-  // compiler will recognize the common subexpressions and
-  // do it for us. While it's generally preferable to avoid
-  // conditionals in inner-loop code, I use conditionals here
-  // because most of the time all coordinates will 'land' in
-  // the same cube face, so for two cases, the rather expensive
-  // code to calculate the face index and in-face coordinate
-  // can be omitted. TODO: One might test whether omitting the
-  // conditionals is actually slower.
-
   auto dom = ( dom_v == 0 ) ;
+
   if ( any_of ( dom ) )
   {
-    // extract in-face coordinates for the right and left cube
-    // face. the derivation of the x coordinate uses opposites for
-    // the two faces, the direction of the y coordinate is equal.
-    // Note that some lanes in c[RIGHT] may be zero and result in
-    // an Inf result, but these will never be the ones which end
-    // up in the result, because only those where c[RIGHT] is
-    // 'dominant' will 'make it through', and where c[RIGHT] is
-    // dominant, it's certainly not zero. But we rely on the
-    // system not to throw a division-by-zero exception, which
-    // would spoil our scheme.
-    // Since we know the face value already, all we need here is
-    // the deivision by the dominant component.
-
-    in_face[0] ( dom ) = - c[FORWARD] / c[RIGHT] ;
-    in_face[1] ( dom ) = c[DOWN] / abs ( c[RIGHT] ) ;
+    in_plane[0] ( dom ) = - c[FORWARD] / c[RIGHT] ;
+    in_plane[1] ( dom ) = c[DOWN] / abs ( c[RIGHT] ) ;
   }
-
-  // now set dom true where the y axis (pointing down) has the
-  // largest numerical value
 
   dom = ( dom_v == 1 ) ; 
 
   if ( any_of ( dom ) )
   {
-    // same for the top and bottom cube faces - here the x coordinate
-    // corresponds to the right 3D axis, the y coordinate depends on
-    // which of the faces we're looking at (hence no abs)
-    // the top and bottom images could each be oriented in four
-    // different ways. The orientation I expect in this program
-    // is openEXR's cubemap format, where the top and bottom
-    // image align with the 'back' image (the last one down).
-    // For lux conventions (the top and bottom image aligning
-    // with the 'front' cube face) swap the signs in both expressions.
-
-    // lux convention:
-    // in_face[0] ( dom ) =   c[RIGHT] / abs ( c[DOWN] ) ;
-    // in_face[1] ( dom ) = - c[FORWARD] / c[DOWN] ;
-
-    in_face[0] ( dom ) = - c[RIGHT] / abs ( c[DOWN] ) ;
-    in_face[1] ( dom ) =   c[FORWARD] / c[DOWN] ;
-
+    in_plane[0] ( dom ) = - c[RIGHT] / abs ( c[DOWN] ) ;
+    in_plane[1] ( dom ) =   c[FORWARD] / c[DOWN] ;
   }
 
-  // set dom true where the z axis (pointing forward) has the
-  // largest numerical value
-  
   dom = ( dom_v == 2 ) ;
 
   if ( any_of ( dom ) )
   {
-    // finally the front and back faces
+    in_plane[0] ( dom ) = c[RIGHT] / c[FORWARD] ;
+    in_plane[1] ( dom ) = c[DOWN] / abs ( c[FORWARD] ) ;
+  }
+}
 
-    in_face[0] ( dom ) = c[RIGHT] / c[FORWARD] ;
-    in_face[1] ( dom ) = c[DOWN] / abs ( c[FORWARD] ) ;
+template < typename T >
+void ray_to_cubeface_fixed ( const zimt::xel_t < T , 3 > & c ,
+                             const int & face ,
+                             zimt::xel_t < T , 2 > & in_plane )
+{
+  auto dom = face >> 1 ;
+  if ( dom == 0 )
+  {
+    in_plane[0] = - c[FORWARD] / c[RIGHT] ;
+    in_plane[1] = c[DOWN] / std::abs ( c[RIGHT] ) ;
+  }
+  else if ( dom == 1 )
+  {
+    in_plane[0] = - c[RIGHT] / std::abs ( c[DOWN] ) ;
+    in_plane[1] =   c[FORWARD] / c[DOWN] ;
+  }
+  else
+  {
+    in_plane[0] = c[RIGHT] / c[FORWARD] ;
+    in_plane[1] = c[DOWN] / std::abs ( c[FORWARD] ) ;
   }
 }
 
@@ -1012,34 +1402,54 @@ void ray_to_cubeface_fixed ( const crd3_v & c ,
 // coordinates pertaining to the IR image (in model space units)
 // Similar code is used in sixfold_t - here, we have a stand-alone
 // version which only needs two values from the metrics_t object.
-// This functor is the inversion of ir_to_ray, which needs the
-// same two values only. With this pair, we can slot the conversions
-// into lux' rendering code.
+// This functor is the inversion of ir_to_ray_t, which needs the
+// same two values only.
+// This functor produces centered planar cordinates - note the
+// subtraction of ul2c at the end of the eval functions, which
+// convert the coordinates from ul-based to center-based.
+// To produce UL-base coordinates, instantiate with
+// use_centered_coordinates false.
 
-struct ray_to_ir
-: public zimt::unary_functor < v3_t , v2_t , LANES >
+template < typename T = float , std::size_t L = LANES ,
+           bool use_centered_coordinates = true >
+struct ray_to_ir_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
 {
+  typedef zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L > base_t ;
+
+  using typename base_t::in_type ;
+  using typename base_t::in_ele_v ;
+  using typename base_t::in_v ;
+
+  using typename base_t::out_type ;
+  using typename base_t::out_v ;
+
+  using typename base_t::ic_v ;
+
   // to obtain IR coordinates, we need the width of a 'section'
   // of the IR image in model space units and the distance to
   // the center of the cube face images from the left/top margin:
 
-  float section_md ;
-  float refc_md ;
+  const T section_md ;
+  const T refc_md ;
+  const zimt::xel_t < T , 2 > ul2c ;
 
-  ray_to_ir ( const float & _section_md ,
-              const float & _refc_md )
+  ray_to_ir_t ( const T & _section_md = 2.0 ,
+                const T & _refc_md = 1.0 )
   : section_md ( _section_md ) ,
-    refc_md ( _refc_md )
+    refc_md ( _refc_md ) ,
+    ul2c { _refc_md , 3 * _section_md }
   { }
 
-  template < typename I , typename O >
-  void eval ( const I & c , O & ir_c ) const
+  void eval ( const in_type & c , out_type & ir_c ) const
   {
     // first, we glean the face indices and in-face coordinates
 
-    i_v face ;
+    int face ;
 
-    ray_to_cubeface ( c , face , ir_c ) ;
+    ray_to_cubeface < T > ( c , face , ir_c ) ;
 
     ir_c += refc_md ;
 
@@ -1047,6 +1457,28 @@ struct ray_to_ir
     // size (in model space units)
 
     ir_c[1] += face * section_md ;
+
+    if constexpr ( use_centered_coordinates )
+      ir_c -= ul2c ;
+  }
+
+  void eval ( const in_v & c , out_v & ir_c ) const
+  {
+    // first, we glean the face indices and in-face coordinates
+
+    ic_v face ;
+
+    ray_to_cubeface < T , L > ( c , face , ir_c ) ;
+
+    ir_c += refc_md ;
+
+    // for the vertical, we add the face index times the section
+    // size (in model space units)
+
+    ir_c[1] += face * section_md ;
+
+    if constexpr ( use_centered_coordinates )
+      ir_c -= ul2c ;
   }
 } ;
 
@@ -1054,9 +1486,27 @@ struct ray_to_ir
 // transformations can often be expressed as the chaining of two
 // functors: one transforming the incoming coordinate to a 3D ray,
 // and a second one transforming the 3D ray to another 2D coordinate.
-// struct plane_to_plane odders just such a construct, optionally
+// struct plane_to_plane offers just such a construct, optionally
 // with a 3D-to-3D operation inserted in between, e.g. a 3D rotation.
 // This is pure SIMDized code, there is no scalar overload.
+// currently unused.
+// This is more of a pointer to additional code: while many of the
+// 2d->2D mappings have to be coded using an intermediate 3D ray
+// coordinates, some mappings can do without - specifically mapping
+// from one rectilinear image to another can be done without the
+// 3D intermediate. The code in this repo does now rely on 'stepper'
+// objects to generate 3D ray coordinates directly, which are then
+// projected to a plane, so 2D->2D mappings aren't used. steppers
+// have the advantage of having rotation built-in, so the resulting
+// calculations are very efficient, avoiding the rotation step in
+// the 3D domain, which would be necessary when using 2D->2D mappings.
+// It's good, though, to have several routes to a desired end, to
+// be able to double-check.
+// TODO: in order to do just that (doublecheck), we should have
+// the transformations from rectlinear, stereographic, cylindrical
+// and fisheye coordinates to 3D ray coordinates as well. Until now,
+// they were missing, because steppers take the part. I've copied
+// code from lux to the effect, but it needs to be tested.
 
 template < typename T , std::size_t L >
 struct plane_to_plane
@@ -1078,21 +1528,95 @@ struct plane_to_plane
     } ;
   }
 
-  template < typename FA , typename F3 , typename FB >
-  plane_to_plane ( FA fa , F3  f3 , FB fb )
+  template < typename FA , typename FB , typename FC >
+  plane_to_plane ( FA fa , FB fb , FC fc )
   {
     tf = [=] ( const crd2_v & in , crd2_v & out )
     {
       crd3_v intermediate ;
       fa.eval ( in , intermediate ) ;
-      f3.eval ( intermediate , intermediate ) ;
-      fb.eval ( intermediate , out ) ;
+      fb.eval ( intermediate , intermediate ) ;
+      fc.eval ( intermediate , out ) ;
     } ;
   }
 
   void eval ( const crd2_v & in , crd2_v & out )
   {
     tf ( in , out ) ;
+  }
+} ;
+
+// this functor projects a ray to a plane, then produces another
+// ray. With the first constructor, there is no in-between
+// processing, so if FA and FB are plain conversions, we should
+// get the same ray out - provided the projection can handle it.
+// 'full' projections like spherical. fisheye and cubemap should
+// handle all rays correctly (minus inevitable small errors),
+// other projections should do so in their defined range.
+// This can be used to test the projections above. Note that
+// a test starting out on and returning to the plane via a ray
+// intermediate will only work for cubemaps - for sphericals
+// and fisheyes, sone locations on the plane have no defined
+// associated ray (both poles for sphericals, the 'back pole'
+// for fisheyes) - and near those locations, results will be
+// imprecise.
+
+template < typename T , std::size_t L >
+struct ray_to_ray
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 3 > , L >
+{
+  typedef zimt::xel_t < T , 3 > crd3_t ;
+  typedef zimt::xel_t < T , 2 > crd2_t ;
+  typedef zimt::simdized_type < zimt::xel_t < T , 3 > , L > crd3_v ;
+  typedef zimt::simdized_type < zimt::xel_t < T , 2 > , L > crd2_v ;
+  std::function < void ( const crd3_v & , crd3_v & ) > tfv ;
+  std::function < void ( const crd3_t & , crd3_t & ) > tf ;
+
+  template < typename FA , typename FB >
+  ray_to_ray ( FA fa , FB fb )
+  {
+    tfv = [=] ( const crd3_v & in , crd3_v & out )
+    {
+      crd2_v intermediate ;
+      fa.eval ( in , intermediate ) ;
+      fb.eval ( intermediate , out ) ;
+    } ;
+    tf = [=] ( const crd3_t & in , crd3_t & out )
+    {
+      crd2_t intermediate ;
+      fa.eval ( in , intermediate ) ;
+      fb.eval ( intermediate , out ) ;
+    } ;
+  }
+
+  template < typename FA , typename FB , typename FC >
+  ray_to_ray ( FA fa , FB  fb , FC fc )
+  {
+    tfv = [=] ( const crd3_v & in , crd3_v & out )
+    {
+      crd2_v intermediate ;
+      fa.eval ( in , intermediate ) ;
+      fb.eval ( intermediate , intermediate ) ;
+      fc.eval ( intermediate , out ) ;
+    } ;
+    tf = [=] ( const crd3_t & in , crd3_t & out )
+    {
+      crd2_t intermediate ;
+      fa.eval ( in , intermediate ) ;
+      fb.eval ( intermediate , intermediate ) ;
+      fc.eval ( intermediate , out ) ;
+    } ;
+  }
+
+  void eval ( const crd3_t & in , crd3_t & out )
+  {
+    tf ( in , out ) ;
+  }
+
+  void eval ( const crd3_v & in , crd3_v & out )
+  {
+    tfv ( in , out ) ;
   }
 } ;
 

@@ -310,7 +310,7 @@ struct eval_env
     // ray coordinates directly to OIIO code. OIIO's axis convention
     // is the same as Imath's. They have the positive x axis pointing
     // left and the positive y axis pointing down, whereas lux
-    // convention, which I use in theremainder of the program, has
+    // convention, which I use in the remainder of the program, has
     // the positive x axis pointing right and the positive y axis
     // pointing down ('latin book order'). Both systems have the
     // positive z axis pointing forward.
@@ -1123,7 +1123,7 @@ struct sixfold_t
 
       i_v fv ;
       crd2_v in_face ;
-      ray_to_cubeface ( crd3 , fv , in_face ) ;
+      ray_to_cubeface < float , LANES > ( crd3 , fv , in_face ) ;
 
       // finally we use this information to obtain pixel values,
       // which are written to the target location.
@@ -1266,7 +1266,7 @@ struct cbm_to_px_t
 
     i_v face ;
     crd2_v in_face ;
-    ray_to_cubeface ( crd3 , face , in_face ) ;
+    ray_to_cubeface < float , LANES > ( crd3 , face , in_face ) ;
 
     cubemap.cubemap_to_pixel ( face , in_face , px ) ;
   }
@@ -1332,12 +1332,15 @@ struct cbm_to_px_t2
 
     i_v face ;
     crd2_v in_face_00 , in_face_10 , in_face_01 ;
-    ray_to_cubeface ( c3 , face , in_face_00 ) ;
+    ray_to_cubeface < float , LANES > ( c3 , face , in_face_00 ) ;
 
     // do the same for the two offsetted rays
   
-    ray_to_cubeface_fixed ( dx , face , in_face_10 ) ;
-    ray_to_cubeface_fixed ( dy , face , in_face_01 ) ;
+    ray_to_cubeface_fixed < float , LANES >
+      ( dx , face , in_face_10 ) ;
+
+    ray_to_cubeface_fixed < float , LANES >
+      ( dy , face , in_face_01 ) ;
 
     // obtain the pickup coordinate in texture units (in [0,1])
 

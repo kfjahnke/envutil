@@ -74,8 +74,9 @@
 // This hints at further possibilities: instead of using an
 // orthonormal set of vectors, any set of three vecors might be
 // used for all kinds of effects. The steppers take the vectors
-// as arguments, so there is ample room for experiments. The
-// steppers also take limits for the planar coordinates, to define
+// as arguments, so there is ample room for experiments.
+
+// Steppers also take limits for the planar coordinates, to define
 // the area which will actually be sampled. The limits are given
 // in model space units, which requires knowledge about the extent
 // of the 2D archetype in question. An alternative would be to use
