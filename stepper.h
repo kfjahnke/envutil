@@ -58,13 +58,13 @@
 // rotation and starting the 'act' functor with a rotation - e.g. with
 // a rotational quaternion - is slower, because the rotation has to be
 // applied to every ray coordinate, and this takes quite a few CPU
-// cycles. The built-in rotation used here can exploit certain
+// cycles. The built-in rotation used here can also exploit certain
 // invariants and mathematical tricks which make it more efficient.
 // The intended use is for extraction of partial images from
 // environments, reprojection, panorama viewing and the likes.
 // A concrete program using this code is 'extract.cc' in this repo.
 
-// I have finally grasped the principle how to avoid rotating
+// I have finally grasped the principle how to avoid 'rotating'
 // coordinates at all: if one first calculates the 3D ray for the
 // 'archetypal' unrotated 2D manifold, it's three components are
 // used as factors for the three rotated vectors representing the
@@ -75,6 +75,43 @@
 // orthonormal set of vectors, any set of three vecors might be
 // used for all kinds of effects. The steppers take the vectors
 // as arguments, so there is ample room for experiments.
+// My realization is simply understanding the application of a
+// rotational matrix. The key to understanding is that there 'is
+// no rotation' - what's happening is that a given 3D vector is
+// put into a different coordinate system with the same origin.
+// This can be interpreted as the *result of a rotation*, but it
+// does not mean that anything *actually does rotate*. If something
+// actually does rotate, then rotational matrices and quaternions
+// can be used to calculate the result of the rotation(s), but the
+// essential fact is that the original vector is simply put into
+// a different coordinate system. Whether the resulting vector is
+// understood in terms of the original coordinate system (an active
+// rotation) or in terms of the new coordinate system (a passive
+// rotation) is an arbitrary choice and depends on the application.
+// With an active rotation, the transformed vector has modified
+// components. With a passive rotation, the components of the
+// vector remain the same, but now relate to a different set of
+// basis vectors. Here, we use active rotations, because we remain
+// in the same 'model space'. The typical modus operandi of using
+// a stepper is to use a target which is 'draped' on the 'archetypal'
+// 2D manifold representing it's projection. So the target is
+// thought to be upright and it's center at unit distance forward;
+// the target's x axis is parallel to the 'right' axis (x axis in
+// lux convention) and the target's y axis is parallel to the 'down'
+// axis (y axis in lux convention). Rather than thinking along the
+// lines of a rotated camera, we can operate in the target image's
+// coordinate system and 'pull data' from a rotated environment.
+// This is the reverse transformation typically used for gemetrical
+// transformations in a panorama stitching and viewing context:
+// we start out with a planar discrete coordinate pertaining to
+// a pixel in the target image and ask: "which source image pixels
+// should affect this target pixel?" the location of the source
+// pixel(s) is obtained by appropriate geometrical transformation,
+// and how the source pixels in the vicinity of this location are
+// combined is a matter of the chosen interpolation method. When
+// stitching several images together, an additional criterion is
+// the preference - or weight - which is given to what can be gleaned
+// from each contributing source image in this fashion.
 
 // Steppers also take limits for the planar coordinates, to define
 // the area which will actually be sampled. The limits are given

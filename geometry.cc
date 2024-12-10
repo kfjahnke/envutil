@@ -42,7 +42,86 @@
 // followed by a rotation.
 
 #include <random>
+#include <chrono>
 #include "stepper.h"
+
+// To conveniently rotate with a rotational quaternion, we employ
+// Imath's 'Quat' data type, packaged in a zimt::unary_functor.
+// This is not factored out because it requires inclusion of
+// some Imath headers, which I want to keep out of the other
+// code, e.g. in geometry.h, where it would fit in nicely.
+
+#include <Imath/ImathVec.h>
+#include <Imath/ImathEuler.h>
+#include <Imath/ImathQuat.h>
+#include <Imath/ImathLine.h>
+
+// rotate_3d uses a SIMDized Imath Quaternion to affect a 3D rotation
+// of a 3D SIMDized coordinate. Imath::Quat<float> can't broadcast
+// to handle SIMDized input, but if we use an Imath::Quat of the
+// SIMDized type, we get the desired effect for simdized input -
+// hance the broadcasting to Imath::Quat<U> in 'eval', which
+// has no effect for scalars, but represents a broadcast of the
+// rotation to all lanes of the simdized quaternion's components.
+// We'll use this functor to compare the output of steppers with
+// built-in rotation to unrotated steppers with a subsequent
+// rotation of the resulting 3D ray.
+
+template < typename T , std::size_t L >
+struct rotate_3d
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 3 > , L >
+{
+  typedef zimt::simdized_type < T , L > f_v ;
+  typedef zimt::xel_t < T , 3 > crd3_t ;
+  typedef zimt::simdized_type < crd3_t , L > crd3_v ;
+
+  Imath::Quat < T > q ;
+
+  rotate_3d ( T roll , T pitch , T yaw , bool inverse = false )
+  {
+    // set up the rotational quaternion. if 'inverse' is set, produce
+    // the conjugate.
+
+    if ( inverse )
+    {
+      Imath::Eulerf angles ( -yaw , -pitch , -roll , Imath::Eulerf::YXZ ) ;
+      q = angles.toQuat() ;
+    }
+    else
+    {
+      Imath::Eulerf angles ( roll , pitch , yaw , Imath::Eulerf::ZXY ) ;
+      q = angles.toQuat() ;
+    }
+  }
+
+  // eval applies the quaternion. Note how we use a template of
+  // typename U for the formulation. This way, we can handle both
+  // scalar and simdized arguments.
+
+  template < typename U >
+  void eval ( const zimt::xel_t < U , 3 > & in ,
+              zimt::xel_t < U , 3 > & out ) const
+  {
+    auto const & in_e
+      = reinterpret_cast < const Imath::Vec3 < U > & > ( in ) ;
+
+    auto & out_e
+      = reinterpret_cast < Imath::Vec3 < U > & > ( out ) ;
+
+    out_e = in_e * Imath::Quat < U > ( q ) ;
+  }
+
+  // for convenience:
+
+  template < typename U >
+  zimt::xel_t < U , 3 > operator() ( const zimt::xel_t < U , 3 > & in )
+  {
+    zimt::xel_t < U , 3 > out ;
+    eval ( in , out ) ;
+    return out ;
+  }
+} ;
 
 typedef zimt::xel_t < double , 2 > d2_t ;
 typedef zimt::xel_t < double , 3 > d3_t ;
@@ -301,6 +380,78 @@ int main ( int argc , char * argv[] )
     }
   }
 
+  // Now we set up a rotation functor, and a stepper with the
+  // same built-in rotation. We set up the rotation with three
+  // 'odd' values (no multiples of pi).
+
+  rotate_3d < double , LANES > r3 ( 1.0 , 2.0 , 3.0 ) ;
+
+  // Now we produce the three basis vectors for the rotated stepper
+
+  d3_t ex { 1.0 , 0.0 , 0.0 } ;
+  d3_t ey { 0.0 , 1.0 , 0.0 } ;
+  d3_t ez { 0.0 , 0.0 , 1.0 } ;
+  r3.eval ( ex , ex ) ;
+  r3.eval ( ey , ey ) ;
+  r3.eval ( ez , ez ) ;
+
+  spherical_stepper < double , LANES >
+    rsphs ( ex , ey , ez , 1000 , 500 ) ;
+
+  // use a zimt::process run to fill the first target array with
+  // output from the rotated stepper. We time this and the subsequent
+  // run with the alternative computation scheme to see how performance
+  // differs - on my system, using the rotated stepper is 30-50 % faster.
+  // Of course, this may be due to the fact that the application of the
+  // rotational quaternion with Imath uses a quaternion of simdized
+  // components, even though all lanes of these components are equal.
+  // So to really compare performance, we'd have to do the rotation
+  // 'manually', applying the scalar components, but I assume that
+  // the output would be roughly the same.
+
+  // std::chrono::system_clock::time_point start
+  //   = std::chrono::system_clock::now() ;
+  // 
+  // for ( int times = 0 ; times < 100 ; times++ )
+    zimt::process ( a3.shape , rsphs ,
+                    zimt::pass_through < double , 3 , LANES > () ,
+                    zimt::storer < double , 3 , 2 , LANES > ( a3 ) ) ;
+
+  // std::chrono::system_clock::time_point end
+  //   = std::chrono::system_clock::now() ;
+  // 
+  // std::cout << "first run took:               "
+  //           << std::chrono::duration_cast<std::chrono::milliseconds>
+  //               ( end - start ) . count()
+  //           << " ms" << std::endl ;
+
+  // Now we fill b3 with the concatenation of the unrotated
+  // stepper and the rotation functor
+
+  // start = std::chrono::system_clock::now() ;
+
+  // for ( int times = 0 ; times < 100 ; times++ )
+    zimt::process ( b3.shape , ls , ll_to_ray + r3 ,
+                    zimt::storer < double , 3 , 2 , LANES > ( b3 ) ) ;
+
+  // end = std::chrono::system_clock::now() ;
+  // 
+  // std::cout << "second run took:               "
+  //           << std::chrono::duration_cast<std::chrono::milliseconds>
+  //               ( end - start ) . count()
+  //           << " ms" << std::endl ;
+
+  // and look at the results
+
+  for ( std::size_t y = 0 ; y < a3.shape[1] ; y++ )
+  {
+    for ( std::size_t x = 0 ; x < a3.shape[0] ; x++ )
+    {
+      auto d = abs ( a3 [ { x , y } ] - b3 [ { x , y } ] ) . sum() ;
+      assert ( d < .0000000000001 ) ;
+    }
+  }
+
   // we repeat the process for all projections.
 
   cylindrical_stepper < double , LANES >
@@ -330,6 +481,26 @@ int main ( int argc , char * argv[] )
       auto d = abs ( crd3 - a3 [ { x , y } ] ) . sum() ;
       assert ( d < .0000000000001 ) ;
       d = abs ( crd3 - b3 [ { x , y } ] ) . sum() ;
+      assert ( d < .0000000000001 ) ;
+    }
+  }
+
+  cylindrical_stepper < double , LANES >
+    rcyls ( ex , ey , ez , 1000 , 500 ,
+            -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
+
+  zimt::process ( a3.shape , rcyls ,
+                  zimt::pass_through < double , 3 , LANES > () ,
+                  zimt::storer < double , 3 , 2 , LANES > ( a3 ) ) ;
+
+  zimt::process ( b3.shape , ls , cyl_to_ray + r3 ,
+                  zimt::storer < double , 3 , 2 , LANES > ( b3 ) ) ;
+
+  for ( std::size_t y = 0 ; y < a3.shape[1] ; y++ )
+  {
+    for ( std::size_t x = 0 ; x < a3.shape[0] ; x++ )
+    {
+      auto d = abs ( a3 [ { x , y } ] - b3 [ { x , y } ] ) . sum() ;
       assert ( d < .0000000000001 ) ;
     }
   }
@@ -365,6 +536,26 @@ int main ( int argc , char * argv[] )
     }
   }
 
+  rectilinear_stepper < double , LANES >
+    rrects ( ex , ey , ez , 1000 , 500 ,
+            -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
+
+  zimt::process ( a3.shape , rrects ,
+                  zimt::pass_through < double , 3 , LANES > () ,
+                  zimt::storer < double , 3 , 2 , LANES > ( a3 ) ) ;
+
+  zimt::process ( b3.shape , ls , rect_to_ray + r3 ,
+                  zimt::storer < double , 3 , 2 , LANES > ( b3 ) ) ;
+
+  for ( std::size_t y = 0 ; y < a3.shape[1] ; y++ )
+  {
+    for ( std::size_t x = 0 ; x < a3.shape[0] ; x++ )
+    {
+      auto d = abs ( a3 [ { x , y } ] - b3 [ { x , y } ] ) . sum() ;
+      assert ( d < .0000000000001 ) ;
+    }
+  }
+
   fisheye_stepper < double , LANES >
     fishs ( { 1.0 , 0.0 , 0.0 } ,
             { 0.0 , 1.0 , 0.0 } ,
@@ -396,6 +587,26 @@ int main ( int argc , char * argv[] )
     }
   }
 
+  fisheye_stepper < double , LANES >
+    rfishs ( ex , ey , ez , 1000 , 500 ,
+            -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
+
+  zimt::process ( a3.shape , rfishs ,
+                  zimt::pass_through < double , 3 , LANES > () ,
+                  zimt::storer < double , 3 , 2 , LANES > ( a3 ) ) ;
+
+  zimt::process ( b3.shape , ls , fish_to_ray + r3 ,
+                  zimt::storer < double , 3 , 2 , LANES > ( b3 ) ) ;
+
+  for ( std::size_t y = 0 ; y < a3.shape[1] ; y++ )
+  {
+    for ( std::size_t x = 0 ; x < a3.shape[0] ; x++ )
+    {
+      auto d = abs ( a3 [ { x , y } ] - b3 [ { x , y } ] ) . sum() ;
+      assert ( d < .0000000000001 ) ;
+    }
+  }
+
   stereographic_stepper < double , LANES >
     sters ( { 1.0 , 0.0 , 0.0 } ,
             { 0.0 , 1.0 , 0.0 } ,
@@ -423,6 +634,26 @@ int main ( int argc , char * argv[] )
       auto d = abs ( crd3 - a3 [ { x , y } ] ) . sum() ;
       assert ( d < .0000000000001 ) ;
       d = abs ( crd3 - b3 [ { x , y } ] ) . sum() ;
+      assert ( d < .0000000000001 ) ;
+    }
+  }
+
+  stereographic_stepper < double , LANES >
+    rsters ( ex , ey , ez , 1000 , 500 ,
+            -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
+
+  zimt::process ( a3.shape , rsters ,
+                  zimt::pass_through < double , 3 , LANES > () ,
+                  zimt::storer < double , 3 , 2 , LANES > ( a3 ) ) ;
+
+  zimt::process ( b3.shape , ls , ster_to_ray + r3 ,
+                  zimt::storer < double , 3 , 2 , LANES > ( b3 ) ) ;
+
+  for ( std::size_t y = 0 ; y < a3.shape[1] ; y++ )
+  {
+    for ( std::size_t x = 0 ; x < a3.shape[0] ; x++ )
+    {
+      auto d = abs ( a3 [ { x , y } ] - b3 [ { x , y } ] ) . sum() ;
       assert ( d < .0000000000001 ) ;
     }
   }
@@ -485,6 +716,26 @@ int main ( int argc , char * argv[] )
       auto d = abs ( crd3 - a6 [ { x , y } ] ) . sum() ;
       assert ( d < .0000000000001 ) ;
       d = abs ( crd3 - b6 [ { x , y } ] ) . sum() ;
+      assert ( d < .0000000000001 ) ;
+    }
+  }
+
+  cubemap_stepper < double , LANES >
+    rcbms ( ex , ey , ez , 500 , 3000 ,
+           -1.0 , 1.0 , -6.0 , 6.0 ) ;
+
+  zimt::process ( a6.shape , rcbms ,
+                  zimt::pass_through < double , 3 , LANES > () ,
+                  zimt::storer < double , 3 , 2 , LANES > ( a6 ) ) ;
+
+  zimt::process ( b6.shape , ls2 , ir_to_ray + r3 ,
+                  zimt::storer < double , 3 , 2 , LANES > ( b6 ) ) ;
+
+  for ( std::size_t y = 0 ; y < a6.shape[1] ; y++ )
+  {
+    for ( std::size_t x = 0 ; x < a6.shape[0] ; x++ )
+    {
+      auto d = abs ( a6 [ { x , y } ] - b6 [ { x , y } ] ) . sum() ;
       assert ( d < .0000000000001 ) ;
     }
   }
