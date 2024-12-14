@@ -36,8 +36,23 @@
 /*                                                                      */
 /************************************************************************/
 
+
+#include <filesystem>
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/texture.h>
+
+#include "metrics.h"
+#include "twining.h"
+
+#if defined(ENVUTIL_ENVIRONMENT_H) == defined(HWY_TARGET_TOGGLE)
+  #ifdef ENVUTIL_ENVIRONMENT_H
+    #undef ENVUTIL_ENVIRONMENT_H
+  #else
+    #define ENVUTIL_ENVIRONMENT_H
+  #endif
+
+HWY_BEFORE_NAMESPACE() ;
+BEGIN_ZIMT_SIMD_NAMESPACE(project)
 
 using OIIO::ImageInput ;
 using OIIO::TypeDesc ;
@@ -263,8 +278,8 @@ struct eval_env
   // pull in the c'tor arguments
 
   eval_env()
-  : ts ( OIIO::TextureSystem::create() )
   {
+    ts.reset ( OIIO::TextureSystem::create() ) ;
     ts->attribute ( "options" , args.tsoptions ) ;
 
     for ( int i = 0 ; i < 16 ; i++ )
@@ -328,7 +343,7 @@ struct eval_env
                 crd9[8] - crd9[2] } ;
 
     // now we can call 'environment', but depending on the SIMD
-    // back-end, we provide the pointers which 'environemnt' needs
+    // back-end, we provide the pointers which 'environment' needs
     // in different ways. The first form would in fact work for all
     // back-ends, but the second form is more concise. Note that,
     // as of this writing, the OIIO code accepts the batched arguments
@@ -452,9 +467,6 @@ struct repix
   }
 } ;
 */
-
-#include "metrics.h"
-#include <filesystem>
 
 // sixfold_t provides an internal representation of a cubemap
 // with widened support, to provide for easy mip-mapping and
@@ -715,7 +727,7 @@ struct sixfold_t
     // now we can create to the texture system and receive
     // a texture handle for the temporary file for fast access
 
-    ts = OIIO::TextureSystem::create() ;
+    ts.reset ( OIIO::TextureSystem::create() ) ;
 
     if ( ts_options != std::string() )
     {
@@ -1593,7 +1605,7 @@ struct source_t
     assert ( interp_it != interpmode_map.end() ) ;
     batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
   
-    ts = OIIO::TextureSystem::create() ;
+    ts.reset ( OIIO::TextureSystem::create() ) ;
 
     if ( args.tsoptions != std::string() )
     {
@@ -2132,8 +2144,6 @@ public:
 
 } ;
 
-#include "twining.h"
-
 // environment9 objects mediate lookup with derivatives. Their eval
 // member function takes 'ninepacks' and provides pixels with
 // nchannels channels.
@@ -2382,3 +2392,7 @@ struct environment9
   }
 } ;
 
+END_ZIMT_SIMD_NAMESPACE
+HWY_AFTER_NAMESPACE() ;
+
+#endif // sentinel

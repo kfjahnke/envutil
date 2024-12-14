@@ -39,6 +39,17 @@
 // this header has code common to the entire program, like common types.
 
 #include "zimt/zimt.h"
+#include "basic.h"
+
+#if defined(ENVUTIL_COMMON_H) == defined(HWY_TARGET_TOGGLE)
+  #ifdef ENVUTIL_COMMON_H
+    #undef ENVUTIL_COMMON_H
+  #else
+    #define ENVUTIL_COMMON_H
+  #endif
+
+// HWY_BEFORE_NAMESPACE() ;
+BEGIN_ZIMT_SIMD_NAMESPACE(project)
 
 // zimt types for 2D and 3D coordinates and pixels
 
@@ -67,3 +78,7 @@ typedef zimt::simdized_type < v3i_t , LANES > v3i_v ;
 typedef zimt::simdized_type < v3_t ,  LANES > crd3_v ;
 typedef zimt::simdized_type < index_type , LANES > index_v ;
 
+END_ZIMT_SIMD_NAMESPACE
+// HWY_AFTER_NAMESPACE() ;
+
+#endif // sentinel

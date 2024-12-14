@@ -595,7 +595,7 @@ using std::max ;
 #define END_ZIMT_SIMD_NAMESPACE \
     } ; \
   } ; \
-namespace zimt { using namespace zimt::zsimd ; } ;
+namespace zimt { using namespace zsimd ; } ;
 
 #endif
 

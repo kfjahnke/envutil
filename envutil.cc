@@ -105,20 +105,90 @@
 // this repository. The macOS build fulfilled the dependencies with
 // macPorts, the Windows build used msys2/mingw64.
 
+// if the code is compiled to use the Vc or std::simd back-ends, we
+// can't (yet) use highway's foreach_target mechanism, so we #undef
+// MULTI_SIMD_ISA, which is zimt's way of activating that mechanism.
+
+#if defined MULTI_SIMD_ISA && ( defined USE_VC || defined USE_STDSIMD )
+#warning "un-defining MULTI_SIMD_ISA due to use of Vc or std::simd"
+#undef MULTI_SIMD_ISA
+#endif
+
+// we define a dispatch base class. All the 'payload' code is called
+// through virtual member functions of this class. In this example,
+// we only have a single payload function. We have to enclose this
+// base class definition in an include guard, because it must not
+// be compiled repeatedly, which happens when highway's foreach_target
+// mechansim is used. This definition might go to a header file, but
+// it's better placed here, because it holds the declarations of the
+// pure virtual member function(s) used as conduit to the ISA-specific
+// code, and here, in an example, we want to see both these declarations
+// and, later on, the implementations, in the same file.
+
+#ifndef DISPATCH_BASE
+#define DISPATCH_BASE
+
+#include "basic.h"
+
+struct dispatch_base
+{
+  // in dispatch_base and derived classes, we keep two flags.
+  // 'backend' holds a value indicating which of zimt's back-end
+  // libraries is used. 'hwy_isa' is only set when the highway
+  // backend is used and holds highway's HWY_TARGET value for
+  // the given nested namespace.
+
+  int backend = -1 ;
+  unsigned long hwy_isa = 0 ;
+
+  // next we have pure virtual member function definitions for
+  // payload code. In this example, we only have one payload
+  // function which calls what would be 'main' in a simple
+  // program without multiple SIMD ISAs or SIMD back-ends
+
+  virtual int payload ( int nchannels ,
+                        int ninputs ,
+                        projection_t projection ) const = 0 ;
+} ;
+
+#endif
+
+#ifdef MULTI_SIMD_ISA
+
+// if we're using MULTI_SIMD_ISA, we have to define HWY_TARGET_INCLUDE
+// to tell the foreach_target mechanism which file should be repeatedly
+// re-included and re-copmpiled with SIMD-ISA-specific flags
+
+#undef HWY_TARGET_INCLUDE
+
+/////////////// Tell highway which file to submit to foreach_target
+
+#define HWY_TARGET_INCLUDE "envutil.cc"  // this very file
+
+//--------------------------------------------------------------------
+
+#include <hwy/foreach_target.h>  // must come before highway.h
+
+#include <hwy/highway.h>
+
+#endif // #ifdef MULTI_SIMD_ISA
+
+//////////////// Put the #includes needed for your program here:
+
+#include <fstream>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 extern "C"
 {
-  #include <libavcodec/avcodec.h>
-  #include <libavutil/opt.h>
-  #include <libavutil/imgutils.h>
+#include <libavcodec/avcodec.h>
+#include "libavformat/avformat.h"
+#include <libavutil/opt.h>
+#include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
 } ;
-
-#include <fstream>
-
-#include "stepper.h"
 
 // To conveniently rotate with a rotational quaternion, we employ
 // Imath's 'Quat' data type, packaged in a zimt::unary_functor.
@@ -131,67 +201,6 @@ extern "C"
 #include <Imath/ImathQuat.h>
 #include <Imath/ImathLine.h>
 
-// rotate_3d uses a SIMDized Imath Quaternion to affect a 3D rotation
-// of a 3D SIMDized coordinate. Imath::Quat<float> can't broadcast
-// to handle SIMDized input, but if we use an Imath::Quat of the
-// SIMDized type, we get the desired effect.
-
-template < typename T , std::size_t L >
-struct rotate_3d
-: public zimt::unary_functor
-    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 3 > , L >
-{
-  typedef zimt::simdized_type < T , L > f_v ;
-  typedef zimt::xel_t < T , 3 > crd3_t ;
-  typedef zimt::simdized_type < crd3_t , L > crd3_v ;
-
-  Imath::Quat < T > q ;
-
-  rotate_3d ( T roll , T pitch , T yaw , bool inverse = false )
-  {
-    // set up the rotational quaternion. if 'inverse' is set, produce
-    // the conjugate.
-
-    if ( inverse )
-    {
-      Imath::Eulerf angles ( -yaw , -pitch , -roll , Imath::Eulerf::YXZ ) ;
-      q = angles.toQuat() ;
-    }
-    else
-    {
-      Imath::Eulerf angles ( roll , pitch , yaw , Imath::Eulerf::ZXY ) ;
-      q = angles.toQuat() ;
-    }
-  }
-
-  // eval applies the quaternion, reinterpret-casting the zimt 'xel'
-  // data we use throughoutthe program to Imath::Vec3 - both types
-  // are compatible.
-
-  template < typename U >
-  void eval ( const zimt::xel_t < U , 3 > & in ,
-              zimt::xel_t < U , 3 > & out ) const
-  {
-    auto const & in_e
-      = reinterpret_cast < const Imath::Vec3 < U > & > ( in ) ;
-
-    auto & out_e
-      = reinterpret_cast < Imath::Vec3 < U > & > ( out ) ;
-
-    out_e = in_e * Imath::Quat < U > ( q ) ;
-  }
-
-  // for convenience:
-
-  template < typename U >
-  zimt::xel_t < U , 3 > operator() ( const zimt::xel_t < U , 3 > & in )
-  {
-    zimt::xel_t < U , 3 > out ;
-    eval ( in , out ) ;
-    return out ;
-  }
-} ;
-
 // for image I/O, we use OpenImageIO.
 
 #include <OpenImageIO/imageio.h>
@@ -200,6 +209,21 @@ using OIIO::ImageInput ;
 using OIIO::ImageOutput ;
 using OIIO::TypeDesc ;
 using OIIO::ImageSpec ;
+
+#include <regex>
+#include <OpenImageIO/filesystem.h>
+#include <OpenImageIO/argparse.h>
+
+// basic.h has some enums and types which do not rely on zimt.
+// This is all we need at this point - enough to set up the 'args'
+// object with arguments gleaned from the command line.
+
+#include "basic.h"
+#include "zimt/array.h"
+#include "stepper.h"
+
+#ifndef ENVUTIL_ONCE
+#define ENVUTIL_ONCE
 
 // struct image_series holds a format string for a series of numbered
 // images. It's a standard printf-type format string containing precisely
@@ -340,11 +364,6 @@ struct cubeface_series
   }
 } ;
 
-// geometry.h has the coordinate transformations needed when
-// dealing with environment images, especially cubemaps.
-
-#include "geometry.h"
-
 // a large part of the code in this file is dedicated to processing
 // command line arguments. We use OpenImageIO's ArgParse object, which
 // is similar to python's argparse. The result of gleaning the arguments
@@ -355,10 +374,6 @@ struct cubeface_series
 // provide more palatable values to the program. Note: angles are passed
 // in degrees, but internally, only radians are used. The conversion is
 // done right after the parameter acquisition.
-
-#include <regex>
-#include <OpenImageIO/filesystem.h>
-#include <OpenImageIO/argparse.h>
 
 using OIIO::ArgParse ;
 using OIIO::Filesystem::convert_native_arguments ;
@@ -1036,19 +1051,6 @@ void save_array ( const std::string & filename ,
  * Generate synthetic video data and encode it to an output file.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-extern "C"
-{
-#include <libavcodec/avcodec.h>
-#include "libavformat/avformat.h"
-#include <libavutil/opt.h>
-#include <libavutil/imgutils.h>
-#include <libswscale/swscale.h>
-} ;
-
 static void encode(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt,
                    FILE *outfile)
 {
@@ -1350,13 +1352,141 @@ void push_video_frame ( const zimt::view_t
   }
 }
 
+#endif // #ifndef ENVUTIL_ONCE
+
+// environment.h has most of the 'workhorse' code for this program.
+// it provides functional constructs to yield pixels for coordinates.
+// These functors are used with zimt::process to populate the output.
+
+#include "environment.h"
+
+// to make highway's use of #pragma directives to the compiler
+// effective, we surround the SIMD-ISA-specific code with
+// HWY_BEFORE_NAMESPACE() and HWY_AFTER_NAMESPACE().
+
+HWY_BEFORE_NAMESPACE() ;
+
+// this macro puts us into a nested namespace inside namespace 'project'.
+// For single-SIMD-ISA builds, this is conventionally project::zsimd,
+// and for multi-SIMD-ISA builds it is project::HWY_NAMESPACE. The macro
+// is defined in common.h. After the macro invocation, we can access
+// all zimt names with a simple zimt:: prefix - both 'true' zimt names
+// and SIMD-ISA-specific versions living in the nested namespace.
+
+BEGIN_ZIMT_SIMD_NAMESPACE(project)
+
+// rotate_3d uses a SIMDized Imath Quaternion to affect a 3D rotation
+// of a 3D SIMDized coordinate. Imath::Quat<float> can't broadcast
+// to handle SIMDized input, but if we use an Imath::Quat of the
+// SIMDized type, we get the desired effect for simdized input -
+// hence the broadcasting to Imath::Quat<U> in 'eval', which
+// has no effect for scalars, but represents a broadcast of the
+// rotation to all lanes of the simdized quaternion's components.
+// We'll use this functor to compare the output of steppers with
+// built-in rotation to unrotated steppers with a subsequent
+// rotation of the resulting 3D ray.
+
+template < typename T , std::size_t L >
+struct rotate_3d
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 3 > , L >
+{
+  typedef zimt::simdized_type < T , L > f_v ;
+  typedef zimt::xel_t < T , 3 > crd3_t ;
+  typedef zimt::simdized_type < crd3_t , L > crd3_v ;
+
+  Imath::Quat < T > q ;
+
+  rotate_3d ( T roll , T pitch , T yaw , bool inverse = false )
+  {
+    // set up the rotational quaternion. if 'inverse' is set, produce
+    // the conjugate.
+
+    if ( inverse )
+    {
+      Imath::Eulerf angles ( -yaw , -pitch , -roll , Imath::Eulerf::YXZ ) ;
+      q = angles.toQuat() ;
+    }
+    else
+    {
+      Imath::Eulerf angles ( roll , pitch , yaw , Imath::Eulerf::ZXY ) ;
+      q = angles.toQuat() ;
+    }
+  }
+
+  // for the actual rotation (the 'multiplication' with teh rotational
+  // quaternion), we don't use Imath code. See comments in 'eval'.
+
+  // calculate the cross product of two vectors
+
+  template < typename U >
+  U cross ( const U & x , const U & y ) const
+  {
+    U result ;
+    result[0] = x[1] * y[2] - x[2] * y[1] ;
+    result[1] = x[2] * y[0] - x[0] * y[2] ;
+    result[2] = x[0] * y[1] - x[1] * y[0] ;
+    return result ;
+  }
+
+  // perform the quaternion multiplication.
+
+  template < typename U >
+  U mulq ( const U & vec ) const
+  {
+    U result ;
+    U qv { q.v[0] , q.v[1] , q.v[2] } ;
+    auto a = cross ( qv , vec ) ;
+    auto b = cross ( qv , a ) ;
+    return vec + T(2) * (q.r * a + b);
+  }
+
+  // eval applies the quaternion. Note how we use a template of
+  // typename U for the formulation. This way, we can handle both
+  // scalar and simdized arguments.
+
+  template < typename U >
+  void eval ( const zimt::xel_t < U , 3 > & in ,
+              zimt::xel_t < U , 3 > & out ) const
+  {
+    // using highway's foreach_target mechanism, coding the quaternion
+    // multiplication by invoking Imath's operator* with an Imath::Quat
+    // argument, produces slow code compared to single-ISA compiles.
+    // I work around this problem by coding the operation 'manually'.
+    // Code using Imath's operator* would do this:
+    //
+    // auto const & in_e
+    //   = reinterpret_cast < const Imath::Vec3 < U > & > ( in ) ;
+    // 
+    // auto & out_e
+    //   = reinterpret_cast < Imath::Vec3 < U > & > ( out ) ;
+    // 
+    // out_e = in_e * Imath::Quat < U > ( q ) ;
+
+    // instead, we calculate 'manually' like this, using the mulq
+    // member function above.
+
+    out = mulq ( in ) ;
+  }
+
+  // for convenience:
+
+  template < typename U >
+  zimt::xel_t < U , 3 > operator() ( const zimt::xel_t < U , 3 > & in )
+  {
+    zimt::xel_t < U , 3 > out ;
+    eval ( in , out ) ;
+    return out ;
+  }
+} ;
+
 // 'work' is the function where the state we've built up in the
 // code below it culminates in the call to zimt::process, which
 // obtains pick-up coordinates from the 'get' object, produces
 // pixels for these coordinates with the 'act' object and stores
 // these pixels with a zimt::storer, which is set up in this
 // function. All the specificity of the code has now moved to
-// the types get_t and act_t - the dispatch is complete and we
+// the types get_t and act_t - the roll_out is complete and we
 // can code a single 'work' template which is good for all
 // variants.
 
@@ -1406,17 +1536,11 @@ void work ( get_t & get , act_t & act )
   }
 }
 
-// environment.h has most of the 'workhorse' code for this program.
-// it provides functional constructs to yield pixels for coordinates.
-// These functors are used with zimt::process to populate the output.
-
-#include "environment.h"
-
 // to call the appropriate instantiation of 'work' (above)
 // we need to do some dispatching: picking types depending
-// on run-time variables. We achieve this with a staged 'dispatch'
-// routine: every stage processes one argument and dispatches to
-// specialized code. The least specialized dispatch variant is
+// on run-time variables. We achieve this with a staged 'roll_out'
+// routine: every stage processes one argument and routes to
+// specialized code. The least specialized roll_out variant is
 // the lowest one down, this here is the final stage where we have
 // the number of channels and the stepper as template arguments.
 // Here we proceed to set up more state which is common to all
@@ -1425,7 +1549,7 @@ void work ( get_t & get , act_t & act )
 
 template < int NCH ,
            template < typename , std::size_t > class STP >
-void dispatch ( int ninputs )
+void roll_out ( int ninputs )
 {
   // set up an orthonormal system of basis vectors for the view
 
@@ -1493,62 +1617,157 @@ void dispatch ( int ninputs )
 }
 
 // we have the number of channels as a template argument from the
-// dispatch below, now we dispatch on the projection and instantiate
-// the next dispatch level with a stepper type which fits the
+// roll_out below, now we roll_out on the projection and instantiate
+// the next roll_out level with a stepper type which fits the
 // projection.
 
 template < int NCH >
-void dispatch ( int ninputs ,
+void roll_out ( int ninputs ,
                 projection_t projection )
 {
   switch ( projection )
   {
     case SPHERICAL:
-      dispatch < NCH , spherical_stepper > ( ninputs ) ;
+      roll_out < NCH , spherical_stepper > ( ninputs ) ;
       break ;
     case CYLINDRICAL:
-      dispatch < NCH , cylindrical_stepper > ( ninputs ) ;
+      roll_out < NCH , cylindrical_stepper > ( ninputs ) ;
       break ;
     case RECTILINEAR:
-      dispatch < NCH , rectilinear_stepper > ( ninputs ) ;
+      roll_out < NCH , rectilinear_stepper > ( ninputs ) ;
       break ;
     case FISHEYE:
-      dispatch < NCH , fisheye_stepper > ( ninputs ) ;
+      roll_out < NCH , fisheye_stepper > ( ninputs ) ;
       break ;
     case STEREOGRAPHIC:
-      dispatch < NCH , stereographic_stepper > ( ninputs ) ;
+      roll_out < NCH , stereographic_stepper > ( ninputs ) ;
       break ;
     case CUBEMAP:
-      dispatch < NCH , cubemap_stepper > ( ninputs ) ;
+      roll_out < NCH , cubemap_stepper > ( ninputs ) ;
       break ;
     default:
       break ;
   }
 }
 
-// dispatch by the number of colour channels. We process one to four,
+// roll_out by the number of colour channels. We process one to four,
 // where the usefulness of two channels isn't clear.
 
-void dispatch ( int nchannels ,
+void roll_out ( int nchannels ,
                 int ninputs ,
                 projection_t projection )
 {
   switch ( nchannels )
   {
     case 1:
-      dispatch < 1 > ( ninputs , projection ) ;
+      roll_out < 1 > ( ninputs , projection ) ;
       break ;
     case 2:
-      dispatch < 2 > ( ninputs , projection ) ;
+      roll_out < 2 > ( ninputs , projection ) ;
       break ;
     case 3:
-      dispatch < 3 > ( ninputs , projection ) ;
+      roll_out < 3 > ( ninputs , projection ) ;
       break ;
     case 4:
-      dispatch < 4 > ( ninputs , projection ) ;
+      roll_out < 4 > ( ninputs , projection ) ;
       break ;
   }
 }
+
+// Here, we define the SIMD-ISA-specific derived 'dispatch' class:
+
+struct dispatch
+: public dispatch_base
+{
+  // We fit the derived dispatch class with a c'tor which fills in
+  // information about the nested SIMD ISA we're currently in.
+
+  dispatch()
+  {
+    backend = int ( zimt::simdized_type<int,4>::backend ) ;
+    #if defined USE_HWY || defined MULTI_SIMD_ISA
+      hwy_isa = HWY_TARGET ;
+    #endif
+  }
+
+  // 'payload', the SIMD-ISA-specific overload of dispatch_base's
+  // pure virtual member function, now has the code which was in
+  // main() when this example was first coded without dispatch.
+  // One might be more tight-fisted with which part of the former
+  // 'main' should go here and which part should remain in the
+  // new 'main', but the little extra code which wouldn't benefit
+  // from vectorization doesn't make much of a difference here.
+  // Larger projects would have both several payload-type functions
+  // and a body of code which is independent of vectorization.
+
+///////////////// write a payload function
+  
+  int payload ( int nchannels ,
+                int ninputs ,
+                projection_t projection ) const
+  {
+    roll_out ( nchannels , ninputs , projection ) ;
+    return 0 ;
+  }
+} ;
+
+//--------------------------------------------------------------------
+
+// we also code a local function _get_dispatch which returns a pointer
+// to 'dispatch_base', which points to an object of the derived class
+// 'dispatch'. This is used with highway's HWY_DYNAMIC_DISPATCH and
+// returns the dispatch pointer for the SIMD ISA which highway deems
+// most appropriate for the CPU on which the code is currently running.
+
+const dispatch_base * const _get_dispatch()
+{
+  static dispatch d ;
+  return &d ;
+}
+
+END_ZIMT_SIMD_NAMESPACE
+
+HWY_AFTER_NAMESPACE() ;
+
+// Now for code which isn't SIMD-ISA-specific. ZIMT_ONCE is defined
+// as either HWY_ONCE (if MULTI_SIMD_ISA is #defined) or simply true
+// otherwise - then, there is only one compilation anyway.
+
+#if ZIMT_ONCE
+
+namespace project {
+
+#ifdef MULTI_SIMD_ISA
+
+// we're using highway's foreach_target mechanism. To get access to the
+// SIMD-ISA-specific variant of _get_dispatch (in project::HWY_NAMESPACE)
+// we use the HWY_EXPORT macro:
+
+HWY_EXPORT(_get_dispatch);
+
+// now we can code get_dispatch: it simply uses HWY_DYNAMIC_DISPATCH
+// to pick the SIMD-ISA-specific get_dispatch variant, which in turn
+// yields the desired dispatch_base pointer.
+
+const dispatch_base * const get_dispatch()
+{
+  return HWY_DYNAMIC_DISPATCH(_get_dispatch)() ;
+}
+
+#else // #ifdef MULTI_SIMD_ISA
+
+// if we're not using highway's foreach_target mechanism, there is
+// only a single _get_dispatch variant in namespace project::zsimd.
+// So we call that one, to receive the desired dispatch_base pointer.
+
+const dispatch_base * const get_dispatch()
+{
+  return zsimd::_get_dispatch() ;
+}
+
+#endif // #ifdef MULTI_SIMD_ISA
+
+}  // namespace project
 
 int main ( int argc , const char ** argv )
 {
@@ -1565,6 +1784,29 @@ int main ( int argc , const char ** argv )
   {
     seqstream.open ( args.seqfile ) ;
     assert ( seqstream.good() ) ;
+  }
+
+  auto dp = project::get_dispatch() ;
+
+  if ( args.verbose )
+  {
+    std::cout << "envutil uses "
+    #ifdef MULTI_SIMD_ISA
+                << "dynamic dispatch" << std::endl ;
+    #else
+                << "static dispatch" << std::endl ;
+    #endif
+
+    std::cout << "SIMD code is using zimt's "
+              << zimt::backend_name [ dp->backend ]
+              << " back-end" << std::endl ;
+
+    #if defined USE_HWY || defined MULTI_SIMD_ISA
+
+    std::cout << "highway target architecture: "
+              << hwy::TargetName ( dp->hwy_isa ) << std::endl ;
+
+    #endif
   }
 
   // This loop will iterate over the renditions of single images.
@@ -1603,17 +1845,18 @@ int main ( int argc , const char ** argv )
       args.twine = 0 ;
     }
 
-    // find the parameters which are type-relevant to dispatch to
+    // find the parameters which are type-relevant to route to
     // the specialized code above. There are several stages of
-    // 'dispatch' which move the parameterization given by run-time
+    // 'roll_out' which move the parameterization given by run-time
     // arguments into type information.
 
     int nch = args.nchannels ;
     int ninp = ( args.itp == 1 ) ? 3 : 9 ;
     projection_t prj = args.projection ;
 
-    dispatch ( nch , ninp , prj ) ;
+    dp->payload ( nch , ninp , prj ) ;
   }
   while ( have_seq ) ; // loop criterion for 'do' loop
 }
     
+#endif

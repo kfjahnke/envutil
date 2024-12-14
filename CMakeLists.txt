@@ -55,7 +55,7 @@ endif()
 
 set(envutil_major 0)
 set(envutil_minor 1)
-set(envutil_patch 1)
+set(envutil_patch 2)
 
 message(STATUS "VERSION = ${envutil_major}.${envutil_minor}.${envutil_patch}")
 
@@ -102,7 +102,7 @@ if ( OpenImageIO_FOUND )
 endif()
 
 find_package ( Imath CONFIG REQUIRED )
-if ( OpenImageIO_FOUND )
+if ( Imath_FOUND )
   message ( STATUS "find_package: Imath = true" )
 endif()
 
@@ -110,15 +110,32 @@ endif()
 # the release of 1.0.4. If we can't find highway, we try Vc, and
 # if that doesn't work we use std::simd.
 
+option(MULTI_SIMD_ISA "AUTOMATIC SIMD ISA DISPATCH (REQUIRES HIGHWAY)" ON)
 option(USE_GOADING "USE SIMD EMULATION WITH SMALL LOOPS" OFF)
 
-if ( NOT USE_GOADING )
+if ( USE_GOADING )
+  # goading can work together with MULTI_SIMD_ISA, but then we need
+  # to have and link to libhwy.
+  if ( MULTI_SIMD_ISA )
+    find_package ( HWY CONFIG )
+    if ( HWY_FOUND )
+      message ( STATUS "find_package: HWY_FOUND = true" )
+      set ( required_libraries ${required_libraries} hwy )
+    endif()
+  endif()
+else()
+  # if we're not using goading, look for SIMD libraries which zimt
+  # can use. prefer hwy over Vc and Vc over std::simd.
   find_package ( HWY CONFIG )
   if ( HWY_FOUND )
-    message ( STATUS "find_package: HWY_FOUND = true" )
-    # set ( required_libraries ${required_libraries} hwy )
     set ( SIMD_LIBRARY "-D USE_HWY" )
+    message ( STATUS "find_package: HWY_FOUND = true" )
+    if ( MULTI_SIMD_ISA )
+      set ( required_libraries ${required_libraries} hwy )
+    endif()
   else()
+    # with Vc and std::simd we can't use highway's foreach_target
+    set ( MULTI_SIMD_ISA OFF )
     find_package ( Vc )
     if ( Vc_FOUND )
       message ( STATUS "find_package: Vc_FOUND = true" )
@@ -164,7 +181,7 @@ set( required_libraries
 
 add_executable(${_project_name} envutil.cc)
 
-target_link_libraries(${_project_name} pthread ${required_libraries} avutil avcodec swscale)
+target_link_libraries(${_project_name} pthread ${required_libraries} avutil avcodec swscale hwy)
 
 # TODO: currently, optimization with -Ofast does not work
 
@@ -172,9 +189,13 @@ target_link_libraries(${_project_name} pthread ${required_libraries} avutil avco
 
 #      "-O3 -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
 
+if ( MULTI_SIMD_ISA )
+  set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
+        "-O3 -Wno-enum-compare -DMULTI_SIMD_ISA -I.. ${SIMD_LIBRARY}")
+else()
 set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
       "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
-      # "-O3 -Wno-enum-compare ${SIMD_LIBRARY}") # uses SSE only 
+endif()
 
 # install the 'useful' binaries (stepper is only a demo)
 

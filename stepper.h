@@ -36,6 +36,18 @@
 /*                                                                      */
 /************************************************************************/
 
+#include "zimt/zimt.h"
+
+#if defined(ENVUTIL_STEPPER_H) == defined(HWY_TARGET_TOGGLE)
+  #ifdef ENVUTIL_STEPPER_H
+    #undef ENVUTIL_STEPPER_H
+  #else
+    #define ENVUTIL_STEPPER_H
+  #endif
+
+HWY_BEFORE_NAMESPACE() ;
+BEGIN_ZIMT_SIMD_NAMESPACE(project)
+
 // This header provides a set of 'steppers': concrete implementations
 // of objects which can serve as data source for zimt::process. The
 // 'steppers' are quite specific: the provide 3D 'ray' coordinates
@@ -75,6 +87,7 @@
 // orthonormal set of vectors, any set of three vecors might be
 // used for all kinds of effects. The steppers take the vectors
 // as arguments, so there is ample room for experiments.
+
 // My realization is simply understanding the application of a
 // rotational matrix. The key to understanding is that there 'is
 // no rotation' - what's happening is that a given 3D vector is
@@ -84,15 +97,7 @@
 // actually does rotate, then rotational matrices and quaternions
 // can be used to calculate the result of the rotation(s), but the
 // essential fact is that the original vector is simply put into
-// a different coordinate system. Whether the resulting vector is
-// understood in terms of the original coordinate system (an active
-// rotation) or in terms of the new coordinate system (a passive
-// rotation) is an arbitrary choice and depends on the application.
-// With an active rotation, the transformed vector has modified
-// components. With a passive rotation, the components of the
-// vector remain the same, but now relate to a different set of
-// basis vectors. Here, we use active rotations, because we remain
-// in the same 'model space'. The typical modus operandi of using
+// a different coordinate system. The typical modus operandi of using
 // a stepper is to use a target which is 'draped' on the 'archetypal'
 // 2D manifold representing it's projection. So the target is
 // thought to be upright and it's center at unit distance forward;
@@ -126,8 +131,56 @@
 // symmetrical and isotropic. Here, in the implementation, we
 // process the extent values, because they allow more flexibility.
 
-#include "zimt/zimt.h"
-#include "geometry.h"
+// Steppers as such do not have a 'notion' of an image which they
+// might be used for - beyond the limits, which can be passed to
+// their c'tor. Within these limits, they will provide a uniform
+// sampling over the 2D manifold, but emit rays which coincide
+// with the 2D sample points. Note that the sampling is uniform
+// in relation to a 'flattened-out' 2D manifold. If we're using
+// a spherical_stepper, the 'archetypal form' is a spherical
+// surface which can't be sampled uniformly. But the lat/lon
+// representation of this spherical surface can be sampled
+// uniformly, and this is what the spherical_stepper does.
+// cylindrical_stepper has a cylindrical surface as it's
+// archetypal form, but this can be 'rolled out' without
+// deforming it, and the other singe-image steppers also have
+// 'flat' archetypes because they are, conceptually, projections
+// to the plane anyway. cubemap_stepper is slightly different.
+// The corresponding archetype is the surface of a cube, but
+// we use a 1X6 stripe representation. If the cubemap_stepper
+// is set up for a minimal planar representation (section_md
+// == 2 and refc_md == 1), the stripe has model space extent
+// of (2,12), and the sampling of the environment will be as
+// 'compact' as possible. With extra space around the cube faces
+// proper, some areas near the cube's edges will be sampled
+// more often (because they are 'seen' from several of the
+// 'padded' cube faces. The set of rays generated from a 'tight'
+// cubemap_stepper is a 'quite' even sampling of the environment:
+// The distance between neighbouring rays does vary because of
+// the rectilinear projection used for the cube faces, but the
+// variation is nowhere near as extreme as what happens near the
+// poles with a spherical_stepper, or at the 'back pole' of a
+// fisheye_stepper. So to sample an entire environment I think
+// a cubemap_stepper is quite a good choice, and combined with
+// an interpolator which takes the variations of ray distance into
+// account (e.g. twining), the results should be good. Other schemes
+// to 'cover' an entire 360X180 environment as uniformly as possible
+// require more calculation (e.g. triangulations) and/or do not map
+// to a uniform grid. A disadvantage of the 1X6 stripe representation
+// are the discontinuities between the six partial images, which
+// can't be avoided: there is no way to arrange the six partial
+// images without unrelated edges 'colliding'. This is the reason
+// for using 'padding': if the padding is sufficiently wide (so that
+// the interpolator's support remains within a single padded image)
+// the discontinuity has no effect. To merely sample an environment
+// with roughly equally spaced rays, a 'tight' cubemap_stepper is a
+// good choice, though - this fact can be exploited e.g. for 'maps'
+// of the environment which indicate properties of parts of the
+// environment - often scaled-down versions of the environment used
+// as masks to avoid unnecessary calculations e.g. for 'void' areas.
+// With the underlying rectangular structure, such schemes can be
+// used together with tiling schemes, marking which tiles will be
+// used in an intended manipulation.
 
 // we set up a base class for 'steppers' which encodes the '2D part'
 // of setting up a sampling: We have a horizontal and a vertical
@@ -1225,3 +1278,8 @@ struct deriv_stepper
       trg.stuff ( cap ) ;
   }
 } ;
+
+END_ZIMT_SIMD_NAMESPACE
+HWY_AFTER_NAMESPACE() ;
+
+#endif // sentinel

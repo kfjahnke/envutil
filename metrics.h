@@ -36,7 +36,17 @@
 /*                                                                      */
 /************************************************************************/
 
-#include "common.h"
+#include "geometry.h"
+
+#if defined(ENVUTIL_METRICS_H) == defined(HWY_TARGET_TOGGLE)
+  #ifdef ENVUTIL_METRICS_H
+    #undef ENVUTIL_METRICS_H
+  #else
+    #define ENVUTIL_METRICS_H
+  #endif
+
+HWY_BEFORE_NAMESPACE() ;
+BEGIN_ZIMT_SIMD_NAMESPACE(project)
 
 // this structure is used to calculate the metrics of a sixfold_t.
 // These values depend on four input values: the tile size, the
@@ -471,3 +481,8 @@ struct metrics_t
     target *= model_to_tx ;
   }
 } ;
+
+END_ZIMT_SIMD_NAMESPACE
+HWY_AFTER_NAMESPACE() ;
+
+#endif // sentinel

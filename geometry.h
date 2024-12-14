@@ -36,9 +36,6 @@
 /*                                                                      */
 /************************************************************************/
 
-#ifndef GEOMETRY_H
-#define GEOMETRY_H
-
 // This header has all the geometrical transformations used to convert
 // 2D coordinates in several projections to 3D 'ray' coordinates and
 // back. To make this code as versatile as possible, the functors for
@@ -49,272 +46,41 @@
 // code for the transformations is largely from lux, except for the
 // cubemap code which is largely from the envutil project itself.
 
-#include "common.h"
+#include "basic.h"
+#include "zimt/zimt.h"
 
-// we start out with conventions used for directions and how they
-// are encoded in 3D coordinates stored as zimt::xel_t of three
-// fundamentals.
+#if defined(ENVUTIL_GEOMETRY_H) == defined(HWY_TARGET_TOGGLE)
+  #ifdef ENVUTIL_GEOMETRY_H
+    #undef ENVUTIL_GEOMETRY_H
+  #else
+    #define ENVUTIL_GEOMETRY_H
+  #endif
 
-// enum encoding the sequence of cube face images in the cubemap
-// This is the sequence used for openEXR cubmap layout. The top
-// and bottom squares are oriented so as to align with the back
-// image. Of course, the labels are debatable: my understanding
-// of 'front' is 'aligned with the image center'. If one were to
-// associate 'front' with the wrap-around point of the full
-// spherical, the labels would be different.
+HWY_BEFORE_NAMESPACE() ;
+BEGIN_ZIMT_SIMD_NAMESPACE(project)
 
-typedef enum
-{
-  CM_LEFT ,
-  CM_RIGHT ,
-  CM_TOP ,
-  CM_BOTTOM ,
-  CM_FRONT ,
-  CM_BACK
-} face_index_t ;
+// zimt types for 2D and 3D coordinates and pixels
 
-// we use lux coordinate system convention. I call it 'latin book
-// order': if you have a stack of prints in front of you and read
-// them, your eyes move first left to right inside the line, then
-// top to bottom from line to line, then, moving to the next pages,
-// forward in the stack. Using this order also makes the first two
-// components agree with normal image indexing conventions, namely
-// x is to the right and y down. Note that I put the fastest-moving
-// index first, which is 'fortran' style, whereas C/C++ use the
-// opposite order for nD arrays.
+typedef zimt::xel_t < int , 2 > v2i_t ;
+typedef zimt::xel_t < int , 3 > v3i_t ;
+typedef zimt::xel_t < int , 2 > index_type ;
+typedef zimt::xel_t < int , 2 > shape_type ;
 
-enum { RIGHT , DOWN , FORWARD } ;
+typedef zimt::xel_t < float , 2 > v2_t ;
+typedef zimt::xel_t < float , 3 > v3_t ;
 
-// openEXR uses different 3D axis semantics, and if we want to use
-// OIIO's environment lookup function, we need openEXR 3D coordinates.
+// some SIMDized types we'll use. I use 16 SIMD lanes for now,
+// which is also the lane count currently supported by OIIO.
 
-// Here's what the openEXR documentation sys about their axis
-// order (next to a drawing which says differently, see this issue:
-// https://github.com/AcademySoftwareFoundation/openexr/issues/1687)
+#define LANES 16
 
-// quote:
-// We assume that a camera is located at the origin, O, of a 3D
-// camera coordinate system. The camera looks along the positive z
-// axis. The positive x and y axes correspond to the camera’s left
-// and up directions.
-// end quote
-
-// so we'd get this axis order, assuming they store x,y,z:
-
-enum { EXR_LEFT , EXR_UP , EXR_FORWARD } ;
-
-// the cubemap comes out right this way, so I assume that their text
-// is correct and the drawing is wrong.
-
-typedef enum
-{
-  SPHERICAL ,
-  CYLINDRICAL ,
-  RECTILINEAR ,
-  STEREOGRAPHIC ,
-  FISHEYE ,
-  CUBEMAP ,
-  PRJ_NONE
-}  projection_t ;
-
-const char * const projection_name[]
-{
-  "spherical" ,
-  "cylindrical" ,
-  "rectilinear" ,
-  "stereographic" ,
-  "fisheye" ,
-  "cubemap"
-} ;
-
-// extent_type is a handy struct to contain the horizontal and
-// vertical extent of a rectangular section of the plane.
-
-struct extent_type
-{
-  double x0 , x1 , y0 , y1 ;
-} ;
-
-// assuming isotropic sampling (same sampling resolution in the horizontal
-// and vertical), calculate the vertical field of view from the horizontal
-// field of view, under the given projection.
-// Note that this function is for centered images only
-// (x0 == -x1), (y0 == -y1)
-
-double get_vfov ( projection_t projection ,
-                  int width ,
-                  int height ,
-                  double hfov )
-{
-  double vfov = 0.0 ;
-  switch ( projection )
-  {
-    case RECTILINEAR:
-    {
-      // as a one-liner, this is probably clearer than the code below
-      vfov = 2.0 * atan ( height * tan ( hfov / 2.0 ) / width ) ;
-      break ;
-    }
-    case CYLINDRICAL:
-    {
-      double pixels_per_rad = width / hfov ;
-      double h_rad = height / pixels_per_rad ;
-      vfov = 2.0 * atan ( h_rad / 2.0 ) ;
-      break ;
-    }
-    case STEREOGRAPHIC:
-    {
-      double w_rad = 2.0 * tan ( hfov / 4.0 ) ;
-      double pixels_per_rad = width / w_rad ;
-      double h_rad = height / pixels_per_rad ;
-      vfov = 4.0 * atan ( h_rad / 2.0 ) ;
-      break ;
-    }
-    case SPHERICAL:
-    case FISHEYE:
-    {
-      vfov = hfov * height / width ;
-      break ;
-    }
-    case CUBEMAP:
-    {
-      vfov = 2.0 * M_PI ;
-    }
-    default:
-    {
-      vfov = hfov ; // debatable...
-      break ;
-    }
-  }
-  return vfov ;
-}
-
-// the 'step' of an image is the angle - in radians - which
-// corresponds to the width of one pixel in the image center.
-// for some projections and in certain directions, this value
-// will be usable at non-central points (e.g. for spherical
-// images along the horizon). In any case it can be used as a
-// 'rule of thumb' indicator of the image's resolution.
-// If we have the 'extent' of a spherical or cylindrical image
-// already, we can calculate the step as hfov / width;
-// for other projections this simple formula doesn't apply.
-// Note that this function is for centered images only
-// (x0 == -x1), (y0 == -y1)
-// currently unused.
-
-double get_step ( projection_t projection ,
-                  int width ,
-                  int height ,
-                  double hfov )
-{
-  double step = 0.0 ;
-  switch ( projection )
-  {
-    case RECTILINEAR:
-    case CUBEMAP:
-    {
-      step = atan ( 2.0 * tan ( hfov / 2.0 ) / width ) ;
-      break ;
-    }
-    case SPHERICAL:
-    case CYLINDRICAL:
-    case FISHEYE:
-    {
-      step = hfov / width ;
-      break ;
-    }
-    case STEREOGRAPHIC:
-    {
-      step = atan ( 4.0 * tan ( hfov / 4.0 ) / width ) ;
-      break ;
-    }
-    default:
-    {
-      break ;
-    }
-  }
-  return step ;
-}
-
-// extract internally uses the notion of an image's 'extent' in 'model
-// space'. The image is thought to be 'draped' to an 'archetypal 2D
-// manifold' - the surface of a sphere or cylinder with unit radius
-// or a plane at unit distance forward - where the sample points are
-// placed on the 2D manifold so that rays from the origin to the
-// scene point which corresponds with the sample point intersect there.
-// To put it differently: the sample point cloud is scaled and shifted
-// to come to lie on the 'archetypal' 2D manifolds. This makes for
-// efficient calculations. The image is taken to be centered on the
-// 'forward' ray.
-
-extent_type get_extent ( projection_t projection ,
-                         int width ,
-                         int height ,
-                         double hfov )
-{
-  double x0 , x1 , y0 , y1 ;
-
-  double alpha_x = - hfov / 2.0 ;
-  double beta_x = hfov / 2.0 ;
-  double beta_y = get_vfov ( projection , width , height , hfov ) / 2.0 ;
-  double alpha_y = - beta_y ;
-
-  switch ( projection )
-  {
-    case SPHERICAL:
-    case FISHEYE:
-    {
-      x0 = alpha_x ;
-      x1 = beta_x ;
-
-      y0 = alpha_y ;
-      y1 = beta_y ;
-      break ;
-    }
-    case CYLINDRICAL:
-    {
-      x0 = alpha_x ;
-      x1 = beta_x ;
-
-      y0 = tan ( alpha_y ) ;
-      y1 = tan ( beta_y ) ;
-      break ;
-    }
-    case RECTILINEAR:
-    {
-      x0 = tan ( alpha_x ) ;
-      x1 = tan ( beta_x ) ;
-
-      y0 = tan ( alpha_y ) ;
-      y1 = tan ( beta_y ) ;
-      break ;
-    }
-    case STEREOGRAPHIC:
-    {
-      x0 = 2.0 * tan ( alpha_x / 2.0 ) ;
-      x1 = 2.0 * tan ( beta_x / 2.0 ) ;
-
-      y0 = 2.0 * tan ( alpha_y / 2.0 ) ;
-      y1 = 2.0 * tan ( beta_y / 2.0 ) ;
-      break ;
-    }
-    case CUBEMAP:
-    {
-      x0 = tan ( alpha_x ) ;
-      x1 = tan ( beta_x ) ;
-
-      y0 = 6 * x0 ;
-      y1 = 6 * x1 ;
-      break ;
-    }
-    default:
-    {
-      x0 = x1 = y0 = y1 = 0.0 ;
-      break ;
-    }
-  }
-  return { x0 , x1 , y0 , y1 } ;
-}
+typedef zimt::simdized_type < float , LANES > f_v ;
+typedef zimt::simdized_type < int , LANES > i_v ;
+typedef zimt::simdized_type < v2_t ,  LANES > crd2_v ;
+typedef zimt::simdized_type < v2i_t , LANES > v2i_v ;
+typedef zimt::simdized_type < v3i_t , LANES > v3i_v ;
+typedef zimt::simdized_type < v3_t ,  LANES > crd3_v ;
+typedef zimt::simdized_type < index_type , LANES > index_v ;
 
 // coordinate transformations, coded as templates in zimt 'act'
 // functor style, returning the result via a reference argument
@@ -598,8 +364,6 @@ struct cyl_to_ray_t
     down = vertical ;
   }
 } ;
-
-#include <cfloat> // we need sqrt
 
 template < typename T = float , std::size_t L = LANES >
 struct ray_to_ster_t
@@ -1620,4 +1384,7 @@ struct ray_to_ray
   }
 } ;
 
-#endif // #ifndef GEOMETRY_H
+END_ZIMT_SIMD_NAMESPACE
+HWY_AFTER_NAMESPACE() ;
+
+#endif // sentinel

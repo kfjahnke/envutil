@@ -1,16 +1,16 @@
 /************************************************************************/
 /*                                                                      */
-/*    envutil - utility to convert between environment formats          */
+/*    zimt - abstraction layer for SIMD programming                     */
 /*                                                                      */
 /*            Copyright 2024 by Kay F. Jahnke                           */
 /*                                                                      */
 /*    The git repository for this software is at                        */
 /*                                                                      */
-/*    https://github.com/kfjahnke/envutil                               */
+/*    https://github.com/kfjahnke/zimt                                  */
 /*                                                                      */
 /*    Please direct questions, bug reports, and contributions to        */
 /*                                                                      */
-/*    kfjahnke+envutil@gmail.com                                        */
+/*    kfjahnke+zimt@gmail.com                                           */
 /*                                                                      */
 /*    Permission is hereby granted, free of charge, to any person       */
 /*    obtaining a copy of this software and associated documentation    */
@@ -36,13 +36,141 @@
 /*                                                                      */
 /************************************************************************/
 
-// test program for the projections in geometry.h and the
-// 'steppers' in stepper.h
-// TODO: test rotated steppers agains 'plain' conversions
-// followed by a rotation.
+// This is a test program for zimt's recently acquired b-spline
+// processing capabilites and also serves to measure performance of the
+// b-spline evaluation code with splines of various degrees and boundary
+// conditions and varying SIMD back-ends/ISAs.
+
+// There are two different ways of compiling it. The first is to create 
+// a single-ISA binary, fixing the SIMD ISA at compile time by passing
+// appropriate flags to the compiler. This will work with all SIMD
+// back-ends - here, I show the compiler invocations for an AVX2 version.
+// Note that - especially when using highway - additional flags may be
+// needed to get a program which actually uses the AVX2 instructions.
+// When highway uses pragmas to set the stage for AVX2 code, it uses
+// all these flags: -msse2 -mssse3 -msse4.1 -msse4.2 -mpclmul -maes
+// -mavx -mavx2 -mbmi -mbmi2 -mfma -mf16c
+// Note also the -I. directive to tell the compiler to find files to
+// #include in the current folder as well.
+
+//   clang++ -mavx2 bsp_eval.ccc -O3 -I. -DUSE_HWY -lhwy
+//   clang++ -mavx2 bsp_eval.ccc -O3 -I. -DUSE_VC -lVc
+//   clang++ -mavx2 bsp_eval.ccc -O3 -I. -DUSE_STDSIMD
+//   clang++ -mavx2 bsp_eval.ccc -O3 -I.
+
+// The second way is to use highway's automatic dispatch to embedded
+// variants of the code running with different ISAs. This requires the
+// definition of MULTI_SIMD_ISA and linkage to libhwy and can only
+// be used for the highway and the 'goading' back-end. Here, no
+// architecture flags are passed to the compiler:
+
+//   clang++ bsp_eval.ccc -O3 -I. -DMULTI_SIMD_ISA -DUSE_HWY -lhwy
+//   clang++ bsp_eval.ccc -O3 -I. -DMULTI_SIMD_ISA -lhwy
+
+// binaries made with the second method will dispatch to what is deemd
+// the best SIMD ISA available on the CPU on which the binary is run.
+// Because this is done meticulously by highway's CPU detection code,
+// the binary variant which is picked is usually optimal and may
+// out-perform single-ISA variants with 'manually' supplied ISA flags,
+// if the set of flags isn't optimal as well. The disadvantage of the
+// multi-SIMD-ISA variants is (much) longer compile time and code size.
+
+// Due to the 'commodification' the source code itself doesn't have
+// to be modified in any way to produce one variant or another.
+// This suggests that during the implementation of a new program a
+// fixed-ISA build can be used to evolve the code with fast turn-around
+// times, adding dispatch capability later on by passing the relevant
+// compiler flags.
+
+// This particular program - evaluating b-splines - shows quite some
+// variation between builds with different back-ends. While, in general,
+// using better SIMD ISAs tend to speed things up, the differences
+// arising from using different back-ends are harder to explain. For
+// example, std::simd comes out surprisingly well for larger spline
+// degrees. My conclusion is that, depending on the given program,
+// there is no ready answer to the question which back-end will produce
+// the best result and that it pays to experiment. Please note that
+// the code to interface with the libraries I employ for the back-ends
+// is entirely mine, so the performance measurements do reflect my
+// use of these libraries, rather than qualities of these libraries.
+// I hope to tweak the interface code to get as much performance out
+// of the back-ends as possible, but this is difficult territory.
+
+// I'll mark code sections which will differ from one example to the
+// next, prefixing with ////////... and postfixing with //-------...
+// You'll notice that there are three four places where you have to
+// change stuff to set up your own program, and all the additions
+// are simple (except for your 'client code', which may be complex).
+
+// if the code is compiled to use the Vc or std::simd back-ends, we
+// can't (yet) use highway's foreach_target mechanism, so we #undef
+// MULTI_SIMD_ISA, which is zimt's way of activating that mechanism.
+
+#if defined MULTI_SIMD_ISA && ( defined USE_VC || defined USE_STDSIMD )
+#warning "un-defining MULTI_SIMD_ISA due to use of Vc or std::simd"
+#undef MULTI_SIMD_ISA
+#endif
+
+// we define a dispatch base class. All the 'payload' code is called
+// through virtual member functions of this class. In this example,
+// we only have a single payload function. We have to enclose this
+// base class definition in an include guard, because it must not
+// be compiled repeatedly, which happens when highway's foreach_target
+// mechansim is used. This definition might go to a header file, but
+// it's better placed here, because it holds the declarations of the
+// pure virtual member function(s) used as conduit to the ISA-specific
+// code, and here, in an example, we want to see both these declarations
+// and, later on, the implementations, in the same file.
+
+#ifndef DISPATCH_BASE
+#define DISPATCH_BASE
+
+struct dispatch_base
+{
+  // in dispatch_base and derived classes, we keep two flags.
+  // 'backend' holds a value indicating which of zimt's back-end
+  // libraries is used. 'hwy_isa' is only set when the highway
+  // backend is used and holds highway's HWY_TARGET value for
+  // the given nested namespace.
+
+  int backend = -1 ;
+  unsigned long hwy_isa = 0 ;
+
+  // next we have pure virtual member function definitions for
+  // payload code. In this example, we only have one payload
+  // function which calls what would be 'main' in a simple
+  // program without multiple SIMD ISAs or SIMD back-ends
+
+  virtual int payload ( int argc , char * argv[] ) const = 0 ;
+} ;
+
+#endif
+
+#ifdef MULTI_SIMD_ISA
+
+// if we're using MULTI_SIMD_ISA, we have to define HWY_TARGET_INCLUDE
+// to tell the foreach_target mechanism which file should be repeatedly
+// re-included and re-copmpiled with SIMD-ISA-specific flags
+
+#undef HWY_TARGET_INCLUDE
+
+/////////////// Tell highway which file to submit to foreach_target
+
+#define HWY_TARGET_INCLUDE "geometry.cc"  // this very file
+
+//--------------------------------------------------------------------
+
+#include <hwy/foreach_target.h>  // must come before highway.h
+
+#include <hwy/highway.h>
+
+#endif // #ifdef MULTI_SIMD_ISA
+
+//////////////// Put the #includes needed for your program here:
 
 #include <random>
 #include <chrono>
+#include "geometry.h"
 #include "stepper.h"
 
 // To conveniently rotate with a rotational quaternion, we employ
@@ -56,11 +184,28 @@
 #include <Imath/ImathQuat.h>
 #include <Imath/ImathLine.h>
 
+//--------------------------------------------------------------------
+
+// to make highway's use of #pragma directives to the compiler
+// effective, we surround the SIMD-ISA-specific code with
+// HWY_BEFORE_NAMESPACE() and HWY_AFTER_NAMESPACE().
+
+HWY_BEFORE_NAMESPACE() ;
+
+// this macro puts us into a nested namespace inside namespace 'project'.
+// For single-SIMD-ISA builds, this is conventionally project::zsimd,
+// and for multi-SIMD-ISA builds it is project::HWY_NAMESPACE. The macro
+// is defined in common.h. After the macro invocation, we can access
+// all zimt names with a simple zimt:: prefix - both 'true' zimt names
+// and SIMD-ISA-specific versions living in the nested namespace.
+
+BEGIN_ZIMT_SIMD_NAMESPACE(project)
+
 // rotate_3d uses a SIMDized Imath Quaternion to affect a 3D rotation
 // of a 3D SIMDized coordinate. Imath::Quat<float> can't broadcast
 // to handle SIMDized input, but if we use an Imath::Quat of the
 // SIMDized type, we get the desired effect for simdized input -
-// hance the broadcasting to Imath::Quat<U> in 'eval', which
+// hence the broadcasting to Imath::Quat<U> in 'eval', which
 // has no effect for scalars, but represents a broadcast of the
 // rotation to all lanes of the simdized quaternion's components.
 // We'll use this functor to compare the output of steppers with
@@ -95,6 +240,33 @@ struct rotate_3d
     }
   }
 
+  // for the actual rotation (the 'multiplication' with teh rotational
+  // quaternion), we don't use Imath code. See comments in 'eval'.
+
+  // calculate the cross product of two vectors
+
+  template < typename U >
+  U cross ( const U & x , const U & y ) const
+  {
+    U result ;
+    result[0] = x[1] * y[2] - x[2] * y[1] ;
+    result[1] = x[2] * y[0] - x[0] * y[2] ;
+    result[2] = x[0] * y[1] - x[1] * y[0] ;
+    return result ;
+  }
+
+  // perform the quaternion multiplication.
+
+  template < typename U >
+  U mulq ( const U & vec ) const
+  {
+    U result ;
+    U qv { q.v[0] , q.v[1] , q.v[2] } ;
+    auto a = cross ( qv , vec ) ;
+    auto b = cross ( qv , a ) ;
+    return vec + T(2) * (q.r * a + b);
+  }
+
   // eval applies the quaternion. Note how we use a template of
   // typename U for the formulation. This way, we can handle both
   // scalar and simdized arguments.
@@ -103,13 +275,24 @@ struct rotate_3d
   void eval ( const zimt::xel_t < U , 3 > & in ,
               zimt::xel_t < U , 3 > & out ) const
   {
-    auto const & in_e
-      = reinterpret_cast < const Imath::Vec3 < U > & > ( in ) ;
+    // using highway's foreach_target mechanism, coding the quaternion
+    // multiplication by invoking Imath's operator* with an Imath::Quat
+    // argument, produces slow code compared to single-ISA compiles.
+    // I work around this problem by coding the operation 'manually'.
+    // Code using Imath's operator* would do this:
+    //
+    // auto const & in_e
+    //   = reinterpret_cast < const Imath::Vec3 < U > & > ( in ) ;
+    // 
+    // auto & out_e
+    //   = reinterpret_cast < Imath::Vec3 < U > & > ( out ) ;
+    // 
+    // out_e = in_e * Imath::Quat < U > ( q ) ;
 
-    auto & out_e
-      = reinterpret_cast < Imath::Vec3 < U > & > ( out ) ;
+    // instead, we calculate 'manually' like this, using the mulq
+    // member function above.
 
-    out_e = in_e * Imath::Quat < U > ( q ) ;
+    out = mulq ( in ) ;
   }
 
   // for convenience:
@@ -181,7 +364,7 @@ d3_t work ( d3_t _c3 )
 // the projections to types of conversion functors
 
 template < typename pa >
-d3_t dispatch2 ( projection_t pb ,
+d3_t route2 ( projection_t pb ,
                  d3_t c3 )
 {
   d3_t result ;
@@ -213,7 +396,7 @@ d3_t dispatch2 ( projection_t pb ,
   return result ;
 }
 
-d3_t dispatch ( projection_t pa ,
+d3_t route ( projection_t pa ,
                 projection_t pb ,
                 d3_t c3 )
 {
@@ -222,25 +405,25 @@ d3_t dispatch ( projection_t pa ,
   switch ( pa )
   {
     case SPHERICAL:
-      result = dispatch2 < ray_to_ll_t < double > > ( pb , c3 ) ;
+      result = route2 < ray_to_ll_t < double > > ( pb , c3 ) ;
       break ;
     case CYLINDRICAL:
-      result = dispatch2 < ray_to_cyl_t < double > > ( pb , c3 ) ;
+      result = route2 < ray_to_cyl_t < double > > ( pb , c3 ) ;
       break ;
     case RECTILINEAR:
       // negative z axis doesn't work with rectilinear projection, hence:
       c3[2] = std::abs ( c3[2] ) ;
 
-      result = dispatch2 < ray_to_rect_t < double > > ( pb , c3 ) ;
+      result = route2 < ray_to_rect_t < double > > ( pb , c3 ) ;
       break ;
     case FISHEYE:
-      result = dispatch2 < ray_to_fish_t < double > > ( pb , c3 ) ;
+      result = route2 < ray_to_fish_t < double > > ( pb , c3 ) ;
       break ;
     case STEREOGRAPHIC:
-      result = dispatch2 < ray_to_ster_t < double > > ( pb , c3 ) ;
+      result = route2 < ray_to_ster_t < double > > ( pb , c3 ) ;
       break ;
     case CUBEMAP:
-      result = dispatch2 < ray_to_ir_t < double > > ( pb , c3 ) ;
+      result = route2 < ray_to_ir_t < double > > ( pb , c3 ) ;
       break ;
     default:
       break ;
@@ -263,13 +446,13 @@ void test_r2r ( d3_t d3 )
   {
     int pb = pa ;
     {
-      result = dispatch ( projection_t(pa) ,
+      result = route ( projection_t(pa) ,
                           projection_t(pb) , d3 ) ;
     }
   }
 }
 
-int main ( int argc , char * argv[] )
+int _payload ( int argc , char * argv[] )
 {
   // first, we run a test where we project rays to a planar surface
   // and back to the ray. This should always succeed (except for
@@ -408,38 +591,60 @@ int main ( int argc , char * argv[] )
   // So to really compare performance, we'd have to do the rotation
   // 'manually', applying the scalar components, but I assume that
   // the output would be roughly the same.
+  // A note about the results of the speed measurements: with the code,
+  // as it stands, compiling a single-SIMD-ISA binary with explicitly
+  // stated ISA flags results in significantly faster code for the
+  // second run - the one with the separate rotation after the coordinate
+  // transformation with ll_to_ray - compared to the multi-SIMD-ISA
+  // version of the program. Why is that? It's due to the use of Imath's
+  // quaternion code for the rotation. Imath is not adapted to use
+  // highway's foreach_target mechanism, so including the Imath headers
+  // for the first time instantiates the Imath types finally, and this
+  // happens with a low-grade ISA. Subsequent re-compilations with the
+  // foreach_target mechanism can't reinstatiate the templates, because
+  // the sentinels in the Imath headers blank out the code - Imath
+  // 'thinks' they have already been dealt with. This results in
+  // quaternion code which is hobbled to use only the instantiations
+  // from the first compilation, and this significantly degrades
+  // performance. For now, I see no way out of this dilemma, short of
+  // falling back to a scheme with several separate TUs for the SIMD
+  // ISAs. Note, though, that this problem affects only the code which
+  // we use to test that the steppers perform as expected! The steppers
+  // don't use Imath's quaternion code at all. This is why the first
+  // run below comes out equally fast in both modes of compilation,
+  // and it's another good reason to use steppers if possible.
 
-  // std::chrono::system_clock::time_point start
-  //   = std::chrono::system_clock::now() ;
-  // 
-  // for ( int times = 0 ; times < 100 ; times++ )
+  std::chrono::system_clock::time_point start
+    = std::chrono::system_clock::now() ;
+  
+  for ( int times = 0 ; times < 100 ; times++ )
     zimt::process ( a3.shape , rsphs ,
                     zimt::pass_through < double , 3 , LANES > () ,
                     zimt::storer < double , 3 , 2 , LANES > ( a3 ) ) ;
 
-  // std::chrono::system_clock::time_point end
-  //   = std::chrono::system_clock::now() ;
-  // 
-  // std::cout << "first run took:               "
-  //           << std::chrono::duration_cast<std::chrono::milliseconds>
-  //               ( end - start ) . count()
-  //           << " ms" << std::endl ;
+  std::chrono::system_clock::time_point end
+    = std::chrono::system_clock::now() ;
+  
+  std::cout << "first run took:               "
+            << std::chrono::duration_cast<std::chrono::milliseconds>
+                ( end - start ) . count()
+            << " ms" << std::endl ;
 
   // Now we fill b3 with the concatenation of the unrotated
   // stepper and the rotation functor
 
-  // start = std::chrono::system_clock::now() ;
+  start = std::chrono::system_clock::now() ;
 
-  // for ( int times = 0 ; times < 100 ; times++ )
+  for ( int times = 0 ; times < 100 ; times++ )
     zimt::process ( b3.shape , ls , ll_to_ray + r3 ,
                     zimt::storer < double , 3 , 2 , LANES > ( b3 ) ) ;
 
-  // end = std::chrono::system_clock::now() ;
-  // 
-  // std::cout << "second run took:               "
-  //           << std::chrono::duration_cast<std::chrono::milliseconds>
-  //               ( end - start ) . count()
-  //           << " ms" << std::endl ;
+  end = std::chrono::system_clock::now() ;
+  
+  std::cout << "second run took:               "
+            << std::chrono::duration_cast<std::chrono::milliseconds>
+                ( end - start ) . count()
+            << " ms" << std::endl ;
 
   // and look at the results
 
@@ -742,4 +947,177 @@ int main ( int argc , char * argv[] )
 
   // if none of the assertions failed and the program terminates
   // now, all is well and the functors work as expected.
+
+  return 0 ;
 }
+
+// Here, we define the SIMD-ISA-specific derived 'dispatch' class:
+
+struct dispatch
+: public dispatch_base
+{
+  // We fit the derived dispatch class with a c'tor which fills in
+  // information about the nested SIMD ISA we're currently in.
+
+  dispatch()
+  {
+    backend = int ( zimt::simdized_type<int,4>::backend ) ;
+    #if defined USE_HWY || defined MULTI_SIMD_ISA
+      hwy_isa = HWY_TARGET ;
+    #endif
+  }
+
+  // 'payload', the SIMD-ISA-specific overload of dispatch_base's
+  // pure virtual member function, now has the code which was in
+  // main() when this example was first coded without dispatch.
+  // One might be more tight-fisted with which part of the former
+  // 'main' should go here and which part should remain in the
+  // new 'main', but the little extra code which wouldn't benefit
+  // from vectorization doesn't make much of a difference here.
+  // Larger projects would have both several payload-type functions
+  // and a body of code which is independent of vectorization.
+
+///////////////// write a payload function with a 'main' signature
+  
+  int payload ( int argc , char * argv[] ) const
+  {
+    // we can get information about the specific dispatch object:
+
+    std::cout << "payload code is using back-end: "
+              << zimt::backend_name [ backend ] << std::endl ;
+
+    #if defined USE_HWY || defined MULTI_SIMD_ISA
+
+    std::cout << "highway target: "
+              << hwy::TargetName ( hwy_isa ) << std::endl ;
+
+    #endif
+
+    _payload ( argc , argv ) ;
+    return 0 ;
+  }
+} ;
+
+//--------------------------------------------------------------------
+
+// we also code a local function _get_dispatch which returns a pointer
+// to 'dispatch_base', which points to an object of the derived class
+// 'dispatch'. This is used with highway's HWY_DYNAMIC_DISPATCH and
+// returns the dispatch pointer for the SIMD ISA which highway deems
+// most appropriate for the CPU on which the code is currently running.
+
+const dispatch_base * const _get_dispatch()
+{
+  static dispatch d ;
+  return &d ;
+}
+
+END_ZIMT_SIMD_NAMESPACE
+
+HWY_AFTER_NAMESPACE() ;
+
+// Now for code which isn't SIMD-ISA-specific. ZIMT_ONCE is defined
+// as either HWY_ONCE (if MULTI_SIMD_ISA is #defined) or simply true
+// otherwise - then, there is only one compilation anyway.
+
+#if ZIMT_ONCE
+
+namespace project {
+
+#ifdef MULTI_SIMD_ISA
+
+// we're using highway's foreach_target mechanism. To get access to the
+// SIMD-ISA-specific variant of _get_dispatch (in project::HWY_NAMESPACE)
+// we use the HWY_EXPORT macro:
+
+HWY_EXPORT(_get_dispatch);
+
+// now we can code get_dispatch: it simply uses HWY_DYNAMIC_DISPATCH
+// to pick the SIMD-ISA-specific get_dispatch variant, which in turn
+// yields the desired dispatch_base pointer.
+
+const dispatch_base * const get_dispatch()
+{
+  return HWY_DYNAMIC_DISPATCH(_get_dispatch)() ;
+}
+
+#else // #ifdef MULTI_SIMD_ISA
+
+// if we're not using highway's foreach_target mechanism, there is
+// only a single _get_dispatch variant in namespace project::zsimd.
+// So we call that one, to receive the desired dispatch_base pointer.
+
+const dispatch_base * const get_dispatch()
+{
+  return zsimd::_get_dispatch() ;
+}
+
+#endif // #ifdef MULTI_SIMD_ISA
+
+}  // namespace project
+
+int main ( int argc , char * argv[] )
+{
+  // Here we use zimt's dispatch mechanism: first, we get a pointer
+  // to the dispatcher, then we invoke a member function of the
+  // dispatcher. What's the point? We can call a SIMD-ISA-specific
+  // bit of code without having to concern ourselves with figuring
+  // out which SIMD ISA to use on the current CPU: this happens via
+  // highway's dispatch mechanism, or is fixed at compile time, but
+  // in any case we receive a dispatch_base pointer routing to the
+  // concrete variant. project::get_dispatch might even be coded
+  // to provide pointers to dispatch objects in separate TUs, e.g.
+  // when these TUs use different back-ends or compiler flags. Here,
+  // we can remain unaware of how the concrete dispatch object is
+  // set up and the pointer obtained.
+
+  auto dp = project::get_dispatch() ;
+
+  // we can get information about the specific dispatch object:
+
+  std::cout << "calling payload with "
+#ifdef MULTI_SIMD_ISA
+            << "dynamic dispatch" << std::endl ;
+#else
+            << "static dispatch" << std::endl ;
+#endif
+
+  // now we call the payload via the dispatch_base pointer.
+
+  int success = dp->payload ( argc , argv ) ;
+
+  std::cout << std::endl ;
+
+// to invoke other variants with explicit calls, uncomment this section
+// (x86 only - other CPU types would need other N_... macros)
+
+#ifdef MULTI_SIMD_ISA
+
+  std::cout << "******** calling payloads with successively better ISAs:"
+            << std::endl ;
+  
+  std::cout << "******** calling SSE2 payload" << std::endl ;
+  project::N_SSE2::dispatch d3 ;
+  d3.payload ( argc , argv ) ;
+  
+  std::cout << "******** calling SSSE3 payload" << std::endl ;
+  project::N_SSSE3::dispatch d4 ;
+  d4.payload ( argc , argv ) ;
+  
+  std::cout << "******** calling SSE4 payload" << std::endl ;
+  project::N_SSE4::dispatch d5 ;
+  d5.payload ( argc , argv ) ;
+  
+  std::cout << "******** calling AVX2 payload" << std::endl ;
+  project::N_AVX2::dispatch d6 ;
+  d6.payload ( argc , argv ) ;
+  
+  std::cout << "******** calling AVX3 payload" << std::endl ;
+  project::N_AVX3::dispatch d7 ;
+  d7.payload ( argc , argv ) ;
+
+#endif
+}
+
+#endif  // ZIMT_ONCE
+

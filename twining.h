@@ -36,8 +36,15 @@
 /*                                                                      */
 /************************************************************************/
 
-#ifndef TWINING_H
-#define TWINING_H
+#if defined(ENVUTIL_TWINING_H) == defined(HWY_TARGET_TOGGLE)
+  #ifdef ENVUTIL_TWINING_H
+    #undef ENVUTIL_TWINING_H
+  #else
+    #define ENVUTIL_TWINING_H
+  #endif
+
+HWY_BEFORE_NAMESPACE() ;
+BEGIN_ZIMT_SIMD_NAMESPACE(project)
 
 // This header provides code for 'twining': inlined oversampling with
 // subsequent weighted averaging.
@@ -187,7 +194,7 @@ void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
       c[2] /= sum ;
   }
 
-  if ( verbose )
+  if ( args.verbose )
   {
     std::cout << args.twf_file << " yields twining filter kernel:"
               << std::endl ;
@@ -360,8 +367,8 @@ struct twine_t
       // this is the alternative code using simple differencing, which
       // is fine for the 'normal' scenario: very close neighbours.
 
-      dx = { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
-      dy = { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
+      dx = crd_v ( { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ) ;
+      dy = crd_v ( { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ) ;
     }
 
     // with the dx and dy vectors set up, we can now calculate the
@@ -390,4 +397,7 @@ struct twine_t
   }
 } ;
 
-#endif // TWINING_H
+END_ZIMT_SIMD_NAMESPACE
+HWY_AFTER_NAMESPACE() ;
+
+#endif // sentinel
