@@ -123,7 +123,7 @@ a new development and hasn't been tested much. I'd welcome enterprising
 users to compare it with other anti-aliasing and interpolation methods
 and share the results!
 
-Currently, the build is set up to produce binary for AVX2-capable
+Currently, single-ISA build are set up to produce binary for AVX2-capable
 CPUs - nowadays most 'better' CPUs support this SIMD ISA. When
 building for other (and non-i86) CPUs, suitable parameters should
 be passed to the compiler (you'll have to modify the CMakeLists.txt).
@@ -134,7 +134,23 @@ is to use std::simd, and even that can be turned off if you want to
 rely on autovectorization; zimt structures the processing so that it's
 autovectorization-friendly and performance is still quite good that way.
 
-The program is built with CMake.
+With version 0.1.2 I have changed the code to cooperate with highway's
+foreach_target mechanism, which is now the default (but requires highway).
+The resulting binary will contain specialized machine code for each ISA
+which is common on a given CPU line (e.g. SSE*, SSSE3, AVX and AVX2 on
+x86 CPUs) and dispatch internally to the best ISA which the current CPU
+can process. This gives the resulting binary a much wider 'feeding
+spectrum' - it should run on any x86 CPU with near-optimal ISA - for
+x86 highway produces machine code up to AVX512 - and never produce
+illegal instruction errors, because the CPU detection makes sure no
+'too good' ISA instructions will be executed. If you prefer single-ISA
+builds - e.g. if you're producing a binary only for a specific machine
+or if you're modifying the code (recompilation is much quicker with
+only a single ISA) - pass -DMULTI_SIMD_ISA=OFF to cmake. multi-ISA
+builds require highway, but they can also be used with zimt's 'goading'
+back-end. Pass -DUSE_GOADING=ON to make the build ignore explicit SIMD
+libraries (highway, Vc or std::simd) which would otherwise be used in
+this order of preference.
 
 The only mandatory dependency is [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) - OIIO in short. envutil also
 links to some ffmpeg libraries, but these should come with an installation
