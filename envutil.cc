@@ -859,9 +859,15 @@ struct arguments
         std::cout << "input height: " << env_height << std::endl ;
         std::cout << "input has " << nchannels << " channels" << std::endl ;
         std::cout << "env_step: " << env_step << std::endl ;
-        std::cout << "interpolation: "
-                << ( itp == 1 ? "direct bilinear" : "uses OIIO" )
-                << std::endl ;
+        if ( itp == 1 )
+          std::cout << "using direct bilinear interpolation"
+          << std::endl ;
+        else if ( itp == -1 )
+          std::cout << "using OIIO for interpolation"
+          << std::endl ;
+        else 
+          std::cout << "using twining over bilinear interpolation"
+          << std::endl ;
         std::cout << "output width: " << width
                   << " height: " << height << std::endl ;
       }

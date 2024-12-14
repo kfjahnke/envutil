@@ -271,7 +271,7 @@ struct eval_env
      zimt::xel_t < float , nchannels > ,
      LANES >
 {
-  std::shared_ptr<OIIO::TextureSystem> ts ;
+  OIIO::TextureSystem * ts ;
   OIIO::TextureOptBatch batch_options ;
   OIIO::TextureSystem::TextureHandle * th ;
 
@@ -279,7 +279,7 @@ struct eval_env
 
   eval_env()
   {
-    ts.reset ( OIIO::TextureSystem::create() ) ;
+    ts = OIIO::TextureSystem::create() ;
     ts->attribute ( "options" , args.tsoptions ) ;
 
     for ( int i = 0 ; i < 16 ; i++ )
@@ -486,7 +486,7 @@ struct sixfold_t
   // 'texture' function.
 
   std::filesystem::path texture_file ;
-  std::shared_ptr<OIIO::TextureSystem> ts ;
+  OIIO::TextureSystem * ts ;
   OIIO::TextureSystem::TextureHandle * th ;
 
   // This array holds all the image data. I'll refer to this
@@ -727,7 +727,7 @@ struct sixfold_t
     // now we can create to the texture system and receive
     // a texture handle for the temporary file for fast access
 
-    ts.reset ( OIIO::TextureSystem::create() ) ;
+    ts = OIIO::TextureSystem::create() ;
 
     if ( ts_options != std::string() )
     {
@@ -1548,7 +1548,7 @@ struct source_t
   int height ;
   zimt::xel_t < int , 2 > strides ;
   const float * const p = nullptr ;
-  std::shared_ptr<OIIO::TextureSystem> ts ;
+  OIIO::TextureSystem * ts ;
   OIIO::TextureSystem::TextureHandle * th ;
   OIIO::TextureOptBatch batch_options ;
 
@@ -1605,7 +1605,7 @@ struct source_t
     assert ( interp_it != interpmode_map.end() ) ;
     batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
   
-    ts.reset ( OIIO::TextureSystem::create() ) ;
+    ts = OIIO::TextureSystem::create() ;
 
     if ( args.tsoptions != std::string() )
     {
