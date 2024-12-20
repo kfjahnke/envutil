@@ -110,9 +110,7 @@ namespace zimt
   // inherit from std::is_integral:
 
   template < typename T >
-  struct is_integral
-  : public std::is_integral < T >
-  { } ;
+  struct is_integral ;
 
   // forward declaration of xel_t
 
@@ -594,8 +592,7 @@ using std::max ;
 
 #define END_ZIMT_SIMD_NAMESPACE \
     } ; \
-  } ; \
-namespace zimt { using namespace zsimd ; } ;
+  } ;
 
 #endif
 

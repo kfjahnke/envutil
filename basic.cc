@@ -39,84 +39,9 @@
 // this header has basic enums and types which do not depend on zimt,
 // and some helper functions which don't use zimt.
 
-#ifndef ENVUTIL_BASIC_H
-#define ENVUTIL_BASIC_H
+#include "basic.h"
 
-#include <cmath>
-
-// enum encoding the sequence of cube face images in the cubemap
-// This is the sequence used for openEXR cubmap layout. The top
-// and bottom squares are oriented so as to align with the back
-// image. Of course, the labels are debatable: my understanding
-// of 'front' is 'aligned with the image center'. If one were to
-// associate 'front' with the wrap-around point of the full
-// spherical, the labels would be different.
-
-typedef enum
-{
-  CM_LEFT ,
-  CM_RIGHT ,
-  CM_TOP ,
-  CM_BOTTOM ,
-  CM_FRONT ,
-  CM_BACK
-} face_index_t ;
-
-// we use lux coordinate system convention. I call it 'latin book
-// order': if you have a stack of prints in front of you and read
-// them, your eyes move first left to right inside the line, then
-// top to bottom from line to line, then, moving to the next pages,
-// forward in the stack. Using this order also makes the first two
-// components agree with normal image indexing conventions, namely
-// x is to the right and y down. Note that I put the fastest-moving
-// index first, which is 'fortran' style, whereas C/C++ use the
-// opposite order for nD arrays.
-
-enum { RIGHT , DOWN , FORWARD } ;
-
-// openEXR uses different 3D axis semantics, and if we want to use
-// OIIO's environment lookup function, we need openEXR 3D coordinates.
-
-// Here's what the openEXR documentation sys about their axis
-// order (next to a drawing which says differently, see this issue:
-// https://github.com/AcademySoftwareFoundation/openexr/issues/1687)
-
-// quote:
-// We assume that a camera is located at the origin, O, of a 3D
-// camera coordinate system. The camera looks along the positive z
-// axis. The positive x and y axes correspond to the camera’s left
-// and up directions.
-// end quote
-
-// so we'd get this axis order, assuming they store x,y,z:
-
-enum { EXR_LEFT , EXR_UP , EXR_FORWARD } ;
-
-// the cubemap comes out right this way, so I assume that their text
-// is correct and the drawing is wrong.
-
-typedef enum
-{
-  SPHERICAL ,
-  CYLINDRICAL ,
-  RECTILINEAR ,
-  STEREOGRAPHIC ,
-  FISHEYE ,
-  CUBEMAP ,
-  PRJ_NONE
-}  projection_t ;
-
-const char * const projection_name[]
-{
-  "spherical" ,
-  "cylindrical" ,
-  "rectilinear" ,
-  "stereographic" ,
-  "fisheye" ,
-  "cubemap"
-} ;
-
-// assuming isotropic sampling (same sampling resolution in the horizontal
+/// assuming isotropic sampling (same sampling resolution in the horizontal
 // and vertical), calculate the vertical field of view from the horizontal
 // field of view, under the given projection.
 // Note that this function is for centered images only
@@ -125,7 +50,50 @@ const char * const projection_name[]
 double get_vfov ( projection_t projection ,
                   int width ,
                   int height ,
-                  double hfov ) ;
+                  double hfov )
+{
+  double vfov = 0.0 ;
+  switch ( projection )
+  {
+    case RECTILINEAR:
+    {
+      // as a one-liner, this is probably clearer than the code below
+      vfov = 2.0 * atan ( height * tan ( hfov / 2.0 ) / width ) ;
+      break ;
+    }
+    case CYLINDRICAL:
+    {
+      double pixels_per_rad = width / hfov ;
+      double h_rad = height / pixels_per_rad ;
+      vfov = 2.0 * atan ( h_rad / 2.0 ) ;
+      break ;
+    }
+    case STEREOGRAPHIC:
+    {
+      double w_rad = 2.0 * tan ( hfov / 4.0 ) ;
+      double pixels_per_rad = width / w_rad ;
+      double h_rad = height / pixels_per_rad ;
+      vfov = 4.0 * atan ( h_rad / 2.0 ) ;
+      break ;
+    }
+    case SPHERICAL:
+    case FISHEYE:
+    {
+      vfov = hfov * height / width ;
+      break ;
+    }
+    case CUBEMAP:
+    {
+      vfov = 2.0 * M_PI ;
+    }
+    default:
+    {
+      vfov = hfov ; // debatable...
+      break ;
+    }
+  }
+  return vfov ;
+}
 
 // the 'step' of an image is the angle - in radians - which
 // corresponds to the width of one pixel in the image center.
@@ -143,15 +111,36 @@ double get_vfov ( projection_t projection ,
 double get_step ( projection_t projection ,
                   int width ,
                   int height ,
-                  double hfov ) ;
-
-// extent_type is a handy struct to contain the horizontal and
-// vertical extent of a rectangular section of the plane.
-
-struct extent_type
+                  double hfov )
 {
-  double x0 , x1 , y0 , y1 ;
-} ;
+  double step = 0.0 ;
+  switch ( projection )
+  {
+    case RECTILINEAR:
+    case CUBEMAP:
+    {
+      step = atan ( 2.0 * tan ( hfov / 2.0 ) / width ) ;
+      break ;
+    }
+    case SPHERICAL:
+    case CYLINDRICAL:
+    case FISHEYE:
+    {
+      step = hfov / width ;
+      break ;
+    }
+    case STEREOGRAPHIC:
+    {
+      step = atan ( 4.0 * tan ( hfov / 4.0 ) / width ) ;
+      break ;
+    }
+    default:
+    {
+      break ;
+    }
+  }
+  return step ;
+}
 
 // extract internally uses the notion of an image's 'extent' in 'model
 // space'. The image is thought to be 'draped' to an 'archetypal 2D
@@ -167,6 +156,68 @@ struct extent_type
 extent_type get_extent ( projection_t projection ,
                          int width ,
                          int height ,
-                         double hfov ) ;
+                         double hfov )
+{
+  double x0 , x1 , y0 , y1 ;
 
-#endif // #ifndef ENVUTIL_BASIC_H
+  double alpha_x = - hfov / 2.0 ;
+  double beta_x = hfov / 2.0 ;
+  double beta_y = get_vfov ( projection , width , height , hfov ) / 2.0 ;
+  double alpha_y = - beta_y ;
+
+  switch ( projection )
+  {
+    case SPHERICAL:
+    case FISHEYE:
+    {
+      x0 = alpha_x ;
+      x1 = beta_x ;
+
+      y0 = alpha_y ;
+      y1 = beta_y ;
+      break ;
+    }
+    case CYLINDRICAL:
+    {
+      x0 = alpha_x ;
+      x1 = beta_x ;
+
+      y0 = tan ( alpha_y ) ;
+      y1 = tan ( beta_y ) ;
+      break ;
+    }
+    case RECTILINEAR:
+    {
+      x0 = tan ( alpha_x ) ;
+      x1 = tan ( beta_x ) ;
+
+      y0 = tan ( alpha_y ) ;
+      y1 = tan ( beta_y ) ;
+      break ;
+    }
+    case STEREOGRAPHIC:
+    {
+      x0 = 2.0 * tan ( alpha_x / 2.0 ) ;
+      x1 = 2.0 * tan ( beta_x / 2.0 ) ;
+
+      y0 = 2.0 * tan ( alpha_y / 2.0 ) ;
+      y1 = 2.0 * tan ( beta_y / 2.0 ) ;
+      break ;
+    }
+    case CUBEMAP:
+    {
+      x0 = tan ( alpha_x ) ;
+      x1 = tan ( beta_x ) ;
+
+      y0 = 6 * x0 ;
+      y1 = 6 * x1 ;
+      break ;
+    }
+    default:
+    {
+      x0 = x1 = y0 = y1 = 0.0 ;
+      break ;
+    }
+  }
+  return { x0 , x1 , y0 , y1 } ;
+}

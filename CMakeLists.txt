@@ -179,7 +179,7 @@ endif()
 set( required_libraries
       ${required_libraries} OpenImageIO OpenImageIO_Util )
 
-add_executable(${_project_name} envutil.cc)
+add_executable(${_project_name} envutil.cc basic.cc)
 
 target_link_libraries(${_project_name} pthread ${required_libraries} avutil avcodec swscale hwy)
 
@@ -269,3 +269,74 @@ set(CPACK_DEBIAN_PACKAGE_DEBUG ON)
 
 message(STATUS "CMAKE_INSTALL_PREFIX = ${CMAKE_INSTALL_PREFIX}")
 include(CPack)
+
+# TODO: figuring out the architecture is only tested for x64_86
+
+if (     ${CMAKE_SYSTEM_PROCESSOR} STREQUAL x86_64
+      OR ${CMAKE_SYSTEM_PROCESSOR} STREQUAL AMD64 )
+  set(x86_64 TRUE)
+  message(STATUS "***** setting i86 TRUE for an intel/AMD target")
+else()
+  set(x86_64 FALSE)
+  message(STATUS "***** setting i86 FALSE; not an intel/AMD target")
+
+  # tentative: I don't know what and ARM system would produce
+
+  if ( ${CMAKE_SYSTEM_PROCESSOR} STREQUAL ARM_64 )
+    message(STATUS "***** setting arm64 TRUE for an ARM target")
+    set ( arm64 TRUE )
+  else()
+    message(STATUS "***** setting arm64 FALSE, not an ARM target")
+    set ( arm64 FALSE )
+  endif()
+endif()
+
+# assuming we have detected the architecture, we list ISAs
+
+if ( x86_64 )
+  list ( APPEND isa_l SSE2 SSSE3 SSE4 AVX2 AVX3 AVX3_ZEN4 AVX3_SPR )
+elseif ( arm64 )
+  list ( APPEND isa_l HWY_NEON_WITHOUT_AES HWY_NEON HWY_NEON_BF16
+         HWY_ALL_SVE HWY_SVE HWY_SVE2 HWY_SVE_256 HWY_SVE2_128 )
+else()
+  # tentative. on my system, this doesn't work.
+  list ( APPEND isa_l HWY_EMU128 )
+endif()
+
+# for the test program composed of several ISA-specific TUs,
+# we have the main program disp_to_tu.cc, which does the
+# dispatching, and basic.cc, which has ISA-independent code
+
+add_executable(disp_to_tu disp_to_tu.cc basic.cc)
+
+# we need to link with libhwy
+
+target_link_libraries(disp_to_tu hwy)
+
+# the main program needs specific compile options:
+
+set_source_files_properties ( disp_to_tu.cc PROPERTIES COMPILE_FLAGS
+                "-DUSE_HWY -O3 -std=gnu++17 -DMULTI_SIMD_ISA -I.." )
+
+# for the ISA-specific object files holding 'payload' code,
+# we use cmake 'object libraries'. This places the ISA-specific
+# object files in separate directories, for which we use the
+# same name as the ISA. For this program, each of the object
+# libraries will only contain a single object file made from
+# inset.cc with ISA-specific compilation instructions. Since
+# we're already running a loop over the ISAs, we add a line
+# to tell cmake to link the object file in.
+
+foreach ( isa IN LISTS isa_l )
+
+    add_library ( ${isa} OBJECT inset.cc )
+
+    target_compile_options ( ${isa} PUBLIC -DTG_ISA=HWY_${isa}
+                 -DMULTI_SIMD_ISA -DUSE_HWY -O3 -std=gnu++17 )
+
+    target_link_libraries(disp_to_tu $<TARGET_OBJECTS:${isa}>)
+
+endforeach()
+
+
+

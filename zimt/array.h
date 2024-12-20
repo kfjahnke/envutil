@@ -78,15 +78,16 @@
     walking a thin line.
 */
 
+#ifndef ZIMT_ARRAY_H
+#define ZIMT_ARRAY_H
+
 #include "xel.h"
 #include <memory>
 #include <cstring>
 
-#ifndef ZIMT_ARRAY_H
-#define ZIMT_ARRAY_H
-
 namespace zimt
 {
+
 // coordinate iterators. For now, we don't implement 'proper'
 // c++ standard iterators, but just two stripped-down ones.
 // zimt views are suitable for random access iteration, but it
@@ -843,5 +844,5 @@ array_t < D + 1 , T > get_vector_buffer
 
 } ;
 
-#endif
+#endif // sentinel
 

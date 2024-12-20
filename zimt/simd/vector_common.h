@@ -286,7 +286,7 @@ friend void sincos ( const XEL & x , XEL & s , XEL & c )
 // need to elaborate
 
 #define INTEGRAL_ONLY \
-  static_assert ( zimt::is_integral < value_type > :: value , \
+  static_assert ( is_integral < value_type > :: value , \
                   "this operation is only allowed for integral types" ) ;
 
 #define BOOL_ONLY \

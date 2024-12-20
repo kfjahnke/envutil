@@ -1007,7 +1007,6 @@ namespace std
   } ;
 } ;
 
-
 namespace zimt
 {
   template < typename T , size_t N >
