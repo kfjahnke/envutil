@@ -43,6 +43,7 @@
 
 #include "metrics.h"
 #include "twining.h"
+#include "geometry.h"
 
 #if defined(ENVUTIL_ENVIRONMENT_H) == defined(HWY_TARGET_TOGGLE)
   #ifdef ENVUTIL_ENVIRONMENT_H

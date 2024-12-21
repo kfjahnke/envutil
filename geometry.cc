@@ -173,6 +173,12 @@ struct dispatch_base
 #include "geometry.h"
 #include "stepper.h"
 
+// to make highway's use of #pragma directives to the compiler
+// effective, we surround the SIMD-ISA-specific code with
+// HWY_BEFORE_NAMESPACE() and HWY_AFTER_NAMESPACE().
+
+HWY_BEFORE_NAMESPACE() ;
+
 // To conveniently rotate with a rotational quaternion, we employ
 // Imath's 'Quat' data type, packaged in a zimt::unary_functor.
 // This is not factored out because it requires inclusion of
@@ -185,12 +191,6 @@ struct dispatch_base
 #include <Imath/ImathLine.h>
 
 //--------------------------------------------------------------------
-
-// to make highway's use of #pragma directives to the compiler
-// effective, we surround the SIMD-ISA-specific code with
-// HWY_BEFORE_NAMESPACE() and HWY_AFTER_NAMESPACE().
-
-HWY_BEFORE_NAMESPACE() ;
 
 // this macro puts us into a nested namespace inside namespace 'project'.
 // For single-SIMD-ISA builds, this is conventionally project::zsimd,
@@ -281,18 +281,18 @@ struct rotate_3d
     // I work around this problem by coding the operation 'manually'.
     // Code using Imath's operator* would do this:
     //
-    // auto const & in_e
-    //   = reinterpret_cast < const Imath::Vec3 < U > & > ( in ) ;
-    // 
-    // auto & out_e
-    //   = reinterpret_cast < Imath::Vec3 < U > & > ( out ) ;
-    // 
-    // out_e = in_e * Imath::Quat < U > ( q ) ;
+    auto const & in_e
+      = reinterpret_cast < const Imath::Vec3 < U > & > ( in ) ;
+    
+    auto & out_e
+      = reinterpret_cast < Imath::Vec3 < U > & > ( out ) ;
+    
+    out_e = in_e * Imath::Quat < U > ( q ) ;
 
     // instead, we calculate 'manually' like this, using the mulq
     // member function above.
 
-    out = mulq ( in ) ;
+    // out = mulq ( in ) ;
   }
 
   // for convenience:

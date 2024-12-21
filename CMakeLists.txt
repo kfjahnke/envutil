@@ -338,5 +338,31 @@ foreach ( isa IN LISTS isa_l )
 
 endforeach()
 
+# we set up the same sort of build for 'envutil_hwy', a highway-only
+# multi-SIMD-ISA build of envutil using 'sharded' payload code.
+
+add_executable(envutil_hwy envutil_main.cc envutil_dispatch.cc envutil_basic.cc)
+
+# we need to link with libhwy
+
+target_link_libraries(envutil_hwy pthread ${required_libraries} avutil avcodec swscale hwy)
+
+# the main program needs specific compile options:
+
+set_source_files_properties ( envutil_main.cc envutil_dispatch.cc envutil_basic.cc PROPERTIES COMPILE_FLAGS
+                "-DUSE_HWY -O3 -std=gnu++17 -DMULTI_SIMD_ISA -I.." )
+
+foreach ( isa IN LISTS isa_l )
+
+    add_library ( eu_${isa} OBJECT envutil_payload.cc )
+
+    target_compile_options ( eu_${isa} PUBLIC -DTG_ISA=HWY_${isa}
+                 -DMULTI_SIMD_ISA -DUSE_HWY -O3 -std=gnu++17 )
+
+    target_link_libraries(envutil_hwy $<TARGET_OBJECTS:eu_${isa}>)
+
+endforeach()
+
+
 
 
