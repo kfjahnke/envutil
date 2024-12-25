@@ -483,10 +483,24 @@ when it's displayed.
 This is an integer value determining the interpolation method. There are
 currently three modes of interpolation:
 
-    1 - use simple bilinear interpolation directly on the source image
-        this is the fastest option, and unless there is a significant scale
+    1 - use b-spline interpolation directly on the source image. this
+        is the fastest option, and unless there is a significant scale
         change involved, the output should be 'good enough' for most still
-        image renditions. This is the default.
+        image renditions. This is the default, with a spline degree of 1,
+        a.k.a. bilinear interpolation. Other spline degrees can be chosen
+        by passing --degree D, where D is the degree of the spline. Per
+        default, splines with degree > 1 are 'prefiltered'. You may pass
+        --prefilter D to apply a prefilter for a different degree than the
+        one used for evaluation. This can be used e.g. to blur the output
+        (use a smaller value for the prefilter degree than for the spline
+        degree). Note that b-splines may 'overshoot', unless you omit
+        the prefilter. This depends on the signal - if it's sufficiently
+        band-limited (nothing above half Nyquist frequency), the spline
+        won't overshoot. Using a degree-2 b-spline without prefilter
+        (--degree 2 --prefilter 0) introduces only slight blur and won't
+        overshoot - it's often a good compromise and also avoids the
+        star-shaped artifacts typical of degree-1 b-splines when the
+        signal is magnified a lot.
 
     -1 - use OpenImageIO's 'environemnt' or 'texture' function for lookup.
          without additional arguments, this will use a sophisticated
@@ -500,21 +514,29 @@ currently three modes of interpolation:
          set up twining parameters calculated to fit well with the
          transformation at hand, and that's also done for image sequence
          output, where the parameters have to adapt to the changing geometry.
+         The 'twining' interpolator is 'grafted' onto the 'substrate'
+         interpolator - that is the b-spline from the source image, which
+         you parameterize just as for --itp 1. So if you pass --degree 3,
+         the 'substrate' of the twining operator will be a cubic b-spline,
+         rather than a degree-1 b-spline (a.k.a bilinear interpolation).
 
 Why use negative values for ITP for the second and third mode? This is similar
 to the values used in lux for 'decimators' - in lux, positive values are
 reserved for degrees of a b-spline reconstruction filter used as low-pass
 filter. bilinear interpolation is the same as a degree-1 b-spline, hence the
-value 1 for bilinear interpolation. I may add other spline degrees to envutil,
-so I reserve the positive numbers for future use.
+value 1 for bilinear interpolation. In envutil, I have decided against using
+positive 'itp' values from 'meaning' b-splines -here, you pass --itp 1 for
+all splines, and --degree and --prefilter additionally condition the spline.
 
 # Twining-specific options
 
 These options control the 'twining' filter. These options only have an effect if
-you activate twining with --itp -2. envutil will use bilinear interpolation on
-the source image for single-point lookups, but it will perform more lookups and
+you activate twining with --itp -2. envutil will use b-spline interpolation on
+the source image for single-point lookups, and it will perform more lookups and
 then combine several neighbouring pixels from the oversampled result into each
-target pixel.
+target pixel. See the documentation on 'itp' for more details about the
+parameterization of the b-spline - the default is to use a degree-1 b-spline
+(a.k.a bilinear interpolation).
 
 The operation of the twining filter differs conceptually from OIIO's pick-up
 with derivatives: OIIO's filter (as I understand it) looks at the difference

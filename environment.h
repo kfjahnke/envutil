@@ -2111,7 +2111,7 @@ public:
         inp->close() ;
         sf.mirror_around() ;
         sf.fill_support( ) ;
-        sf.prefilter ( args.spline_degree ) ;
+        sf.prefilter ( args.prefilter_degree ) ;
 
         env =   cbm_to_px_t < C > ( sf ) ;
       }

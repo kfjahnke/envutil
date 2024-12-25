@@ -349,6 +349,7 @@ struct arguments
   int fps ;
 
   int itp ;
+  int prefilter_degree ;
   int spline_degree ;
   int twine  ;
   std::string twf_file ;

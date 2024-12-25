@@ -255,8 +255,12 @@ void arguments::init ( int argc , const char ** argv )
     .help("interpolator: 1 for spline, -1 for OIIO, -2 spline+twining")
     .metavar("ITP");
 
+  ap.arg("--prefilter DEG")
+    .help("prefilter degree (>= 0) for the spline used with --ipt 1")
+    .metavar("DEG");
+
   ap.arg("--degree DEG")
-    .help("degree of the spline (0-45) used with --ipt 1")
+    .help("degree of the spline (>= 0) used with --ipt 1")
     .metavar("DEG");
 
   // parameters for twining (with --itp -2)
@@ -356,6 +360,7 @@ void arguments::init ( int argc , const char ** argv )
   mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
   fps = ap["fps"].get<int>(60);
   itp = ap["itp"].get<int>(1);
+  prefilter_degree = ap["prefilter"].get<int>(-1);
   spline_degree = ap["degree"].get<int>(1);
   twine = ap["twine"].get<int>(0);
   twine_width = ap["twine_width"].get<float>(1.0);
@@ -387,6 +392,10 @@ void arguments::init ( int argc , const char ** argv )
   pitch = ap["pitch"].get<float>(0.0);
   roll = ap["roll"].get<float>(0.0);
   prj_str = ap["projection"].as_string ( "rectilinear" ) ;
+
+  if ( prefilter_degree < 0 )
+    prefilter_degree = spline_degree ;
+
   int prj = 0 ;
   for ( const auto & p : projection_name )
   {
