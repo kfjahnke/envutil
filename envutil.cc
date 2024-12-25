@@ -229,6 +229,7 @@ using OIIO::ImageSpec ;
 // cumulated frame rendering time
 
 long rt_cumulated = 0 ;
+static zimt::asset_t current_env ;
 
 // struct image_series holds a format string for a series of numbered
 // images. It's a standard printf-type format string containing precisely
@@ -414,6 +415,8 @@ struct arguments
   int fps ;
 
   int itp ;
+  int prefilter_degree ;
+  int spline_degree ;
   int twine  ;
   std::string twf_file ;
   bool twine_normalize ;
@@ -567,6 +570,14 @@ struct arguments
       .help("interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining")
       .metavar("ITP");
 
+    ap.arg("--prefilter DEG")
+      .help("prefilter degree (>= 0) for the spline used with --ipt 1")
+      .metavar("DEG");
+
+    ap.arg("--degree DEG")
+      .help("degree of the spline (>= 0) used with --ipt 1")
+      .metavar("DEG");
+
     // parameters for twining (with --itp -2)
     ap.separator("  parameters for twining (with --itp -2):");
 
@@ -664,6 +675,8 @@ struct arguments
     mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
     fps = ap["fps"].get<int>(60);
     itp = ap["itp"].get<int>(1);
+    prefilter_degree = ap["prefilter"].get<int>(-1);
+    spline_degree = ap["degree"].get<int>(1);
     twine = ap["twine"].get<int>(0);
     twine_width = ap["twine_width"].get<float>(1.0);
     twine_density = ap["twine_density"].get<float>(1.0);
@@ -694,6 +707,10 @@ struct arguments
     pitch = ap["pitch"].get<float>(0.0);
     roll = ap["roll"].get<float>(0.0);
     prj_str = ap["projection"].as_string ( "rectilinear" ) ;
+
+    if ( prefilter_degree < 0 )
+      prefilter_degree = spline_degree ;
+
     int prj = 0 ;
     for ( const auto & p : projection_name )
     {
