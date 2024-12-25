@@ -451,9 +451,37 @@ Single images can be combined into a video with ffmpeg, like so:
 ffmpeg -f image2 -pattern_type glob -framerate 60 -i 'seq*.jpg' -s 960x540
        -c:v libx264 foo.mp4
 
-This may be preferable, because all ffmpeg options can be exploited that way,
+This may be preferable, because all ffmpeg's options can be exploited that way,
 and the code in envutil is derived from a very old example program which may
-not be at the height of time.
+not be at the height of time, and my understanding of ffmpeg is not very good.
+On my system, the native video player displays the video, but vlc and lux
+don't - obviously I am missing something, and help with ffmpeg would be welcome!
+This feature might be modified slightly to accept parameter sets from a stream.
+Here's an example of the first few lines of a sequfile for a plain pan with
+camera hfov of 90 degrees in 1-degree steps (second column):
+
+    90 0 0 0
+    90 1 0 0
+    90 2 0 0
+    90 3 0 0
+    90 4 0 0
+    90 5 0 0
+    90 6 0 0
+    90 7 0 0
+    90 8 0 0
+    90 9 0 0
+    90 10 0 0
+    90 11 0 0
+    90 12 0 0
+  
+Since every frame is represented by a single line, this format is quite verbose,
+requiring 60 lines per second for 60 fps video - you obviously don't want to
+hand-code such files, but rather generate them with software. It's a bit like
+slicer format for 3D printers, which you also don't write manually.
+The format might be beefed up (e.g. 'progressing' variables, switch of source
+image and other parameterization) - the current status quo is just to show
+that it can be done and to check that anti-aliasing works as expected - to see
+the effect of aliasing, still images aren't usually sufficient.
 
 ## --codec CODEC         video codec for video sequence output (default: libx265)
 
