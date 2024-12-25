@@ -176,6 +176,8 @@ struct dispatch_base
 //////////////// Put the #includes needed for your program here:
 
 #include <fstream>
+#include <regex>
+#include <chrono>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -210,7 +212,6 @@ using OIIO::ImageOutput ;
 using OIIO::TypeDesc ;
 using OIIO::ImageSpec ;
 
-#include <regex>
 #include <OpenImageIO/filesystem.h>
 #include <OpenImageIO/argparse.h>
 
@@ -224,6 +225,10 @@ using OIIO::ImageSpec ;
 
 #ifndef ENVUTIL_ONCE
 #define ENVUTIL_ONCE
+
+// cumulated frame rendering time
+
+long rt_cumulated = 0 ;
 
 // struct image_series holds a format string for a series of numbered
 // images. It's a standard printf-type format string containing precisely
@@ -1523,9 +1528,25 @@ void work ( get_t & get , act_t & act )
   // a multithreaded pipeline which fills the target image.
   
   zimt::bill_t bill ;
-  // bill.njobs = 1 ;
+
+  std::chrono::system_clock::time_point start
+    = std::chrono::system_clock::now() ;
+  
   zimt::process ( trg.shape , get , act , cstor , bill ) ;
   
+  std::chrono::system_clock::time_point end
+    = std::chrono::system_clock::now() ;
+
+  auto msec = std::chrono::duration_cast<std::chrono::milliseconds>
+                ( end - start ) . count() ;
+
+  if ( args.verbose )
+  {
+    std::cout << "frame rendering time: " << msec << " ms" << std::endl ;
+  }
+
+  rt_cumulated += msec ;
+
   // store the result to disk - either as a single frame added
   // to the video file, or as a single image stored individually.
 
@@ -1819,6 +1840,7 @@ int main ( int argc , const char ** argv )
   // If we're not running a sequence, there will only be one
   // iteration.
 
+  std::size_t frames = 0 ;
   do
   {
     // if we're running a sequence, we'll overwrite a few variables
@@ -1861,8 +1883,17 @@ int main ( int argc , const char ** argv )
     projection_t prj = args.projection ;
 
     dp->payload ( nch , ninp , prj ) ;
+    ++frames ;
   }
   while ( have_seq ) ; // loop criterion for 'do' loop
+
+  if ( args.verbose && have_seq )
+  {
+    double rt_avg = rt_cumulated ;
+    rt_avg /= frames ;
+    std::cout << "average frame rendering time: " << rt_avg
+              << " msec" << std::endl ;
+  }
 }
     
 #endif

@@ -94,6 +94,9 @@ HWY_AFTER_NAMESPACE() ;
 // of the function get_dispatch.
 
 #include "zimt/common.h"
+
+static zimt::asset_t current_env ;
+
 #include "zimt/zimt.h"
 #include "envutil_dispatch.h"
 
@@ -270,9 +273,25 @@ void work ( get_t & get , act_t & act )
   // a multithreaded pipeline which fills the target image.
   
   zimt::bill_t bill ;
-  // bill.njobs = 1 ;
+
+  std::chrono::system_clock::time_point start
+    = std::chrono::system_clock::now() ;
+  
   zimt::process ( trg.shape , get , act , cstor , bill ) ;
   
+  std::chrono::system_clock::time_point end
+    = std::chrono::system_clock::now() ;
+
+  auto msec = std::chrono::duration_cast<std::chrono::milliseconds>
+                ( end - start ) . count() ;
+
+  if ( args.verbose )
+  {
+    std::cout << "frame rendering time: " << msec << " ms" << std::endl ;
+  }
+
+  rt_cumulated += msec ;
+
   // store the result to disk - either as a single frame added
   // to the video file, or as a single image stored individually.
 
@@ -345,12 +364,22 @@ void roll_out ( int ninputs )
     // if we're creating an image sequence, it will be reused for
     // each individual image.
 
-    static environment < float , float , NCH , 16 > env ;
+    // static environment < float , float , NCH , 16 > env ;
+
+    typedef environment < float , float , NCH , 16 > env_t ;
+    env_t * p_env = (env_t*) current_env.has ( args.input ) ;
+
+    if ( ! p_env )
+    {
+      current_env.clear() ;
+      p_env = new env_t() ;
+      current_env.reset ( args.input , p_env ) ;
+    }
 
     // now we call the final 'work' template which uses the get_t
     // and act objects we've set up so far
 
-    work ( get_ray , env ) ;
+    work ( get_ray , *p_env ) ;
   }
   else // ninputs == 9
   {

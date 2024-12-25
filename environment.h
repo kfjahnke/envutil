@@ -41,6 +41,10 @@
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/texture.h>
 
+#include "zimt/prefilter.h"
+#include "zimt/bspline.h"
+#include "zimt/eval.h"
+
 #include "metrics.h"
 #include "twining.h"
 #include "geometry.h"
@@ -479,6 +483,7 @@ struct sixfold_t
 {
   // shorthand for pixels and SIMDized pixels
 
+  typedef zimt::xel_t < float , 2 > crd2_t ;
   typedef zimt::xel_t < float , nchannels > px_t ;
   typedef zimt::simdized_type < px_t , LANES > px_v ;
 
@@ -503,6 +508,10 @@ struct sixfold_t
   // image inside the 'store' array
 
   px_t * p_ul ;
+
+  typedef zimt::bspline < px_t , 2 > spl_t ;
+  std::shared_ptr < spl_t > p_bsp ;
+  zimt::grok_type < crd2_t , px_t , LANES > bsp_ev ;
 
   sixfold_t ( std::size_t _face_px ,
               double _face_fov = M_PI_2 ,
@@ -535,6 +544,12 @@ struct sixfold_t
 
     p_ul = store.data() ;
     p_ul += ( left_frame_px * store.strides ) . sum() ;
+    
+    auto * ps = new spl_t ( store , store , args.spline_degree ,
+                            { zimt::REFLECT , zimt::REFLECT } ,
+                            -1 , left_frame_px ) ;
+    p_bsp.reset ( ps ) ;
+    bsp_ev = zimt::make_evaluator < spl_t , float , LANES > ( *p_bsp ) ;
   }
 
   // function to read the cube face image data from disk (via
@@ -759,82 +774,17 @@ struct sixfold_t
   // filled in the support frame, we can use interpolators with
   // wider support.
 
+  // TODO: really, this member function could also be labeled
+  // 'const', because it does not modify anything. But the
+  // contained functor bsp_ev does not have a const eval.
+
   void cubemap_to_pixel ( const i_v & face ,
                           const crd2_v & in_face ,
-                          px_v & px ) const
+                          px_v & px )
   {
-    // get the pick-up coordinate, in pixel units
-
     crd2_v pickup ;
     get_pickup_coordinate_px ( face , in_face , pickup ) ;
-
-    // bilinear interpolation. Since we have incoming coordinates
-    // in the range of (-0.5, width-0,5) relative to the 'ninety
-    // degrees proper', this interpolator may 'look at' pixels
-    // outside the 'ninety degrees proper'. So we need sufficient
-    // support here: pickup coordinates with negative values will,
-    // for example, look at pixels just outside the 'ninety degree
-    // zone'. Note that we want correct support, rather than using
-    // the next-best thing (like mirroring on the edge), and we'll
-    // generate this support. Then we can be sure that the output
-    // is optimal and doesn't carry in any artifacts from the edges.
-    // So, to be quite clear: this bit of code does a bilinear
-    // interpolation without bounds checking, assuming that there
-    // is sufficient support for every expected pick-up coordinate.
-    // Fuzzing this with arbitrary coordinates would fail.
-
-    const auto * p = (float*) ( store.data() ) ;
-    px_v px2, help ;
-
-    // find the floor of the pickup coordinate by truncation
-
-    v2i_v low { pickup[0] , pickup[1] } ;
-
-    // how far is the pick-up coordinate from the floor value?
-
-    auto diff = pickup - crd2_v ( low ) ;
-
-    // gather data pertaining to the pixels at the 'low' coordinate
-
-    v2i_v idx { low[0] , low[1] } ;
-    auto ofs =   ( idx * v2i_v ( store.strides ) ) . sum()
-               * int ( nchannels ) ;
-
-    px.gather ( p , ofs ) ;
-
-    // and weight them according to distance from the 'low' value
-
-    auto one = f_v::One() ;
-
-    px *= ( one - diff[0] ) ;
-
-    // repeat the process for the low coordinate's neighbours
-
-    idx[0] += 1 ; ;
-    ofs =   ( idx * v2i_v ( store.strides ) ) . sum()
-          * int ( nchannels ) ;
-    help.gather ( p , ofs ) ;
-    px += help * diff[0] ;
-
-    // the first partial sum is also weighted, now according to
-    // vertical distance
-
-    px *= ( one - diff[1] ) ;
-
-    idx[0] -= 1 ; ;
-    idx[1] += 1 ; ;
-    ofs =   ( idx * v2i_v ( store.strides ) ) . sum()
-          * int ( nchannels ) ;
-    px2.gather ( p , ofs ) ;
-    px2 *= ( one - diff[0] ) ;
-
-    idx[0] += 1 ; ;
-    ofs =   ( idx * v2i_v ( store.strides ) ) . sum()
-          * int ( nchannels ) ;
-    help.gather ( p , ofs ) ;
-    px2 += help * diff[0] ;
-
-    px += px2 * diff[1] ;
+    bsp_ev.eval ( pickup , px ) ;
   }
 
   // this is the equivalent function to 'cubemap_to_pixel', above,
@@ -1051,22 +1001,27 @@ struct sixfold_t
   {
     const sixfold_t < nchannels > & sf ;
     const int face ;
-    const int degree ;
     const int ithird ;
 
     typedef zimt::xel_t < float , nchannels > px_t ;
     typedef zimt::simdized_type < px_t , LANES > px_v ;
 
+    // we use a degree-1 b-spline (bilinear interpolation) to
+    // fill the support frame
+    // TODO: when specializing with 1, invocation with
+    // --spline_degree 0 crashes.
+
+    zimt::evaluator < crd2_t , px_t , LANES , 0 > ev ;
+
     // note the factor of two in the initialization of 'ithird':
     // incoming coordinates are doubled (!) for the purpose at hand.
 
     fill_frame_t ( const sixfold_t < nchannels > & _cubemap ,
-                  const int & _face ,
-                  const int & _degree )
+                   const int & _face )
     : sf ( _cubemap ) ,
       face ( _face ) ,
-      degree ( _degree ) ,
-      ithird ( _cubemap.model_to_px * 2 )
+      ithird ( _cubemap.model_to_px * 2 ) ,
+      ev ( * _cubemap.p_bsp )
     { }
 
     void eval ( const v2i_v & crd2 , px_v & px ) const
@@ -1137,11 +1092,13 @@ struct sixfold_t
       i_v fv ;
       crd2_v in_face ;
       ray_to_cubeface < float , LANES > ( crd3 , fv , in_face ) ;
+      crd2_v pickup ;
+      sf.get_pickup_coordinate_px ( fv , in_face , pickup ) ;
 
       // finally we use this information to obtain pixel values,
       // which are written to the target location.
 
-      sf.cubemap_to_pixel ( fv , in_face , px ) ;
+      ev.eval ( pickup , px ) ;
     }
   } ;
 
@@ -1152,8 +1109,7 @@ struct sixfold_t
   // the entire surrounding frame, not just a pixel-wide line,
   // and we pick up data from neighbouring cube faces.
 
-  void fill_support ( int degree )
-
+  void fill_support()
   {
     if ( left_frame_px == 0 && right_frame_px == 0 )
       return ;
@@ -1164,7 +1120,7 @@ struct sixfold_t
     {
       // set up the 'gleaning' functor
 
-      fill_frame_t fill_frame ( *this , face , degree ) ;
+      fill_frame_t fill_frame ( *this , face ) ;
     
       // get a pointer to the upper left of the section of the IR
 
@@ -1245,6 +1201,38 @@ struct sixfold_t
       zimt::process ( shp , ls , fill_frame , st , bill ) ;
     }
   }
+
+    // if we're using b-spline interpolation for the cubemap,
+    // we need to prefilter the sections appropriately, TODO:
+    // may be better in a spearate function
+
+  void prefilter ( int spline_degree )
+  {
+    auto * p_base = store.data() ;
+
+    if ( spline_degree > 1 )
+    {
+      for ( int face = 0 ; face < 6 ; face++ )
+      {
+        // get a pointer to the upper left of the section of the IR
+
+        auto * p_frame = p_base + face * section_px * store.strides[1] ;
+        
+        // we form a view to the current section of the array in the
+        // sixfold_t object. The shape of this view is the 'notional
+        // shape' zimt::process will work with.
+
+        zimt::view_t < 2 , px_t >
+          section ( p_frame , store.strides ,
+                  { section_px , section_px } ) ;
+
+        zimt::prefilter ( section , section ,
+                          { zimt::NATURAL , zimt::NATURAL } ,
+                          spline_degree ) ;
+      }
+    }
+  }
+
 } ; // end of struct sixfold_t
 
 // functor to obtain pixel values for ray coordinates from a cubemap
@@ -1506,7 +1494,7 @@ public:
       sf.load ( inp ) ;
     inp->close() ;
     sf.mirror_around() ;
-    sf.fill_support ( 1 ) ;
+    sf.fill_support() ;
     sf.gen_texture ( args.tsoptions ) ;
 
     env =   cbm_to_px_t2 < C > ( sf , batch_options ) ;
@@ -2122,7 +2110,8 @@ public:
           sf.load ( inp ) ;
         inp->close() ;
         sf.mirror_around() ;
-        sf.fill_support ( 1 ) ;
+        sf.fill_support( ) ;
+        sf.prefilter ( args.spline_degree ) ;
 
         env =   cbm_to_px_t < C > ( sf ) ;
       }
@@ -2187,7 +2176,17 @@ struct environment9
       // supposed to use the same environment, so it would be
       // wasteful to set up a new one - it's an expensive asset.
 
-      static environment < float , float , nchannels , 16 > env ;
+      // static environment < float , float , nchannels , 16 > env ;
+
+      typedef environment < float , float , nchannels , 16 > env_t ;
+      env_t * p_env = (env_t*) current_env.has ( args.input ) ;
+
+      if ( ! p_env )
+      {
+        current_env.clear() ;
+        p_env = new env_t() ;
+        current_env.reset ( args.input , p_env ) ;
+      }
 
       // set up the twining filter
 
@@ -2294,11 +2293,11 @@ struct environment9
 
       if ( args.twine_precise )
       {
-        act = twine_t < nchannels , 16 , true > ( env , spread ) ;
+        act = twine_t < nchannels , 16 , true > ( *p_env , spread ) ;
       }
       else
       {
-        act = twine_t < nchannels , 16 , false > ( env , spread ) ;
+        act = twine_t < nchannels , 16 , false > ( *p_env , spread ) ;
       }
     }
     else
@@ -2316,7 +2315,16 @@ struct environment9
 
       if ( args.mount_image != std::string() )
       {
-        static source_t < nchannels , 6 , 16 > src ;
+        typedef source_t < nchannels , 6 , 16 > env_t ;
+        env_t * p_env = (env_t*) current_env.has ( args.mount_image ) ;
+
+        if ( ! p_env )
+        {
+          current_env.clear() ;
+          p_env = new env_t() ;
+          current_env.reset ( args.mount_image , p_env ) ;
+        }
+        // static source_t < nchannels , 6 , 16 > src ;
         auto extent = get_extent ( args.mount_prj , args.mount_width ,
                                    args.mount_height , args.mount_hfov  ) ;
 
@@ -2327,31 +2335,36 @@ struct environment9
         {
           case RECTILINEAR:
           {
-            mount_t < nchannels , 9 , RECTILINEAR , 16 > mnt ( extent , src ) ;
+            mount_t < nchannels , 9 , RECTILINEAR , 16 >
+              mnt ( extent , *p_env ) ;
             act = mnt ;
             break ;
           }
           case SPHERICAL:
           {
-            mount_t < nchannels , 9 , SPHERICAL , 16 > mnt ( extent , src ) ;
+            mount_t < nchannels , 9 , SPHERICAL , 16 >
+              mnt ( extent , *p_env ) ;
             act = mnt ;
             break ;
           }
           case CYLINDRICAL:
           {
-            mount_t < nchannels , 9 , CYLINDRICAL , 16 > mnt ( extent , src ) ;
+            mount_t < nchannels , 9 , CYLINDRICAL , 16 >
+              mnt ( extent , *p_env ) ;
             act = mnt ;
             break ;
           }
           case STEREOGRAPHIC:
           {
-            mount_t < nchannels , 9 , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
+            mount_t < nchannels , 9 , STEREOGRAPHIC , 16 >
+              mnt ( extent , *p_env ) ;
             act = mnt ;
             break ;
           }
           case FISHEYE:
           {
-            mount_t < nchannels , 9 , FISHEYE , 16 > mnt ( extent , src ) ;
+            mount_t < nchannels , 9 , FISHEYE , 16 >
+              mnt ( extent , *p_env ) ;
             act = mnt ;
             break ;
           }
@@ -2369,8 +2382,17 @@ struct environment9
         // we set up a static object, but it's assigned to 'act' in
         // every invocation of 'work'.
 
-        static latlon < float , float , nchannels , 16 > ll ;
-        act = ll ;
+        // static latlon < float , float , nchannels , 16 > ll ;
+        typedef latlon < float , float , nchannels , 16 > env_t ;
+        env_t * p_env = (env_t*) current_env.has ( args.input ) ;
+
+        if ( ! p_env )
+        {
+          current_env.clear() ;
+          p_env = new env_t() ;
+          current_env.reset ( args.input , p_env ) ;
+        }
+        act = *p_env ;
       }
       else
       {
@@ -2378,8 +2400,17 @@ struct environment9
         // a texture representing the cubemap image, using OIIO's
         // 'texture' function
 
-        static cubemap < float , float , nchannels , 16 > cbm ;
-        act = cbm ;
+        // static cubemap < float , float , nchannels , 16 > cbm ;
+        typedef cubemap < float , float , nchannels , 16 > env_t ;
+        env_t * p_env = (env_t*) current_env.has ( args.input ) ;
+
+        if ( ! p_env )
+        {
+          current_env.clear() ;
+          p_env = new env_t() ;
+          current_env.reset ( args.input , p_env ) ;
+        }
+        act = *p_env ;
       }
     }
   }

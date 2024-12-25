@@ -191,7 +191,7 @@ target_link_libraries(${_project_name} pthread ${required_libraries} avutil avco
 
 if ( MULTI_SIMD_ISA )
   set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
-        "-O3 -Wno-enum-compare -DMULTI_SIMD_ISA -I.. ${SIMD_LIBRARY}")
+        "-O3 -Wno-enum-compare -g -DMULTI_SIMD_ISA -I.. ${SIMD_LIBRARY}")
 else()
 set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
       "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_LIBRARY}")
@@ -316,7 +316,7 @@ target_link_libraries(disp_to_tu hwy)
 # the main program needs specific compile options:
 
 set_source_files_properties ( disp_to_tu.cc PROPERTIES COMPILE_FLAGS
-                "-DUSE_HWY -O3 -std=gnu++17 -DMULTI_SIMD_ISA -I.." )
+                "-DUSE_HWY -O3 -std=gnu++17 -g -DMULTI_SIMD_ISA -I.." )
 
 # for the ISA-specific object files holding 'payload' code,
 # we use cmake 'object libraries'. This places the ISA-specific
@@ -357,7 +357,7 @@ foreach ( isa IN LISTS isa_l )
     add_library ( eu_${isa} OBJECT envutil_payload.cc )
 
     target_compile_options ( eu_${isa} PUBLIC -DTG_ISA=HWY_${isa}
-                 -DMULTI_SIMD_ISA -DUSE_HWY -O3 -std=gnu++17 )
+               -g -DMULTI_SIMD_ISA -DUSE_HWY -O3 -std=gnu++17 )
 
     target_link_libraries(envutil_hwy $<TARGET_OBJECTS:eu_${isa}>)
 

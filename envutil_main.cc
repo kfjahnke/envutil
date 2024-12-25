@@ -252,8 +252,12 @@ void arguments::init ( int argc , const char ** argv )
   ap.separator("  interpolation options:");
 
   ap.arg("--itp ITP")
-    .help("interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining")
+    .help("interpolator: 1 for spline, -1 for OIIO, -2 spline+twining")
     .metavar("ITP");
+
+  ap.arg("--degree DEG")
+    .help("degree of the spline (0-45) used with --ipt 1")
+    .metavar("DEG");
 
   // parameters for twining (with --itp -2)
   ap.separator("  parameters for twining (with --itp -2):");
@@ -352,6 +356,7 @@ void arguments::init ( int argc , const char ** argv )
   mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
   fps = ap["fps"].get<int>(60);
   itp = ap["itp"].get<int>(1);
+  spline_degree = ap["degree"].get<int>(1);
   twine = ap["twine"].get<int>(0);
   twine_width = ap["twine_width"].get<float>(1.0);
   twine_density = ap["twine_density"].get<float>(1.0);
@@ -643,6 +648,10 @@ void arguments::init ( int argc , const char ** argv )
 
 arguments args ;
 
+// cumulated frame rendering time
+
+long rt_cumulated = 0 ;
+
 int main ( int argc , const char ** argv )
 {
   // process command line arguments - the result is held in a bunch
@@ -669,6 +678,7 @@ int main ( int argc , const char ** argv )
   // If we're not running a sequence, there will only be one
   // iteration.
 
+  std::size_t frames = 0 ;
   do
   {
     // if we're running a sequence, we'll overwrite a few variables
@@ -714,6 +724,15 @@ int main ( int argc , const char ** argv )
     // pointer received from get_dispatch.
 
     dp->payload ( nch , ninp , prj ) ;
+    ++frames ;
   }
   while ( have_seq ) ; // loop criterion for 'do' loop
+
+  if ( args.verbose && have_seq )
+  {
+    double rt_avg = rt_cumulated ;
+    rt_avg /= frames ;
+    std::cout << "average frame rendering time: " << rt_avg
+              << " msec" << std::endl ;
+  }
 }

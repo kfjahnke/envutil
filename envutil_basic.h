@@ -116,6 +116,8 @@ const char * const projection_name[]
   "cubemap"
 } ;
 
+extern long rt_cumulated ;
+
 // assuming isotropic sampling (same sampling resolution in the horizontal
 // and vertical), calculate the vertical field of view from the horizontal
 // field of view, under the given projection.
@@ -347,6 +349,7 @@ struct arguments
   int fps ;
 
   int itp ;
+  int spline_degree ;
   int twine  ;
   std::string twf_file ;
   bool twine_normalize ;
