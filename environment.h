@@ -41,6 +41,9 @@
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/texture.h>
 
+// some versions of OIIO yield a plain pointer, some a shared_ptr.
+typedef decltype ( OIIO::TextureSystem::create() ) ts_ptr_t ;
+
 #include "zimt/prefilter.h"
 #include "zimt/bspline.h"
 #include "zimt/eval.h"
@@ -276,7 +279,7 @@ struct eval_env
      zimt::xel_t < float , nchannels > ,
      LANES >
 {
-  OIIO::TextureSystem * ts ;
+  ts_ptr_t ts ;
   OIIO::TextureOptBatch batch_options ;
   OIIO::TextureSystem::TextureHandle * th ;
 
@@ -492,7 +495,7 @@ struct sixfold_t
   // 'texture' function.
 
   std::filesystem::path texture_file ;
-  OIIO::TextureSystem * ts ;
+  ts_ptr_t ts ;
   OIIO::TextureSystem::TextureHandle * th ;
 
   // This array holds all the image data. I'll refer to this
@@ -1537,7 +1540,7 @@ struct source_t
   int height ;
   zimt::xel_t < int , 2 > strides ;
   const float * const p = nullptr ;
-  OIIO::TextureSystem * ts ;
+  ts_ptr_t ts ;
   OIIO::TextureSystem::TextureHandle * th ;
   OIIO::TextureOptBatch batch_options ;
 
@@ -1664,23 +1667,26 @@ struct source_t
       // obtain the four constituents by first truncating their
       // coordinate to int and then gathering from p.
 
+      zimt::xel_t < int , 2 > istrides ( strides ) ;
+      int inchannels ( nchannels ) ;
+
       index_v idsdxl { uli[0] , uli[1] } ;
-      auto ofs = ( idsdxl * strides ) . sum() * nchannels ;
+      auto ofs = ( idsdxl * istrides ) . sum() * inchannels ;
       px_v pxul ;
       pxul.gather ( p , ofs ) ;
 
       index_v idsdxr { uri[0] , uri[1] } ;
-      ofs = ( idsdxr * strides ) . sum() * nchannels ;
+      ofs = ( idsdxr * istrides ) . sum() * inchannels ;
       px_v pxur ;
       pxur.gather ( p , ofs ) ;
 
       index_v idxll { lli[0] , lli[1] } ;
-      ofs = ( idxll * strides ) . sum() * nchannels ;
+      ofs = ( idxll * istrides ) . sum() * inchannels ;
       px_v pxll ;
       pxll.gather ( p , ofs ) ;
 
       index_v idxlr { lri[0] , lri[1] } ;
-      ofs = ( idxlr * strides ) . sum() * nchannels ;
+      ofs = ( idxlr * istrides ) . sum() * inchannels ;
       px_v pxlr ;
       pxlr.gather ( p , ofs ) ;
 
