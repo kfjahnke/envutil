@@ -282,12 +282,19 @@ else()
 
   # tentative: I don't know what and ARM system would produce
 
-  if ( ${CMAKE_SYSTEM_PROCESSOR} STREQUAL ARM_64 )
+  if ( ${CMAKE_SYSTEM_PROCESSOR} STREQUAL arm64 )
     message(STATUS "***** setting arm64 TRUE for an ARM target")
     set ( arm64 TRUE )
   else()
     message(STATUS "***** setting arm64 FALSE, not an ARM target")
     set ( arm64 FALSE )
+    if ( ${CMAKE_SYSTEM_PROCESSOR} STREQUAL aarch64 )
+      message(STATUS "***** setting aarch64 TRUE for an SVE target")
+      set ( aarch64 TRUE )
+    else()
+      message(STATUS "***** setting aarch64 FALSE, not an SVE target")
+      set ( aarch64 FALSE )
+    endif()
   endif()
 endif()
 
@@ -295,12 +302,16 @@ endif()
 
 if ( x86_64 )
   list ( APPEND isa_l SSE2 SSSE3 SSE4 AVX2 AVX3 AVX3_ZEN4 AVX3_SPR )
+# the NEON_BF16 ISA seems not to be built by default. We've used this
+# code to build envutil on a macBook pro with M1 processor:
 elseif ( arm64 )
-  list ( APPEND isa_l HWY_NEON_WITHOUT_AES HWY_NEON HWY_NEON_BF16
-         HWY_ALL_SVE HWY_SVE HWY_SVE2 HWY_SVE_256 HWY_SVE2_128 )
+  list ( APPEND isa_l NEON_WITHOUT_AES NEON ) # NEON_BF16
+# tentative, we have no SVE systems
+elseif ( aarch64 )
+  list ( APPEND isa_l ALL_SVE SVE SVE2 SVE_256 SVE2_128 )
 else()
   # tentative. on my system, this doesn't work.
-  list ( APPEND isa_l HWY_EMU128 )
+  list ( APPEND isa_l EMU128 )
 endif()
 
 # for the test program composed of several ISA-specific TUs,
