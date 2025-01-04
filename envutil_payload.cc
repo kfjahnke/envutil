@@ -57,8 +57,8 @@
 
 #undef HWY_TARGET
 #define HWY_TARGET TG_ISA
-#undef HWY_NAMESPACE
-#define HWY_NAMESPACE NS_ISA
+// #undef HWY_NAMESPACE
+// #define HWY_NAMESPACE NS_ISA
 
 // now we #include highway.h - as we would do after foreach_target.h
 // in a multi-ISA build. With foreach_target.h, the code is re-included

@@ -681,8 +681,6 @@ using std::max ;
 // namespace - N_AVX2 etc. - and for other builds it refers to all
 // of plain zimt and the only nested namespace, namely zsimd.
 
-#ifdef MULTI_SIMD_ISA
-
 #define BEGIN_ZIMT_SIMD_NAMESPACE(OUTER_NAMESPACE) \
   namespace OUTER_NAMESPACE { \
     namespace ZIMT_SIMD_ISA { \
@@ -692,20 +690,6 @@ using std::max ;
 #define END_ZIMT_SIMD_NAMESPACE \
     } ; \
   } ;
-
-#else
-  
-#define BEGIN_ZIMT_SIMD_NAMESPACE(OUTER_NAMESPACE) \
-  namespace OUTER_NAMESPACE { \
-    namespace ZIMT_SIMD_ISA { \
-      using namespace zimt ;
-
-#define END_ZIMT_SIMD_NAMESPACE \
-    } ; \
-  } ;
-
-#endif
-
 
 // just a shorthand.
 

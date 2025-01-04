@@ -948,19 +948,19 @@ public:
     // note how, just as in brace(), the whole frame is filled, which may be more
     // than is strictly needed by the evaluator.
     
-    ZIMT_ENV::prefilter < dimension ,
-                         value_type ,
-                         value_type ,
-                         math_ele_type ,
-                         vsize >
-                        ( core ,
-                          core ,
-                          bcv ,
-                          spline_degree ,
-                          tolerance ,
-                          boost ,
-                          njobs
-                        ) ;
+    zimt::prefilter < dimension ,
+                      value_type ,
+                      value_type ,
+                      math_ele_type ,
+                      vsize >
+                    ( core ,
+                      core ,
+                      bcv ,
+                      spline_degree ,
+                      tolerance ,
+                      boost ,
+                      njobs
+                    ) ;
 
     brace() ;
     prefiltered = true ;
@@ -1002,19 +1002,19 @@ public:
     // note how, just as in brace(), the whole frame is filled, which may be more
     // than is strictly needed by the evaluator.
     
-    ZIMT_ENV::prefilter < dimension ,
-                          T ,
-                          value_type ,
-                          math_ele_type ,
-                          vsize >
-                        ( data ,
-                          core ,
-                          bcv ,
-                          spline_degree ,
-                          tolerance ,
-                          boost ,
-                          njobs
-                        ) ;
+    zimt::prefilter < dimension ,
+                      T ,
+                      value_type ,
+                      math_ele_type ,
+                      vsize >
+                    ( data ,
+                      core ,
+                      bcv ,
+                      spline_degree ,
+                      tolerance ,
+                      boost ,
+                      njobs
+                    ) ;
 
     brace() ;
     prefiltered = true ;
