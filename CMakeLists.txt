@@ -62,7 +62,7 @@ message(STATUS "VERSION = ${envutil_major}.${envutil_minor}.${envutil_patch}")
 # Project name 'envutil'
 
 set(project_name envutil)
-project (${project_name})
+project (envutil)
 
 # specify some directories for installation of components. Note that
 # some builds fail if CMAKE_INSTALL_PREFIX points to folders with
@@ -140,45 +140,86 @@ if ( Imath_FOUND )
   message ( STATUS "find_package: Imath = true" )
 endif()
 
-# highway has added code to find it with cmake config mode with
-# the release of 1.0.4. If we can't find highway, we try Vc, and
-# if that doesn't work we use std::simd.
-
 option(MULTI_SIMD_ISA "AUTOMATIC SIMD ISA DISPATCH (REQUIRES HIGHWAY)" ON)
-option(USE_GOADING "USE SIMD EMULATION WITH SMALL LOOPS" OFF)
 
-# for a multi-SIMD-ISA build, we require highway
+# if the user hasn't #defined 'BACKEND', we try for highway. if that's
+# available, we use it as back-end, and std::simd if it's not.
 
-if ( MULTI_SIMD_ISA )
-  find_package ( HWY CONFIG REQUIRED )
-  if ( HWY_FOUND )
-    message ( STATUS "find_package: HWY_FOUND = true" )
-    set ( required_libraries ${required_libraries} hwy )
-  endif()
-else()
-  # for single-ISA builds, look for SIMD libraries which zimt
-  # can use. prefer hwy over Vc and Vc over std::simd.
+if ( NOT DEFINED BACKEND )
+  message ( STATUS "BACKEND variable is not set, looking for highway" )
   find_package ( HWY CONFIG )
   if ( HWY_FOUND )
-    set ( SIMD_BACKEND "-D USE_HWY" )
-    message ( STATUS "find_package: HWY_FOUND = true" )
-    if ( MULTI_SIMD_ISA )
-      set ( required_libraries ${required_libraries} hwy )
-    endif()
+    SET ( BACKEND "highway" )
+    message ( STATUS "found highway, using highway back-end" )
   else()
-    find_package ( Vc )
-    if ( Vc_FOUND )
-      message ( STATUS "find_package: Vc_FOUND = true" )
-      set ( required_libraries ${required_libraries} Vc )
-      set ( SIMD_BACKEND "-D USE_VC" )
-    else()
-      if ( NOT APPLE )
-        # the std::simd build doesn't work on my mac
-        set ( SIMD_BACKEND "-D USE_STDSIMD" )
-      endif()
-    endif()
+    SET ( BACKEND "std::simd" )
+    message ( STATUS "highway not found, using std::simd back-end" )
   endif()
 endif()
+
+# now we set 'SIMD_BACKEND' according to the 'BACKEND' variable
+
+if ( "${BACKEND}" STREQUAL "highway" )
+  set ( SIMD_BACKEND "-DUSE_HWY" )
+elseif ( "${BACKEND}" STREQUAL "std::simd" )
+  set ( SIMD_BACKEND "-DUSE_STDSIMD" )
+elseif ( "${BACKEND}" STREQUAL "Vc" )
+  # if the user wants to use the Vc back-end, we must have libVc, and
+  # we add Vc to the required libraries to link with.
+  set ( SIMD_BACKEND "-DUSE_VC" )
+  find_package ( Vc REQUIRED )
+  if ( Vc_FOUND )
+    message ( STATUS "find_package: Vc_FOUND = true" )
+    set ( required_libraries ${required_libraries} Vc )
+  endif()
+else()
+  # -DUSE_GOADING doesn't actually have an effect, but it's clearer
+  # than simply clearing 'SIMD_BACKEND'
+  set ( SIMD_BACKEND "-DUSE_GOADING" )
+endif()
+
+if ( MULTI_SIMD_ISA )
+
+  message ( STATUS "multi-SIMD-ISA build, backend: ${BACKEND}" )
+
+  # for multi-ISA builds, we positively need highway. If it wasn't
+  # already found (e.g. because the user specified to use the highway
+  # back-end) we now do the find_package with REQUIRED flag.
+
+  if ( NOT HWY_FOUND )
+    find_package ( HWY CONFIG REQUIRED )
+    if ( HWY_FOUND )
+      message ( STATUS "find_package: HWY_FOUND = true" )
+    endif()
+    set ( required_libraries ${required_libraries} hwy )
+  endif()
+
+endif()
+
+# else()
+# 
+#   message ( STATUS "single-SIMD-ISA build, backend: ${BACKEND}" )
+# 
+#   # if ( "${BACKEND}" STREQUAL "highway" )
+#   #   set ( SIMD_BACKEND "-DUSE_HWY" )
+#   # elseif ( "${BACKEND}" STREQUAL "std::simd" )
+#   #   set ( SIMD_BACKEND "-DUSE_STDISMD" )
+#   # elseif ( "${BACKEND}" STREQUAL "Vc" )
+#   #   set ( SIMD_BACKEND "-DUSE_VC" )
+# 
+#     # find_package ( Vc REQUIRED )
+#     # if ( Vc_FOUND )
+#     #   message ( STATUS "find_package: Vc_FOUND = true" )
+#     #   set ( required_libraries ${required_libraries} Vc )
+#     # endif()
+# 
+#   # else()
+#   # 
+#   #   set ( SIMD_BACKEND "-DUSE_GOADING" )
+#   # 
+#   # endif()
+# 
+# endif()
 
 # For now, the only windows build is using msys2/mingw. We look at
 # a few CMake variables and set "WINDOWS" accordingly.
@@ -210,35 +251,43 @@ set( required_libraries
       ${required_libraries} OpenImageIO OpenImageIO_Util )
 
 if ( MULTI_SIMD_ISA )
-  set_source_files_properties ( envutil_main.cc envutil_dispatch.cc envutil_basic.cc
-                  PROPERTIES COMPILE_FLAGS
-                  "-DUSE_HWY -O3 -std=gnu++17 -DMULTI_SIMD_ISA -I.." )
 
-  add_executable(${project_name} envutil_main.cc envutil_dispatch.cc envutil_basic.cc)
+  set_source_files_properties (
+    envutil_main.cc envutil_dispatch.cc envutil_basic.cc
+    PROPERTIES COMPILE_FLAGS "-O3 -std=gnu++17 -DMULTI_SIMD_ISA -I.." )
+
+  add_executable ( envutil
+                   envutil_main.cc envutil_dispatch.cc envutil_basic.cc)
 
   foreach ( isa IN LISTS isa_l )
 
       add_library ( eu_${isa} OBJECT envutil_payload.cc )
 
-      target_compile_options ( eu_${isa} PUBLIC -DTG_ISA=HWY_${isa}
-                      -DMULTI_SIMD_ISA -DUSE_HWY -O3 -std=gnu++17 )
+      target_compile_options (
+        eu_${isa} PUBLIC -DTG_ISA=HWY_${isa} -DMULTI_SIMD_ISA
+        ${SIMD_BACKEND} -O3 -std=gnu++17 )
 
-      target_link_libraries(${project_name} $<TARGET_OBJECTS:eu_${isa}>)
+      target_link_libraries ( envutil $<TARGET_OBJECTS:eu_${isa}>)
 
   endforeach()
 
-  # set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
-  #       "-O3 -Wno-enum-compare -DMULTI_SIMD_ISA -I.. ${SIMD_BACKEND}")
 else()
-  set_source_files_properties ( envutil.cc PROPERTIES COMPILE_FLAGS
-      "-O3 -Wno-enum-compare -mavx2 -march=haswell -mpclmul -maes ${SIMD_BACKEND}")
 
-  add_executable(${project_name} envutil.cc basic.cc)
+  set_source_files_properties (
+    envutil_main.cc envutil_dispatch.cc envutil_basic.cc
+    PROPERTIES COMPILE_FLAGS "-O3 -std=gnu++17" )
+
+  set_source_files_properties ( envutil_payload.cc
+                  PROPERTIES COMPILE_FLAGS
+                  "-DTG_ISA=0 -O3 ${SIMD_BACKEND} -std=gnu++17 -mavx2 -march=haswell -mpclmul -maes" )
+
+  add_executable ( envutil
+                   envutil_main.cc envutil_basic.cc envutil_payload.cc)
 
 endif()
 
-target_link_libraries(${project_name} ${required_libraries} 
-                      pthread avutil avcodec swscale)
+target_link_libraries( envutil ${required_libraries} 
+                       pthread avutil avcodec swscale)
 
 # install the 'useful' binaries (stepper is only a demo)
 

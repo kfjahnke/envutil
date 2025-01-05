@@ -53,45 +53,36 @@ HWY_BEFORE_NAMESPACE() ;
 
 namespace project
 {
-namespace HWY_NAMESPACE
-{
-
-// we declare 'rollout', which has the entry into actual payload code
-// and resides in a different TU.
-
-extern int roll_out ( int nchannels ,
-                      int ninputs ,
-                      projection_t projection ) ;
-
-struct dispatch
-: public dispatch_base
-{
-  // We fit the derived dispatch class with a c'tor which fills in
-  // information about the nested SIMD ISA we're currently in.
-
-  dispatch()
+  namespace HWY_NAMESPACE
   {
-    hwy_isa = HWY_TARGET ;
-  }
+    // there isn't any payload code in this file - the implementations
+    // of the ISA-specific derived 'dispatch' classes is coded in
+    // envutil_payload.cc. We want to keep definitions of ISA-specific
+    // things in the payload TU, so that we can invoke this code
+    // for TUs which are made without highway: such TUs are best
+    // 'pulled into' the main program if they offer the same handles.
 
-  int payload ( int nchannels ,
-                int ninputs ,
-                projection_t projection ) const
-  {
-    // 'payload' in turn calls roll_out, which is in another TU
+    struct dispatch
+    : public dispatch_base
+    {
+      // We fit the derived dispatch class with a c'tor which fills in
+      // information about the nested SIMD ISA we're currently in.
 
-    roll_out ( nchannels , ninputs , projection ) ;
-    return 0 ;
-  }
-} ;
+      dispatch() ;
 
-const dispatch_base * const _get_dispatch()
-{
-  static dispatch d ;
-  return &d ;
-}
+      // This is the declaration of the single 'payload' function:
 
-} ;
+      int payload ( int nchannels ,
+                    int ninputs ,
+                    projection_t projection ) const ;
+    } ;
+
+    // _get_dispatch is also declared here, because we'll use HWY_EXPORT
+    // and HWY_DYNAMIC_DISPATCH in this file
+
+    const dispatch_base * const _get_dispatch() ;
+
+  } ;
 } ;
 
 HWY_AFTER_NAMESPACE() ;
@@ -100,26 +91,25 @@ HWY_AFTER_NAMESPACE() ;
 
 namespace project
 {
+  // we're using highway's foreach_target mechanism. To get access to the
+  // SIMD-ISA-specific variant of _get_dispatch (in project::HWY_NAMESPACE)
+  // we use the HWY_EXPORT macro:
 
-// we're using highway's foreach_target mechanism. To get access to the
-// SIMD-ISA-specific variant of _get_dispatch (in project::HWY_NAMESPACE)
-// we use the HWY_EXPORT macro:
+  HWY_EXPORT ( _get_dispatch ) ;
 
-HWY_EXPORT ( _get_dispatch ) ;
+  // now we can code get_dispatch: it simply uses HWY_DYNAMIC_DISPATCH
+  // to pick the SIMD-ISA-specific get_dispatch variant, which in turn
+  // yields the desired dispatch_base pointer.
+  // The main program calls 'get_dispatch' and receives a dispatch_base
+  // pointer, which can be used to route to ISA-specific code best suited
+  // for the CPU running the code:
+  // auto dp = get_dispatch() ;
+  // dp->payload ( ... ) ;
 
-// now we can code get_dispatch: it simply uses HWY_DYNAMIC_DISPATCH
-// to pick the SIMD-ISA-specific get_dispatch variant, which in turn
-// yields the desired dispatch_base pointer.
-// The main program calls 'get_dispatch' and receives a dispatch_base
-// pointer, which can be used to route to ISA-specific code best suited
-// for the CPU running the code:
-// auto dp = get_dispatch() ;
-// dp->payload ( ... ) ;
-
-const dispatch_base * const get_dispatch()
-{
-  return HWY_DYNAMIC_DISPATCH ( _get_dispatch ) () ;
-}
+  const dispatch_base * const get_dispatch()
+  {
+    return HWY_DYNAMIC_DISPATCH ( _get_dispatch ) () ;
+  }
 
 } ;
 

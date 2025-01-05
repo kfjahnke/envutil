@@ -36,9 +36,10 @@
 /*                                                                      */
 /************************************************************************/
 
-// this file has the dispatch to ISA-specific 'payload' code.
 
-#include <iostream>
+#include "zimt/common.h"
+
+#ifdef MULTI_SIMD_ISA
 
 // This header defines all the macros having to do with targets:
 
@@ -57,8 +58,6 @@
 
 #undef HWY_TARGET
 #define HWY_TARGET TG_ISA
-// #undef HWY_NAMESPACE
-// #define HWY_NAMESPACE NS_ISA
 
 // now we #include highway.h - as we would do after foreach_target.h
 // in a multi-ISA build. With foreach_target.h, the code is re-included
@@ -66,6 +65,12 @@
 // specific ISA and there won't be any re-includes.
 
 #include <hwy/highway.h>
+
+#else // MULTI_SIMD_ISA
+
+#define HWY_TARGET TG_ISA
+
+#endif // MULTI_SIMD_ISA
 
 HWY_BEFORE_NAMESPACE() ;
 
@@ -90,12 +95,13 @@ HWY_BEFORE_NAMESPACE() ;
 
 HWY_AFTER_NAMESPACE() ;
 
-// envutil_dispatch.h has the definition of class dispatch_base and
-// of the function get_dispatch.
-
-#include "zimt/common.h"
+// this asset_t object is a handle to the current 'enviromnet'
+// providing image data
 
 static zimt::asset_t current_env ;
+
+// envutil_dispatch.h has the definition of class dispatch_base and
+// of the function get_dispatch.
 
 #include "zimt/zimt.h"
 #include "envutil_dispatch.h"
@@ -114,22 +120,6 @@ static zimt::asset_t current_env ;
 HWY_BEFORE_NAMESPACE() ;
 
 BEGIN_ZIMT_SIMD_NAMESPACE(project)
-
-// // we define 'rollout', which has the entry into actual payload code
-// 
-// int rollout ( int nchannels ,
-//               int ninputs ,
-//               projection_t projection )
-// {
-//   // just a stub for now
-// 
-//   std::cout << "call to rollout, target = "
-//             << hwy::TargetName ( HWY_TARGET )
-//             << std::endl ;
-// 
-//   return 0 ;
-// }
-
 
 // rotate_3d uses a SIMDized Imath Quaternion to affect a 3D rotation
 // of a 3D SIMDized coordinate. Imath::Quat<float> can't broadcast
@@ -432,28 +422,54 @@ void roll_out ( int ninputs ,
   }
 }
 
-// roll_out by the number of colour channels. We process one to four,
-// where the usefulness of two channels isn't clear.
+// here we have the implementation of the derived class 'dispatch',
+// and of _get_dispatch. 
 
-void roll_out ( int nchannels ,
-                int ninputs ,
-                projection_t projection )
+struct dispatch
+: public dispatch_base
 {
-  switch ( nchannels )
+  // We fit the derived dispatch class with a c'tor which fills in
+  // information about the nested SIMD ISA we're currently in.
+
+  dispatch()
   {
-    case 1:
-      roll_out < 1 > ( ninputs , projection ) ;
-      break ;
-    case 2:
-      roll_out < 2 > ( ninputs , projection ) ;
-      break ;
-    case 3:
-      roll_out < 3 > ( ninputs , projection ) ;
-      break ;
-    case 4:
-      roll_out < 4 > ( ninputs , projection ) ;
-      break ;
+    hwy_target = HWY_TARGET ;
+    #ifdef HWY_TARGET_STR
+      hwy_target_name = hwy::TargetName ( HWY_TARGET ) ;
+      hwy_target_str = HWY_TARGET_STR ;
+    #else
+      hwy_target_name = "unknown" ;
+      hwy_target_str = "unknown" ;
+    #endif
   }
+
+  int payload ( int nchannels ,
+                int ninputs ,
+                projection_t projection ) const
+  {
+    switch ( nchannels )
+    {
+      case 1:
+        roll_out < 1 > ( ninputs , projection ) ;
+        break ;
+      case 2:
+        roll_out < 2 > ( ninputs , projection ) ;
+        break ;
+      case 3:
+        roll_out < 3 > ( ninputs , projection ) ;
+        break ;
+      case 4:
+        roll_out < 4 > ( ninputs , projection ) ;
+        break ;
+    }
+    return 0 ;
+  }
+} ;
+
+const dispatch_base * const _get_dispatch()
+{
+  static dispatch d ;
+  return &d ;
 }
 
 END_ZIMT_SIMD_NAMESPACE

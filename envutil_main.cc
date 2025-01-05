@@ -105,13 +105,35 @@
 // this repository. The macOS build fulfilled the dependencies with
 // macPorts, the Windows build used msys2/mingw64.
 
-// This is a version which relies exclusively on highway.
-
-// envutil_dispatch.h provides the dispatch_base pointer to the
-// ISA-specific rendering code via get_dispatch. It also #includes
-// basic.h, which declares code which isn't ISA-specific.
+// envutil_dispatch.cc provides the dispatch_base pointer to the
+// ISA-specific rendering code via get_dispatch, which obtains the
+// pointer via a call to HWY_DYNAMIC_DISPATCH. For single-ISA builds,
+// there is no dispatching, and the payload code resides in namespace
+// project::zsimd, following the zimt convention for the nested
+// namespace's name if MULTI_SIMD_ISA is not defined. But we still
+// have to define get_dispatch then - it simply delegates to
+// _get_dispatch in the nested namespace.
 
 #include "envutil_dispatch.h"
+
+#ifndef MULTI_SIMD_ISA
+
+// for single-ISA builds, we directly code get_dispatch here:
+
+namespace project
+{
+  namespace zsimd
+  {
+    const dispatch_base * const _get_dispatch() ;
+  } ;
+
+  const dispatch_base * const get_dispatch()
+  {
+    return zsimd::_get_dispatch() ;
+  }
+} ;
+
+#endif
 
 // a large part of the code in this file is dedicated to processing
 // command line arguments. We use OpenImageIO's ArgParse object, which
@@ -682,6 +704,10 @@ int main ( int argc , const char ** argv )
   // get_dispatch is in envutil_dispatch.cc
 
   auto dp = project::get_dispatch() ;
+  if ( args.verbose )
+  {
+    std::cout << "using " << dp->hwy_target_name << " ISA" << std::endl ;
+  }
 
   // This loop will iterate over the renditions of single images.
   // If we're not running a sequence, there will only be one

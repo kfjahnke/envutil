@@ -52,12 +52,13 @@ struct dispatch_base
   // 'hwy_isa' will hold highway's HWY_TARGET value for
   // the given nested namespace.
 
-  unsigned long hwy_isa = 0 ;
+  std::size_t hwy_target ;
+  std::string hwy_target_name ;
+  std::string hwy_target_str ;
 
   // next we have pure virtual member function definitions for
-  // payload code. In this example, we only have one payload
-  // function which calls what would be 'main' in a simple
-  // program without multiple SIMD ISAs or SIMD back-ends
+  // payload code. In this program, we only have one payload
+  // function.
 
   virtual int payload ( int nchannels ,
                         int ninputs ,
