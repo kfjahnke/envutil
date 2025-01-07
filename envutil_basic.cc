@@ -36,12 +36,12 @@
 /*                                                                      */
 /************************************************************************/
 
-// this header has basic enums and types which do not depend on zimt,
-// and some helper functions which don't use zimt.
+// this file has some helper functions which don't use zimt and which
+// aren't performance-critical. The code is largely from lux.
 
-#include "basic.h"
+#include "envutil_basic.h"
 
-/// assuming isotropic sampling (same sampling resolution in the horizontal
+// assuming isotropic sampling (same sampling resolution in the horizontal
 // and vertical), calculate the vertical field of view from the horizontal
 // field of view, under the given projection.
 // Note that this function is for centered images only

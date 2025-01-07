@@ -57,31 +57,14 @@ namespace project
   {
     // there isn't any payload code in this file - the implementations
     // of the ISA-specific derived 'dispatch' classes is coded in
-    // envutil_payload.cc. We want to keep definitions of ISA-specific
-    // things in the payload TU, so that we can invoke this code
-    // for TUs which are made without highway: such TUs are best
-    // 'pulled into' the main program if they offer the same handles.
+    // envutil_payload.cc. Since all we ever 'get to see' in the part
+    // of the code which obtains and uses dispatching are pointers to
+    // dispatch_base, we needn't declare the derived class 'dispatch'.
 
-    struct dispatch
-    : public dispatch_base
-    {
-      // We fit the derived dispatch class with a c'tor which fills in
-      // information about the nested SIMD ISA we're currently in.
-
-      dispatch() ;
-
-      // This is the declaration of the single 'payload' function:
-
-      int payload ( int nchannels ,
-                    int ninputs ,
-                    projection_t projection ) const ;
-    } ;
-
-    // _get_dispatch is also declared here, because we'll use HWY_EXPORT
+    // _get_dispatch is declared here, because we'll use HWY_EXPORT
     // and HWY_DYNAMIC_DISPATCH in this file
 
     const dispatch_base * const _get_dispatch() ;
-
   } ;
 } ;
 
@@ -98,7 +81,7 @@ namespace project
   HWY_EXPORT ( _get_dispatch ) ;
 
   // now we can code get_dispatch: it simply uses HWY_DYNAMIC_DISPATCH
-  // to pick the SIMD-ISA-specific get_dispatch variant, which in turn
+  // to pick the SIMD-ISA-specific _get_dispatch variant, which in turn
   // yields the desired dispatch_base pointer.
   // The main program calls 'get_dispatch' and receives a dispatch_base
   // pointer, which can be used to route to ISA-specific code best suited

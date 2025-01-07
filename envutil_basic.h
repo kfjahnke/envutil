@@ -802,5 +802,4 @@ void push_video_frame ( const zimt::view_t
   }
 }
 
-
 #endif // #ifndef ENVUTIL_BASIC_H

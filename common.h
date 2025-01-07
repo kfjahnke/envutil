@@ -39,7 +39,7 @@
 // this header has code common to the entire program, like common types.
 
 #include "zimt/zimt.h"
-#include "basic.h"
+#include "envutil_basic.h"
 
 #if defined(ENVUTIL_COMMON_H) == defined(HWY_TARGET_TOGGLE)
   #ifdef ENVUTIL_COMMON_H

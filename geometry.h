@@ -46,7 +46,7 @@
 // code for the transformations is largely from lux, except for the
 // cubemap code which is largely from the envutil project itself.
 
-#include "basic.h"
+#include "envutil_basic.h"
 #include "zimt/zimt.h"
 
 #if defined(ENVUTIL_GEOMETRY_H) == defined(HWY_TARGET_TOGGLE)
@@ -241,6 +241,26 @@ struct ray_to_ll_t
     auto s = sqrt ( right * right + forward * forward ) ;
     lat = atan2 ( down , s ) ;
     lon = atan2 ( right , forward ) ;
+  }
+} ;
+
+template < typename T = float , std::size_t L = LANES >
+struct ll_to_px_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 2 > , L >
+{
+  T scale ;
+  ll_to_px_t ( std::size_t _height )
+  : scale (  T ( _height ) / M_PI )
+  { }
+
+  template < typename in_type , typename out_type >
+  void eval ( const in_type & in ,
+              out_type & out ) const
+  {
+    const zimt::xel_t < T , 2 > shift { M_PI , M_PI_2 } ;
+    out = ( in + shift ) * scale ;
+    out -= .5f ;
   }
 } ;
 

@@ -272,6 +272,12 @@ interpmode_map
   { "InterpSmartBicubic" , OIIO::TextureOpt::InterpSmartBicubic }
 } ;
 
+template < typename T , typename U >
+void cast_assign ( T& trg , const U& src )
+{
+  trg = T ( src ) ;
+}
+
 template < std::size_t nchannels >
 struct eval_env
 : public zimt::unary_functor
@@ -290,31 +296,37 @@ struct eval_env
     ts = OIIO::TextureSystem::create() ;
     ts->attribute ( "options" , args.tsoptions ) ;
 
-    for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.swidth[i] = batch_options.twidth[i]
-        = args.stwidth ;
-    
-    for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.sblur[i] = batch_options.tblur[i]
-        = args.stblur ;
+    // transfer all OIIO-related options from the arguments. This might
+    // be factored out (the same code is also used for cubemap processing
+    // via an OIIO texture) - but one might consider using different
+    // options for the two processes, so for now I just copy and paste.
 
-    batch_options.conservative_filter = args.conservative_filter ;
+    for ( int i = 0 ; i < 16 ; i++ )
+    {
+      cast_assign ( batch_options.swidth[i] , args.stwidth ) ;
+      cast_assign ( batch_options.twidth[i] , args.stwidth ) ;
+      cast_assign ( batch_options.sblur[i] , args.stblur ) ;
+      cast_assign ( batch_options.tblur[i] , args.stblur ) ;
+    }
+
+    cast_assign ( batch_options.conservative_filter ,
+             args.conservative_filter ) ;
 
     auto wrap_it = wrap_map.find ( args.swrap ) ;
     assert ( wrap_it != wrap_map.end() ) ;
-    batch_options.swrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+    cast_assign ( batch_options.swrap , wrap_it->second ) ;
   
     wrap_it = wrap_map.find ( args.twrap ) ;
     assert ( wrap_it != wrap_map.end() ) ;
-    batch_options.twrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+    cast_assign ( batch_options.twrap , wrap_it->second ) ;
   
     auto mip_it = mipmode_map.find ( args.mip ) ;
     assert ( mip_it != mipmode_map.end() ) ;
-    batch_options.mipmode = OIIO::Tex::MipMode ( mip_it->second ) ;
+    cast_assign ( batch_options.mipmode , mip_it->second ) ;
   
     auto interp_it = interpmode_map.find ( args.interp ) ;
     assert ( interp_it != interpmode_map.end() ) ;
-    batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
+    cast_assign ( batch_options.interpmode , interp_it->second ) ;
   
     OIIO::ustring uenvironment ( args.input , 0 ) ;
     th = ts->get_texture_handle ( uenvironment ) ;
@@ -1457,31 +1469,37 @@ public:
 
     OIIO::TextureOptBatch batch_options ;
 
-    for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.swidth[i] = batch_options.twidth[i]
-        = args.stwidth ;
-    
-    for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.sblur[i] = batch_options.tblur[i]
-        = args.stblur ;
+    // transfer all OIIO-related options from the arguments. This might
+    // be factored out (the same code is also used for cubemap processing
+    // via an OIIO texture) - but one might consider using different
+    // options for the two processes, so for now I just copy and paste.
 
-    batch_options.conservative_filter = args.conservative_filter ;
+    for ( int i = 0 ; i < 16 ; i++ )
+    {
+      cast_assign ( batch_options.swidth[i] , args.stwidth ) ;
+      cast_assign ( batch_options.twidth[i] , args.stwidth ) ;
+      cast_assign ( batch_options.sblur[i] , args.stblur ) ;
+      cast_assign ( batch_options.tblur[i] , args.stblur ) ;
+    }
+
+    cast_assign ( batch_options.conservative_filter ,
+             args.conservative_filter ) ;
 
     auto wrap_it = wrap_map.find ( args.swrap ) ;
     assert ( wrap_it != wrap_map.end() ) ;
-    batch_options.swrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+    cast_assign ( batch_options.swrap , wrap_it->second ) ;
   
     wrap_it = wrap_map.find ( args.twrap ) ;
     assert ( wrap_it != wrap_map.end() ) ;
-    batch_options.twrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+    cast_assign ( batch_options.twrap , wrap_it->second ) ;
   
     auto mip_it = mipmode_map.find ( args.mip ) ;
     assert ( mip_it != mipmode_map.end() ) ;
-    batch_options.mipmode = OIIO::Tex::MipMode ( mip_it->second ) ;
+    cast_assign ( batch_options.mipmode , mip_it->second ) ;
   
     auto interp_it = interpmode_map.find ( args.interp ) ;
     assert ( interp_it != interpmode_map.end() ) ;
-    batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
+    cast_assign ( batch_options.interpmode , interp_it->second ) ;
   
     if ( verbose )
     {
@@ -1572,30 +1590,31 @@ struct source_t
     // options for the two processes, so for now I just copy and paste.
 
     for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.swidth[i] = batch_options.twidth[i]
-        = args.stwidth ;
-    
-    for ( int i = 0 ; i < 16 ; i++ )
-      batch_options.sblur[i] = batch_options.tblur[i]
-        = args.stblur ;
+    {
+      cast_assign ( batch_options.swidth[i] , args.stwidth ) ;
+      cast_assign ( batch_options.twidth[i] , args.stwidth ) ;
+      cast_assign ( batch_options.sblur[i] , args.stblur ) ;
+      cast_assign ( batch_options.tblur[i] , args.stblur ) ;
+    }
 
-    batch_options.conservative_filter = args.conservative_filter ;
+    cast_assign ( batch_options.conservative_filter ,
+             args.conservative_filter ) ;
 
     auto wrap_it = wrap_map.find ( args.swrap ) ;
     assert ( wrap_it != wrap_map.end() ) ;
-    batch_options.swrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+    cast_assign ( batch_options.swrap , wrap_it->second ) ;
   
     wrap_it = wrap_map.find ( args.twrap ) ;
     assert ( wrap_it != wrap_map.end() ) ;
-    batch_options.twrap = OIIO::Tex::Wrap ( wrap_it->second ) ;
+    cast_assign ( batch_options.twrap , wrap_it->second ) ;
   
     auto mip_it = mipmode_map.find ( args.mip ) ;
     assert ( mip_it != mipmode_map.end() ) ;
-    batch_options.mipmode = OIIO::Tex::MipMode ( mip_it->second ) ;
+    cast_assign ( batch_options.mipmode , mip_it->second ) ;
   
     auto interp_it = interpmode_map.find ( args.interp ) ;
     assert ( interp_it != interpmode_map.end() ) ;
-    batch_options.interpmode = OIIO::Tex::InterpMode ( interp_it->second ) ;
+    cast_assign ( batch_options.interpmode , interp_it->second ) ;
   
     ts = OIIO::TextureSystem::create() ;
 
@@ -1990,6 +2009,7 @@ public:
   using typename base_t::in_v ;
   using typename base_t::out_v ;
 
+  typedef zimt::xel_t < T , 2 > crd2_t ;
   typedef zimt::xel_t < T , 3 > ray_t ;
   typedef zimt::xel_t < U , C > px_t ;
   typedef zimt::xel_t < std::size_t , 2 > shape_type ;
@@ -2076,7 +2096,7 @@ public:
     else
     {
       // this code path is for 'true' environments which provide pixel
-      // data for the entire 360X180 degrees. For now, we accepts either
+      // data for the entire 360X180 degrees. For now, we accept either
       // a 2:1 full equirect or a 1:6 vertically stacked cubemap.
 
       auto & inp ( args.inp ) ;
@@ -2091,15 +2111,33 @@ public:
           std::cout << "environment has 2:1 aspect ratio, assuming latlon"
                     << std::endl ;
 
-        pa = std::make_shared < zimt::array_t < 2 , in_px_t > >
-          ( shape ) ;
-
-        bool success = inp->read_image ( 0 , 0 , 0 , C ,
-                                          TypeDesc::FLOAT , pa->data() ) ;
+        typedef zimt::bspline < in_px_t , 2 > spl_t ;
+        zimt::grok_type < crd2_t , in_px_t , LANES > bsp_ev ;
+        
+        // TODO: avoid static object
+        static spl_t bspl ( shape , args.spline_degree ,
+                            { zimt::PERIODIC , zimt::REFLECT } ) ;
+        bool success = inp->read_image (
+          0 , 0 , 0 , C , TypeDesc::FLOAT , bspl.core.data() ,
+          sizeof ( in_px_t ) , bspl.core.strides[1] * sizeof ( in_px_t ) ) ;
         assert ( success ) ;
+        bspl.spline_degree = args.prefilter_degree ;
+        // TODO: want custom spherical prefilter from lux here!
+        bspl.prefilter() ;
+        bspl.spline_degree = args.spline_degree ;
+        bsp_ev = zimt::make_evaluator < spl_t , float , LANES > ( bspl ) ;
 
-        env =   ray_to_ll_t()
-              + eval_latlon < C > ( *pa ) ;
+        env = ray_to_ll_t() + ll_to_px_t ( h ) + bsp_ev ;
+        
+        // pa = std::make_shared < zimt::array_t < 2 , in_px_t > >
+        //   ( shape ) ;
+        // 
+        // bool success = inp->read_image ( 0 , 0 , 0 , C ,
+        //                                   TypeDesc::FLOAT , pa->data() ) ;
+        // assert ( success ) ;
+        // 
+        // env =   ray_to_ll_t()
+        //       + eval_latlon < C > ( *pa ) ;
       }
       else if ( h == 6 * w )
       {
