@@ -281,6 +281,16 @@ struct view_t
     shape ( _shape )
     { }
 
+  // allow reverse order args for vspline compatibility
+
+  view_t ( const shape_type & _shape ,
+           const index_type & _strides ,
+           value_type * const _origin )
+  : origin ( _origin ) ,
+    strides ( _strides ) ,
+    shape ( _shape )
+    { }
+
   view_t ( value_type * const _origin ,
            const shape_type & _shape )
   : origin ( _origin ) ,

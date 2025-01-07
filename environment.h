@@ -1988,6 +1988,211 @@ struct mount_t
   }
 } ;
 
+
+/// for full spherical images, we have to perform the prefiltering and
+/// bracing of the b-splines 'manually', because these images don't fit
+/// any of vspline's standard modes. The problem is that while the images
+/// are horizontally periodic, the vertical periodicity is not manifest:
+/// the vertical periodicity is along great circles passing through the
+/// poles, and of these great circles, one half is in the left half and
+/// one in the right half of the standard 2:1 spherical format.
+/// The prefiltering for the vertical can be done with vspline, but the
+/// image halves have to be put into separate views and 'stacked'.
+/// This is done first. Next comes the bracing, which also needs to be
+/// done manually, since the vertical continuation for one half is always
+/// in the other half, going in the opposite direction. This requires
+/// more index and view artistry. Coding for full sphericals has become
+/// possible only with the introduction of stacked array prefiltering.
+/// While the coding presents a certain degree of effort, the reward is
+/// mathematically sound treatment of full spherical data, which had been
+/// processed with REFLECT BCs after the demise of BC mode
+/// zimt::SPHERICAL. So now the specialized code is where it should
+/// reside: here in pv_rendering_common.cc, rather than in vspline,
+/// where it was misplaced, because it's so specific. And with the new
+/// code, we can handle even the smallest possible spherical pamorama,
+/// consisting of only two pixels, correctly :D
+
+// TODO: while readymade full sphericals do indeed normally have 2:1
+// aspect ratio, the width can be halved and the code functions as
+// intended. But odd width can occur, and because it's not meaningless,
+// but simply unusual, it should be handled correctly, and it isn't.
+// With odd width, we can't split the image into a left and a right
+// half-image to stack them on top of each other. It would be necessary
+// to generate a stripe on top and a stripe on the bottom which are
+// interpolated to yield values just *between* the normal grid columns,
+// which would approximate the continuation 'beyond the poles'. This
+// could be prefiltered as a stack. To use the fully correct calculation
+// which needs periodicity, one would use only one additional stripe
+// with full height.
+
+template < typename dtype >
+void spherical_prefilter
+  ( zimt::bspline < dtype , 2 > & bspl ,
+    zimt::view_t < 2 , dtype > & input ,
+    int njobs )
+{
+  auto output = bspl.core ;
+  typedef zimt::view_t < 2 , dtype > view_type ;
+
+  // the type of filter we want to use is a b-spline prefilter operating
+  // in single-precision float, using Vc::SimdArrays with default vector
+  // width for aggregation. Note how this code will use vspline's SIMD
+  // emulation code if Vc is not used: this code is *not* part of the pixel
+  // pipeline, which has to be reduced to VSIZE 1 if Vc is not present.
+
+  typedef zimt::recursive_filter
+          < zimt::simdized_type , float >
+    stripe_handler_type ;
+
+  // we set up the specifications for the filter. it is periodic in all
+  // cases (the stacked half-images together are periodic vertically)
+
+  int degree = bspl.spline_degree ; // spline degree
+  int npoles = degree / 2 ;         // number of filter poles
+
+  zimt::iir_filter_specs specs
+    ( zimt::PERIODIC ,
+      degree / 2 ,
+      zimt_constants::precomputed_poles [ degree ] ,
+      0.0001 ) ;
+
+  // we call separable_filter's overload taking MultiArrayViews and an axis
+  // to do the horizontal prefiltering step on the unmodified data
+
+  if ( degree > 1 || input.data() != output.data() )
+    zimt::detail::separable_filter
+      < view_type , view_type , stripe_handler_type >()
+        ( input , output , 0 , specs ) ;
+
+  // now we stack the left half and the verticall flipped right half
+  // to obtain a stack which is periodic vertically
+
+  std::vector < view_type > vertical_view ;
+
+  // note that for scaled-down spline there is a possibility that the
+  // horizontal extent is not even, as it is for the original image.
+  // we silently ignore this for now - it may result in a pixel fault.
+  // KFJ 2022-01-20 this became an issue. Here's a quick fix for odd
+  // width, assuming shape[0], the width, is 'large'. The correct way
+  // would be to interpolate at N/2 distance.
+
+  auto shape = output.shape ;
+  if ( shape[0] & 1 )
+  {
+    if ( shape[0] > 1 )
+    {
+      std::cerr << "warning: input is a full spherical with odd width "
+                << shape[0] << std::endl ;
+      std::cerr
+        << "you may notice slight errors near poles and image boundaries"
+        << std::endl ;
+    }
+    shape [ 0 ] = shape [ 0 ] / 2 + 1 ;
+  }
+  else
+  {
+    shape [ 0 ] /= 2 ;
+  }
+
+  auto strides = output.strides ;
+  strides [ 1 ] = - strides [ 1 ] ;
+
+  view_type upper ( shape , output.strides , output.data() ) ;
+
+  view_type lower ( shape , strides ,
+                    output.data()
+                    + ( shape[1] - 1 ) * output.strides[1]
+                    + shape[0] * output.strides[0] ) ;
+
+  vertical_view.push_back ( upper ) ;
+  vertical_view.push_back ( lower ) ;
+
+  // the stack is fed to the overload taking stacks and an axis,
+  // but we only need to actually apply the filter if degree is
+  // greater than one, otherwise bracing is all that's required.
+
+  if ( degree > 1 )
+  {
+    zimt::detail::separable_filter
+      < view_type , view_type , stripe_handler_type >()
+      ( vertical_view , vertical_view , 1 , specs , njobs ) ;
+  }
+
+  // now we apply the special bracing for spherical images
+  // first get views to the left and right half-image
+
+  view_type left ( shape , output.strides , output.data() ) ;
+  view_type right ( shape , output.strides , output.data() + shape[0] ) ;
+
+  // we initialize the indices for the lines we copy from source to target
+  // and the limits for these indices to make sure we don't produce memory
+  // faults by overshooting. Note how we use views to what amounts to the
+  // spline's core, and write to lines outside these views, since we can be
+  // sure that this is safe: these writes go to the spline's frame, and we
+  // can obtain the frame's size from the bspline object.
+
+  std::ptrdiff_t upper_margin = bspl.left_frame[1] ;
+  std::ptrdiff_t y0 = - upper_margin ;
+  std::ptrdiff_t lower_margin = bspl.right_frame[1] ;
+  std::ptrdiff_t y1 = shape[1] + lower_margin ;
+
+  std::ptrdiff_t upper_source = 0 ;
+  std::ptrdiff_t upper_target = -1 ;
+
+  std::ptrdiff_t lower_source = shape[1] - 1 ;
+  std::ptrdiff_t lower_target = shape[1] ;
+
+  while ( true )
+  {
+    // check all indices
+    bool check1 = upper_source >= y0 && upper_source < y1 ;
+    bool check2 = upper_target >= y0 && upper_target < y1 ;
+    bool check3 = lower_source >= y0 && lower_source < y1 ;
+    bool check4 = lower_target >= y0 && lower_target < y1 ;
+
+    if ( ( ! check2 ) && ( ! check4 ) )
+    {
+      // both target indices are out of range, break, we're done
+      break ;
+    }
+
+    if ( check2 )
+    {
+      // upper_target is in range
+      if ( check1 )
+      {
+        // so is upper_source, do the copy
+        left.slice ( 1 , upper_target )
+          . copy_data ( right.slice ( 1 , upper_source ) ) ;
+        right.slice ( 1 , upper_target )
+          . copy_data ( left.slice ( 1 , upper_source ) ) ;
+        upper_source ++ ;
+      }
+      upper_target -- ;
+    }
+
+    if ( check4 )
+    {
+      // lower_target is in range
+      if ( check3 )
+      {
+        // so is lower_source, do the copy
+        left.slice ( 1 , lower_target )
+          . copy_data ( right.slice ( 1 , lower_source ) ) ;
+        right.slice ( 1 , lower_target )
+          . copy_data ( left.slice ( 1 , lower_source ) ) ;
+        lower_source -- ;
+      }
+      lower_target ++ ;
+    }
+  }
+
+  // vertical bracing is done, apply horizontal bracing
+
+  bspl.brace ( 0 ) ;
+  bspl.prefiltered = true ;
+}
+
 // the 'environment' template codes objects which can serve as 'act'
 // functor in zimt::process. It's coded as a zimt::unary_functor
 // taking 3D 'ray' coordinates and producing pixels with C channels.
@@ -2123,7 +2328,14 @@ public:
         assert ( success ) ;
         bspl.spline_degree = args.prefilter_degree ;
         // TODO: want custom spherical prefilter from lux here!
-        bspl.prefilter() ;
+        // bspl.prefilter() ;
+        
+  //       void spherical_prefilter
+  // ( zimt::bspline < dtype , 2 > & bspl ,
+  //   zimt::view_t < 2 , dtype > & input ,
+  //   int njobs )
+
+        spherical_prefilter ( bspl , bspl.core , 4 ) ;
         bspl.spline_degree = args.spline_degree ;
         bsp_ev = zimt::make_evaluator < spl_t , float , LANES > ( bspl ) ;
 

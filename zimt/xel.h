@@ -643,6 +643,12 @@ void scatter ( ET < value_type > * p_trg ,
   }
 }
 
+template < typename = std::enable_if < ( nch == 1 ) > >
+operator value_type()
+{
+  return (*this)[0] ;
+}
+
 } ; // end of struct xel_t
 
 template < typename T , std::size_t D >
