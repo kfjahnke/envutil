@@ -112,7 +112,7 @@ if ( x86_64 )
 # the NEON_BF16 ISA seems not to be built by default. We've used this
 # code to build envutil on a macBook pro with M1 processor:
 elseif ( arm64 )
-  list ( APPEND isa_l NEON_WITHOUT_AES NEON ) # NEON_BF16
+  list ( APPEND isa_l NEON_WITHOUT_AES NEON NEON_BF16 )
 # tentative, we have no SVE systems
 elseif ( aarch64 )
   list ( APPEND isa_l ALL_SVE SVE SVE2 SVE_256 SVE2_128 )
@@ -178,48 +178,26 @@ else()
   set ( SIMD_BACKEND "-DUSE_GOADING" )
 endif()
 
-if ( MULTI_SIMD_ISA )
+if ( MULTI_SIMD_ISA OR ( "${BACKEND}" STREQUAL "highway" ) )
 
   message ( STATUS "multi-SIMD-ISA build, backend: ${BACKEND}" )
 
-  # for multi-ISA builds, we positively need highway. If it wasn't
-  # already found (e.g. because the user specified to use the highway
-  # back-end) we now do the find_package with REQUIRED flag.
+  # for multi-ISA builds, and for use of the highway SIMD back-end,
+  # we positively need highway. If it wasn't already found earlier
+  # we now do the find_package with REQUIRED flag.
 
   if ( NOT HWY_FOUND )
     find_package ( HWY CONFIG REQUIRED )
     if ( HWY_FOUND )
       message ( STATUS "find_package: HWY_FOUND = true" )
     endif()
-    set ( required_libraries ${required_libraries} hwy )
   endif()
 
-endif()
+  # if we arrive here, the find_package call must have succeeded.
 
-# else()
-# 
-#   message ( STATUS "single-SIMD-ISA build, backend: ${BACKEND}" )
-# 
-#   # if ( "${BACKEND}" STREQUAL "highway" )
-#   #   set ( SIMD_BACKEND "-DUSE_HWY" )
-#   # elseif ( "${BACKEND}" STREQUAL "std::simd" )
-#   #   set ( SIMD_BACKEND "-DUSE_STDISMD" )
-#   # elseif ( "${BACKEND}" STREQUAL "Vc" )
-#   #   set ( SIMD_BACKEND "-DUSE_VC" )
-# 
-#     # find_package ( Vc REQUIRED )
-#     # if ( Vc_FOUND )
-#     #   message ( STATUS "find_package: Vc_FOUND = true" )
-#     #   set ( required_libraries ${required_libraries} Vc )
-#     # endif()
-# 
-#   # else()
-#   # 
-#   #   set ( SIMD_BACKEND "-DUSE_GOADING" )
-#   # 
-#   # endif()
-# 
-# endif()
+  set ( required_libraries ${required_libraries} hwy )
+
+endif()
 
 # For now, the only windows build is using msys2/mingw. We look at
 # a few CMake variables and set "WINDOWS" accordingly.
@@ -237,15 +215,43 @@ else()
   set(WINDOWS FALSE)
 endif()
 
-# on the mac, macPorts installs to /opt/local, hence:
+# this section was provided by Karl Krieger:
 
-if ( APPLE )
-  link_directories ( /usr/local/lib /opt/local/lib )
-  include_directories ( /usr/local/include /opt/local/include )
-elseif ( WINDOWS )
-  include_directories ( /usr/local/include /mingw64/include )
-  link_directories ( /usr/local/lib /mingw64/lib )
+# on the mac, macPorts installs to /opt/local, hence:
+# 2025-01-06 Comment Karl: for homebrew we have to use /opt/homebrew
+# Code added to handle link and include directories on Apple architecture
+# for either MacPorts, Homebrew or none.
+
+if (APPLE)
+  if (EXISTS "/opt/local")
+    message(STATUS "Detected MacPorts installation. Adding /opt/local/lib and /opt/local/include.")
+    link_directories(/usr/local/lib /opt/local/lib)
+    include_directories(/usr/local/include /opt/local/include)
+  elseif (EXISTS "/opt/homebrew")
+    message(STATUS "Detected Homebrew installation. Adding /opt/homebrew/lib and /opt/homebrew/include.")
+    link_directories(/usr/local/lib /opt/homebrew/lib)
+    include_directories(/usr/local/include /opt/homebrew/include)
+  else()
+    message(WARNING "Neither /opt/local (MacPorts) nor /opt/homebrew (Homebrew) directories exist. Defaulting to /usr/local.")
+    link_directories(/usr/local/lib)
+    include_directories(/usr/local/include)
+  endif()
+elseif (WINDOWS)
+  include_directories(/usr/local/include /mingw64/include)
+  link_directories(/usr/local/lib /mingw64/lib)
 endif()
+
+# replacing my original code here:
+
+# # on the mac, macPorts installs to /opt/local, hence:
+# 
+# if ( APPLE )
+#   link_directories ( /usr/local/lib /opt/local/lib )
+#   include_directories ( /usr/local/include /opt/local/include )
+# elseif ( WINDOWS )
+#   include_directories ( /usr/local/include /mingw64/include )
+#   link_directories ( /usr/local/lib /mingw64/lib )
+# endif()
 
 set( required_libraries
       ${required_libraries} OpenImageIO OpenImageIO_Util )
