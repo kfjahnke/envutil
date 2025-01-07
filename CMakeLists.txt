@@ -285,7 +285,7 @@ else()
 
   set_source_files_properties ( envutil_payload.cc
                   PROPERTIES COMPILE_FLAGS
-                  "-DTG_ISA=0 -O3 ${SIMD_BACKEND} -std=gnu++17 -mavx2 -march=haswell -mpclmul -maes" )
+                  "-DTG_ISA=0 -O3 ${SIMD_BACKEND} -std=gnu++17" )
 
   add_executable ( envutil
                    envutil_main.cc envutil_basic.cc envutil_payload.cc)
