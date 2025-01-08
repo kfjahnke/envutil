@@ -1562,7 +1562,11 @@ struct source_t
   OIIO::TextureSystem::TextureHandle * th ;
   OIIO::TextureOptBatch batch_options ;
 
-  // the c'tor with atguments receives a view to image data and extracts
+  typedef zimt::bspline < px_t , 2 > spl_t ;
+  std::shared_ptr < spl_t > p_bspl ;
+  zimt::grok_type < crd_t , px_t , L > bsp_ev ;
+
+  // the c'tor with arguments receives a view to image data and extracts
   // the relevant values to access these data directly. This is the route
   // taken for direct bilinear interpolation of the source data. Note how
   // we cast data() to float to 'shed' the channel count from the type
@@ -1573,6 +1577,15 @@ struct source_t
     strides ( src.strides ) ,
     p ( (const float* const) src.data() )
   { }
+
+  source_t ( std::shared_ptr < spl_t > _p_bspl )
+  : p_bspl ( _p_bspl ) ,
+    width ( _p_bspl->core.shape[0] ) ,
+    height ( _p_bspl->core.shape[1] )
+  {
+    bsp_ev = zimt::make_safe_evaluator
+                     < spl_t , float , L > ( *p_bspl ) ;
+  }
 
   // The c'tor without arguments routes to code using OIIO's 'texture'
   // function to handle the lookup. Here, we rely on OIIO's TextureSystem
@@ -1631,7 +1644,7 @@ struct source_t
     th = ts->get_texture_handle ( uenvironment ) ;
   }
 
-  void eval ( const pkg_v & _crd , px_v & px ) const
+  void eval ( const pkg_v & _crd , px_v & px )
   {
     // incoming is const &, hence:
 
@@ -1639,80 +1652,10 @@ struct source_t
 
     if constexpr ( ncrd == 2 )
     {
-      // bilinear interpolation with clamping at the edges.
-      // We rely on crd being in range [0,1], but the code at hand
-      // can tolerate small (up to less than .5) overshoots.
-
       crd[0] *= width ;
       crd[1] *= height ;
       crd -= .5f ;
-
-      // get the upper left neighbouring discrete coordinate
-
-      v2i_v uli { floor ( crd[0] ) , floor ( crd[1] ) } ;
-
-      // and derive weights for the bilinear interpolation
-
-      auto wr = crd - uli ;
-      auto wl = 1.0f - wr ;
-
-      // we also want the other three neighbouring dicrete coordinates
-
-      v2i_v uri ( uli ) ;
-      uri[0] += 1 ;
-      
-      v2i_v lli ( uli ) ;
-      lli[1] += 1 ;
-      
-      v2i_v lri ( lli ) ;
-      lri[0] += 1 ;
-
-      // clamp the values to [0,width-1] and [0,height-1]
-
-      uli[0] = uli[0].at_least ( 0 ) ;
-      lli[0] = lli[0].at_least ( 0 ) ;
-      
-      uli[1] = uli[1].at_least ( 0 ) ;
-      uri[1] = uri[1].at_least ( 0 ) ;
-      
-      uri[0] = uri[0].at_most ( width - 1 ) ;
-      lri[0] = lri[0].at_most ( width - 1 ) ;
-      
-      lli[1] = lli[1].at_most ( height - 1 ) ;
-      lri[1] = lri[1].at_most ( height - 1 ) ;
-
-      // now gather, apply weights, sum up
-
-      // obtain the four constituents by first truncating their
-      // coordinate to int and then gathering from p.
-
-      zimt::xel_t < int , 2 > istrides ( strides ) ;
-      int inchannels ( nchannels ) ;
-
-      index_v idsdxl { uli[0] , uli[1] } ;
-      auto ofs = ( idsdxl * istrides ) . sum() * inchannels ;
-      px_v pxul ;
-      pxul.gather ( p , ofs ) ;
-
-      index_v idsdxr { uri[0] , uri[1] } ;
-      ofs = ( idsdxr * istrides ) . sum() * inchannels ;
-      px_v pxur ;
-      pxur.gather ( p , ofs ) ;
-
-      index_v idxll { lli[0] , lli[1] } ;
-      ofs = ( idxll * istrides ) . sum() * inchannels ;
-      px_v pxll ;
-      pxll.gather ( p , ofs ) ;
-
-      index_v idxlr { lri[0] , lri[1] } ;
-      ofs = ( idxlr * istrides ) . sum() * inchannels ;
-      px_v pxlr ;
-      pxlr.gather ( p , ofs ) ;
-
-      // apply the bilinear formula with the weights gleaned above
-
-      px  = wl[1] * ( wl[0] * pxul + wr[0] * pxur ) ;
-      px += wr[1] * ( wl[0] * pxll + wr[0] * pxlr ) ;
+      bsp_ev.eval ( crd , px ) ;
     }
     else // to ( ncrd == 2 )
     {
@@ -1836,7 +1779,7 @@ struct mount_t
   extent_type extent ;
   crd_t center ;
   crd_t rgirth ;
-  source_t < nchannels , 2 * ncrd / 3 , L > & inner ;
+  source_t < nchannels , 2 * ncrd / 3 , L > inner ;
 
   static_assert ( ncrd == 3 || ncrd == 9 ) ;
 
@@ -1860,7 +1803,7 @@ struct mount_t
   // 2D manifold's 'extent' by delegating to the 'inner' functor
   // of class source_t
 
-  px_v shade ( crd_v crd ) const
+  px_v shade ( crd_v crd )
   {
     // move to texture coordinates. The eval code uses clamping,
     // so absolute precision isn't required and multiplying with
@@ -1935,7 +1878,7 @@ struct mount_t
   // eval puts it all together and yields pixel sets with 'misses' masked
   // out to zero.
 
-  void eval ( const in_v & ray , px_v & px ) const
+  void eval ( const in_v & ray , px_v & px )
   {
     // the first three components have the 3D pickup coordinate itself
 
@@ -1987,7 +1930,6 @@ struct mount_t
     }
   }
 } ;
-
 
 /// for full spherical images, we have to perform the prefiltering and
 /// bracing of the b-splines 'manually', because these images don't fit
@@ -2196,9 +2138,16 @@ void spherical_prefilter
 // the 'environment' template codes objects which can serve as 'act'
 // functor in zimt::process. It's coded as a zimt::unary_functor
 // taking 3D 'ray' coordinates and producing pixels with C channels.
+// 'environment' objects also provide the substrate for 'twining'.
+// All types of environment objects are based on cardinal b-splines
+// over the image data. The default is to use degree-1 b-splines,
+// which is also known as 'bilinear interpolation'. Other spline
+// degrees can be specified by passing 'spline_degree'. If necessary,
+// the image data are prefilered, so as to provide an interpolating
+// spline.
 
 template < typename T , typename U , std::size_t C , std::size_t L >
-class environment
+struct environment
 : public zimt::unary_functor < zimt::xel_t < T , 3 > ,
                                zimt::xel_t < U , C > ,
                                L >
@@ -2207,10 +2156,7 @@ class environment
                                zimt::xel_t < U , C > ,
                                L > base_t ;
 
-  std::shared_ptr < zimt::array_t < 2 , zimt::xel_t < T , C > > > pa ;
 
-public:
-  
   using typename base_t::in_v ;
   using typename base_t::out_v ;
 
@@ -2219,6 +2165,11 @@ public:
   typedef zimt::xel_t < U , C > px_t ;
   typedef zimt::xel_t < std::size_t , 2 > shape_type ;
   typedef zimt::xel_t < float , C > in_px_t ;
+
+  // we'll hold on to image data via a std::shared_ptr to a zimt::bspline.
+
+  typedef zimt::bspline < in_px_t , 2 > spl_t ;
+  std::shared_ptr < spl_t > p_bspl ;
 
   // this member variable will hold the type-erased functor encoding
   // the various code paths we handle with this object. The 'eval'
@@ -2241,15 +2192,41 @@ public:
         std::cout << "processing mounted image " << args.mount_image
                   << " shape " << shape << std::endl ;
 
-      pa = std::make_shared < zimt::array_t < 2 , in_px_t > >
-        ( shape ) ;
+      zimt::bc_code bc0 = zimt::REFLECT ;
+      if ( args.mount_prj == SPHERICAL || args.mount_prj == CYLINDRICAL )
+      {
+        if ( fabs ( args.mount_hfov - 2.0 * M_PI ) < .000001 )
+          bc0 = PERIODIC ;
+      }
+      p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+                                  { bc0 , zimt::REFLECT } ) ) ;
 
-      bool success = args.mount_inp->read_image
-              ( 0 , 0 , 0 , C , TypeDesc::FLOAT , pa->data() ) ;
-
+      bool success = args.mount_inp->read_image (
+        0 , 0 , 0 , C ,
+        TypeDesc::FLOAT ,
+        p_bspl->core.data() ,
+        sizeof ( in_px_t ) ,
+        p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
       assert ( success ) ;
 
-      static source_t < C , 2 , 16 > src ( *pa ) ;
+      if (    args.mount_prj == SPHERICAL
+           && fabs ( args.mount_hfov - 2.0 * M_PI ) < .000001
+           && args.mount_width == 2 * args.mount_height )
+      {
+        // assume the mounted image is a full spherical
+        p_bspl->spline_degree = args.prefilter_degree ;
+        spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
+        p_bspl->spline_degree = args.spline_degree ;
+      }
+      else
+      {
+        // assume it's a partial spherical, use ordinary prefilter
+        p_bspl->spline_degree = args.prefilter_degree ;
+        p_bspl->prefilter() ;
+        p_bspl->spline_degree = args.spline_degree ;
+      }
+
+      source_t < C , 2 , 16 > src ( p_bspl ) ;
 
       // for now, we mount images to the center; other types of cropping
       // might be added by providing suitable parameterization.
@@ -2316,40 +2293,22 @@ public:
           std::cout << "environment has 2:1 aspect ratio, assuming latlon"
                     << std::endl ;
 
-        typedef zimt::bspline < in_px_t , 2 > spl_t ;
-        zimt::grok_type < crd2_t , in_px_t , LANES > bsp_ev ;
-        
-        // TODO: avoid static object
-        static spl_t bspl ( shape , args.spline_degree ,
-                            { zimt::PERIODIC , zimt::REFLECT } ) ;
+        p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+                                   { zimt::PERIODIC , zimt::REFLECT } ) ) ;
         bool success = inp->read_image (
-          0 , 0 , 0 , C , TypeDesc::FLOAT , bspl.core.data() ,
-          sizeof ( in_px_t ) , bspl.core.strides[1] * sizeof ( in_px_t ) ) ;
+          0 , 0 , 0 , C ,
+          TypeDesc::FLOAT ,
+          p_bspl->core.data() ,
+          sizeof ( in_px_t ) ,
+          p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
         assert ( success ) ;
-        bspl.spline_degree = args.prefilter_degree ;
-        // TODO: want custom spherical prefilter from lux here!
-        // bspl.prefilter() ;
-        
-  //       void spherical_prefilter
-  // ( zimt::bspline < dtype , 2 > & bspl ,
-  //   zimt::view_t < 2 , dtype > & input ,
-  //   int njobs )
 
-        spherical_prefilter ( bspl , bspl.core , 4 ) ;
-        bspl.spline_degree = args.spline_degree ;
-        bsp_ev = zimt::make_evaluator < spl_t , float , LANES > ( bspl ) ;
+        p_bspl->spline_degree = args.prefilter_degree ;
+        spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
+        p_bspl->spline_degree = args.spline_degree ;
+        auto bsp_ev = zimt::make_evaluator < spl_t , float , LANES > ( *p_bspl ) ;
 
         env = ray_to_ll_t() + ll_to_px_t ( h ) + bsp_ev ;
-        
-        // pa = std::make_shared < zimt::array_t < 2 , in_px_t > >
-        //   ( shape ) ;
-        // 
-        // bool success = inp->read_image ( 0 , 0 , 0 , C ,
-        //                                   TypeDesc::FLOAT , pa->data() ) ;
-        // assert ( success ) ;
-        // 
-        // env =   ray_to_ll_t()
-        //       + eval_latlon < C > ( *pa ) ;
       }
       else if ( h == 6 * w )
       {

@@ -256,11 +256,13 @@ endif()
 set( required_libraries
       ${required_libraries} OpenImageIO OpenImageIO_Util )
 
+set ( COMMON_ARGS "-O3 -std=gnu++17" )
+
 if ( MULTI_SIMD_ISA )
 
   set_source_files_properties (
     envutil_main.cc envutil_dispatch.cc envutil_basic.cc
-    PROPERTIES COMPILE_FLAGS "-O3 -std=gnu++17 -DMULTI_SIMD_ISA -I.." )
+    PROPERTIES COMPILE_FLAGS "${COMMON_ARGS} -DMULTI_SIMD_ISA -I.." )
 
   add_executable ( envutil
                    envutil_main.cc envutil_dispatch.cc envutil_basic.cc)
@@ -269,9 +271,13 @@ if ( MULTI_SIMD_ISA )
 
       add_library ( eu_${isa} OBJECT envutil_payload.cc )
 
+      # Here, highway sets the compiler flags for each ISA internally,
+      # the TG_ISA variable 'tells' the build which ISA to use for the
+      # object file at hand.
+
       target_compile_options (
-        eu_${isa} PUBLIC -DTG_ISA=HWY_${isa} -DMULTI_SIMD_ISA
-        ${SIMD_BACKEND} -O3 -std=gnu++17 )
+        eu_${isa} PUBLIC -DTG_ISA=HWY_${isa} ${COMMON_ARGS} -DMULTI_SIMD_ISA
+        ${SIMD_BACKEND} )
 
       target_link_libraries ( envutil $<TARGET_OBJECTS:eu_${isa}>)
 
@@ -283,9 +289,12 @@ else()
     envutil_main.cc envutil_dispatch.cc envutil_basic.cc
     PROPERTIES COMPILE_FLAGS "-O3 -std=gnu++17" )
 
+  # if you're building envutil for a specific target ISA, you can add
+  # ISA-specific compiler flags via 'ISA_SPECIFIC_ARGS'
+
   set_source_files_properties ( envutil_payload.cc
                   PROPERTIES COMPILE_FLAGS
-                  "-DTG_ISA=0 -O3 ${SIMD_BACKEND} -std=gnu++17" )
+                  "${COMMON_ARGS} ${SIMD_BACKEND} ${ISA_SPECIFIC_ARGS}" )
 
   add_executable ( envutil
                    envutil_main.cc envutil_basic.cc envutil_payload.cc)
@@ -367,17 +376,3 @@ set(CPACK_DEBIAN_PACKAGE_DEBUG ON)
 
 message(STATUS "CMAKE_INSTALL_PREFIX = ${CMAKE_INSTALL_PREFIX}")
 include(CPack)
-
-# we set up the same sort of build for 'envutil_hwy', a highway-only
-# multi-SIMD-ISA build of envutil using 'sharded' payload code.
-
-# add_executable(envutil envutil_main.cc envutil_dispatch.cc envutil_basic.cc)
-# 
-# # we need to link with libhwy
-# 
-# target_link_libraries(envutil pthread ${required_libraries} avutil avcodec swscale hwy)
-
-# the main program needs specific compile options:
-
-
-
