@@ -196,58 +196,69 @@ seem viable.
 
 envutil --help gives a summary of command line options:
 
-    --help                 Print help message
-    -v                     Verbose output
+    --help                         Print help message
+    -v                             Verbose output
     mandatory options:
-      --input INPUT          input file name (mandatory)
-      --output OUTPUT        output file name (mandatory)
+      --input INPUT                  input file name (mandatory)
+      --output OUTPUT                output file name (mandatory)
     important options which have defaults:
-      --projection PRJ       projection used for the output image(s) (default: rectilinear)
-      --hfov ANGLE           horiziontal field of view of the output (default: 90)
-      --width EXTENT         width of the output (default: 1024)
-      --height EXTENT        height of the output (default: same as width)
+      --projection PRJ               projection used for the output image(s) (default: rectilinear)
+      --hfov ANGLE                   horiziontal field of view of the output (default: 90)
+      --width EXTENT                 width of the output (default: 1024)
+      --height EXTENT                height of the output (default: same as width)
     additional input parameters for cubemap input:
-      --cbmfov ANGLE         horiziontal field of view of cubemap input (default: 90)
-      --support_min EXTENT   minimal additional support around the cube face proper
-      --tile_size EXTENT     tile size for the internal representation image
-      --ctc CTC              pass '1' to interpret cbmfov as center-to-center (default 0)
+      --cbmfov ANGLE                 horiziontal field of view of cubemap input (default: 90)
+      --support_min EXTENT           minimal additional support around the cube face proper
+      --tile_size EXTENT             tile size for the internal representation image
+      --ctc CTC                      pass '1' to interpret cbmfov as center-to-center (default 0)
     additional parameters for single-image output:
-      --yaw ANGLE            yaw of the virtual camera
-      --pitch ANGLE          pitch of the virtual camera
-      --roll ANGLE           roll of the virtual camera
-      --x0 EXTENT            low end of the horizontal range
-      --x1 EXTENT            high end of the horizontal range
-      --y0 EXTENT            low end of the vertical range
-      --y1 EXTENT            high end of the vertical range
+      --yaw ANGLE                    yaw of the virtual camera
+      --pitch ANGLE                  pitch of the virtual camera
+      --roll ANGLE                   roll of the virtual camera
+      --x0 EXTENT                    low end of the horizontal range
+      --x1 EXTENT                    high end of the horizontal range
+      --y0 EXTENT                    low end of the vertical range
+      --y1 EXTENT                    high end of the vertical range
     additional parameters for multi-image and video output:
-      --seqfile SEQFILE      image sequence file name (optional)
-      --codec CODEC          video codec for video sequence output (default: libx265)
-      --mbps MBPS            output video with MBPS Mbit/sec (default: 8)
-      --fps FPS              output video FPS frames/sec (default: 60)
+      --seqfile SEQFILE              image sequence file name (optional)
+      --codec CODEC                  video codec for video sequence output (default: libx265)
+      --mbps MBPS                    output video with MBPS Mbit/sec (default: 8)
+      --fps FPS                      output video FPS frames/sec (default: 60)
     interpolation options:
-      --itp ITP              interpolator: 1 for bilinear, -1 for OIIO, -2 bilinear+twining
+      --itp ITP                      interpolator: 1 for spline, -1 for OIIO, -2 spline+twining
+      --prefilter DEG                prefilter degree (>= 0) for the spline used with --ipt 1
+      --degree DEG                   degree of the spline (>= 0) used with --ipt 1
     parameters for twining (with --itp -2):
-      --twine TWINE          use twine*twine oversampling - default: automatic settings
-      --twf_file TWF_FILE    read twining filter kernel from TWF_FILE
-      --twine_normalize      normalize twining filter weights gleaned from a file
-      --twine_precise        project twining basis vectors to tangent plane
-      --twine_width WIDTH    widen the pick-up area of the twining filter
-      --twine_density DENSITY increase tap count of an 'automatic' twining filter
-      --twine_sigma SIGMA    use a truncated gaussian for the twining filter (default: don't)
-      --twine_threshold THR  discard twining filter taps below this threshold
+      --twine TWINE                  use twine*twine oversampling - default: automatic settings
+      --twf_file TWF_FILE            read twining filter kernel from TWF_FILE
+      --twine_normalize              normalize twining filter weights gleaned from a file
+      --twine_precise                project twining basis vectors to tangent plane
+      --twine_width WIDTH            widen the pick-up area of the twining filter
+      --twine_density DENSITY        increase tap count of an 'automatic' twining filter
+      --twine_sigma SIGMA            use a truncated gaussian for the twining filter (default: don't)
+      --twine_threshold THR          discard twining filter taps below this threshold
     parameters for lookup with OpenImageIO (with --itp -1):
-      --tsoptions KVLIST     OIIO TextureSystem Options: coma-separated key=value pairs
-      --swrap WRAP           OIIO Texture System swrap mode
-      --twrap WRAP           OIIO Texture System twrap mode
-      --mip MIP              OIIO Texture System mip mode
-      --interp INTERP        OIIO Texture System interp mode
-      --stwidth EXTENT       swidth and twidth OIIO Texture Options
-      --stblur EXTENT        sblur and tblur OIIO Texture Options
-      --conservative YESNO   OIIO conservative_filter Texture Option - pass 0 or 1
+      --tsoptions KVLIST             OIIO TextureSystem Options: coma-separated key=value pairs
+      --swrap WRAP                   OIIO Texture System swrap mode
+      --twrap WRAP                   OIIO Texture System twrap mode
+      --mip MIP                      OIIO Texture System mip mode
+      --interp INTERP                OIIO Texture System interp mode
+      --stwidth EXTENT               swidth and twidth OIIO Texture Options
+      --stblur EXTENT                sblur and tblur OIIO Texture Options
+      --conservative YESNO           OIIO conservative_filter Texture Option - pass 0 or 1
     parameters for mounted image input:
       --mount IMAGE PROJECTION HFOV  load non-environment source image
+      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+                                    load oriented non-environment source image
     
 The input can be either a lat/lon environment image (a.k.a. 'full spherical' or 'full equirect' or '360X180 degree panorama') - or a 'cubemap' - a set of six square images in rectilinear projection showing the view to the six cardinal directions (left, right, up, down, front, back). The cubemap can be provided as a single image with the images concatenated vertically, or as six separate images with 'left', 'right' etc. in their - otherwise identical - filenames, which are introduced via a format string.
+
+On top of 'full' environment images, envutil can also process 'mounted' images:
+images with a given projection and hfov which may or may not cover the entire
+360X180 degrees. If the 'full environment' isn't covered, lookup in areas outside
+the mounted image are returned as black or transparent black. A variation of
+mounted images are 'facets' - they aren't mounted 'straight ahead' but assigned
+an orientation with three Euler angles.
 
 envutil only processes sRGB and linear RGB data, the output will be in the same
 colour space as the input. If you use the same format for input and output, this
@@ -555,6 +566,33 @@ filter. bilinear interpolation is the same as a degree-1 b-spline, hence the
 value 1 for bilinear interpolation. In envutil, I have decided against using
 positive 'itp' values from 'meaning' b-splines -here, you pass --itp 1 for
 all splines, and --degree and --prefilter additionally condition the spline.
+
+##  --prefilter DEG   prefilter degree (>= 0) for the b-spline
+##  --degree DEG      degree of the b-spline (>= 0)
+
+Images created with itp set to 1 or -2 both use b-splines as their substrate.
+If you don't pass --degree or --prefilter, a degree-1 b-spline is used - this
+is also known as 'bilinear interpolation' and already 'quite good'. But higher
+spline degrees can produce even better output, especially if the view magnifies
+the source image, and the star-shaped artifacts of the bilinear interpolation
+become visible. If you only pass 'degree', the spline will be set up as an
+interpolating spline, meaning it will yield precisely the same pixel values
+as the input when evaluated at discrete coordinates. This requires prefiltering
+of the spline coefficients with a prefilter of the same degree as the spline.
+If you pass a different prefilter degree, the coefficients are prefiltered
+*as if* the spline degree were so, whereas the evaluation is done with the
+given degree. You can use this to produce smoother output (lower prefilter
+degree than spline degree) or to sharpen them (higher prefilter degree than
+spline degree). A disadvantage of interpolating splines is that they will
+produce ringing artifacts if the input signal isn't band-limited to half the
+Nyquist frequency. With raw images straight from the camera this is usually
+the case, but processed or generated images ofthen have high frequency content
+which will result in these artifacts, which become annoyingly visible at high
+magnifications. One way to deal with this problem is to accept a certain amount
+of smoothing by omitting the prefilter - so, passing --prefilter 0 and --degree
+greater than one. With a spline degree of two and no prefiltering, there is
+mild suppression of high frequencies, but there are no ringing artifacts, and
+this is often a good compromise.
 
 # Twining-specific options
 
@@ -880,6 +918,10 @@ the default is to have it on.
 
 # Parameters for mounted image input
 
+When --mount or --facet are given, this overrides any --input parameter
+you may have passed - you wouldn't, usually, but leave 'input' unset if
+you use a mounted image as input.
+
 ## --mount IMAGE PROJECTION HFOV  load non-environment source image
 
 envutil can 'mount' images in various projections and hfov which may only cover
@@ -894,6 +936,16 @@ by space. Currently, there is an issue with itp -1 (OIIO pick-up) with the
 default settings when the mounted image is a 360 degree fisheye - some artifacts
 show near the 'back pole'. Use other interpolators, or disable the code
 relying on derivatives (use --stwidth 0).
+
+## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+##     load oriented non-environment source image
+
+This is an extension to 'mounted images', taking three more parameters: these
+are Euler angles specifying the orientation of the mounted image - 'plain'
+mounted images are mounted 'straight ahead'. If you specify three angles
+y, p and r, then an orientation of the virtual camera with the same Euler
+angles will cancel the orientation precisely. It's intended to allow several
+fcets, but this isn't implemented yet.
 
 # Additional Technical Notes
 

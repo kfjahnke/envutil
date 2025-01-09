@@ -148,16 +148,11 @@ struct rotate_3d
     // set up the rotational quaternion. if 'inverse' is set, produce
     // the conjugate.
 
+    Imath::Eulerf angles ( roll , pitch , yaw , Imath::Eulerf::ZXY ) ;
+    q = angles.toQuat() ;
+
     if ( inverse )
-    {
-      Imath::Eulerf angles ( -yaw , -pitch , -roll , Imath::Eulerf::YXZ ) ;
-      q = angles.toQuat() ;
-    }
-    else
-    {
-      Imath::Eulerf angles ( roll , pitch , yaw , Imath::Eulerf::ZXY ) ;
-      q = angles.toQuat() ;
-    }
+      q.invert() ;
   }
 
   // for the actual rotation (the 'multiplication' with teh rotational
@@ -334,6 +329,26 @@ void roll_out ( int ninputs )
   yy = r3 ( yy ) ;
   zz = r3 ( zz ) ;
 
+  // if we have a 'facet' - a mounted image with non-standard
+  // orientation - we add a second rotation, now with the inverse
+  // of the quaternion formed from the orientation Euler angles.
+  // Why inverse? If the facet is oriented precisely like the
+  // virtual camera, both rotations should cancel each other out
+  // precisely.
+
+  if (    args.mount_yaw != 0.0f
+       || args.mount_pitch != 0.0f
+       || args.mount_roll != 0.0f )
+  {
+    rotate_3d < double , 16 > rr3 ( args.mount_roll ,
+                                    args.mount_pitch ,
+                                    args.mount_yaw ,
+                                    true ) ;
+    xx = rr3 ( xx ) ;
+    yy = rr3 ( yy ) ;
+    zz = rr3 ( zz ) ;
+  }
+
   // There are two code paths: one taking the getters yielding
   // simple single-ray 3D coordinates, and one taking the three-ray
   // variant needed to compute the derivatives. They use specific
@@ -350,13 +365,16 @@ void roll_out ( int ninputs )
       ( xx , yy , zz , args.width , args.height ,
         args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-    // create a static 'environment' object. This will persist, so
-    // if we're creating an image sequence, it will be reused for
-    // each individual image.
-
-    // static environment < float , float , NCH , 16 > env ;
+    // create an 'environment' object. This will persist while the
+    // input image remains the same, so if we're creating an image
+    // sequence, it will be reused for each individual image.
 
     typedef environment < float , float , NCH , 16 > env_t ;
+
+    // we 'hold' the environment object in current_env, an 'asset'
+    // object, which destructs and dealocates it's client object
+    // only when itself destructs or is 'cleared'.
+
     env_t * p_env = (env_t*) current_env.has ( args.input ) ;
 
     if ( ! p_env )

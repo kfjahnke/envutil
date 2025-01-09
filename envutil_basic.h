@@ -334,6 +334,9 @@ struct arguments
   std::string mount_prj_str ;
   projection_t projection ;
   projection_t mount_prj;
+  float mount_yaw ;
+  float mount_pitch ;
+  float mount_roll ;
 
   double cbmfov ;
   std::size_t support_min ;

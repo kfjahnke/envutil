@@ -174,7 +174,7 @@ void arguments::init ( int argc , const char ** argv )
   ap.separator("  mandatory options:");
 
   ap.arg("--input INPUT")
-    .help("input file name (mandatory)")
+    .help("input file name (mandatory if no 'mount' is given)")
     .metavar("INPUT");
 
   ap.arg("--output OUTPUT")
@@ -274,15 +274,15 @@ void arguments::init ( int argc , const char ** argv )
   ap.separator("  interpolation options:");
 
   ap.arg("--itp ITP")
-    .help("interpolator: 1 for spline, -1 for OIIO, -2 spline+twining")
+    .help("interpolator: 1 for b-spline, -1 for OIIO, -2 b-spline+twining")
     .metavar("ITP");
 
   ap.arg("--prefilter DEG")
-    .help("prefilter degree (>= 0) for the spline used with --ipt 1")
+    .help("prefilter degree (>= 0) for b-spline-based interpolations")
     .metavar("DEG");
 
   ap.arg("--degree DEG")
-    .help("degree of the spline (>= 0) used with --ipt 1")
+    .help("degree of the spline (>= 0) for b-spline-based interpolations")
     .metavar("DEG");
 
   // parameters for twining (with --itp -2)
@@ -361,6 +361,10 @@ void arguments::init ( int argc , const char ** argv )
                   &mount_image , &mount_prj_str, &mount_hfov)
     .help("load non-environment source image") ;
 
+  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %f:HFOV %f:YAW %f:PITCH %f:ROLL",
+                  &mount_image , &mount_prj_str, &mount_hfov, &mount_yaw, &mount_pitch, &mount_roll)
+    .help("load oriented non-environment source image") ;
+
   if (ap.parse(argc, argv) < 0 ) {
       std::cerr << ap.geterror() << std::endl;
       ap.print_help();
@@ -436,7 +440,12 @@ void arguments::init ( int argc , const char ** argv )
       ++ prj ;
     }
     mount_prj = projection_t ( prj ) ;
-    assert ( input == std::string() ) ;
+
+    // we set 'input' to the name of the mounted image; we use
+    // 'input' ad id for the environment 'asset', so we can't
+    // just leave it blank.
+
+    input = mount_image ;
   }
   else
   {
@@ -489,6 +498,9 @@ void arguments::init ( int argc , const char ** argv )
       default:
         break ;
     }
+    mount_yaw *= M_PI / 180.0 ;
+    mount_pitch *= M_PI / 180.0 ;
+    mount_roll *= M_PI / 180.0 ;
   }
   else
   {
@@ -649,6 +661,8 @@ void arguments::init ( int argc , const char ** argv )
       x1 = extent.x1 ;
       y0 = extent.y0 ;
       y1 = extent.y1 ;
+      std::cout << "x0 " << x0 << " x1 " << x1 << " y0 " << y0 << " y1 " << y1
+                << std::endl ;
     }
     assert ( x0 < x1 ) ;
     assert ( y0 < y1 ) ;
