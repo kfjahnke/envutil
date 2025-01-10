@@ -1733,7 +1733,7 @@ public:
   // and immutable afterwards. This allows the compiler to optimize well, and
   // it makes class evaluator a 'pure' functor in a functional-programming sense.
 
-  /*const*/ inner_type inner ;
+  const inner_type inner ;
 
 private:
 

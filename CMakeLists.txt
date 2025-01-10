@@ -276,8 +276,7 @@ if ( MULTI_SIMD_ISA )
       # object file at hand.
 
       target_compile_options (
-        eu_${isa} PUBLIC -DTG_ISA=HWY_${isa} ${COMMON_ARGS} -DMULTI_SIMD_ISA
-        ${SIMD_BACKEND} )
+        eu_${isa} PUBLIC -DTG_ISA=HWY_${isa} -DMULTI_SIMD_ISA -O3 -std=gnu++17 ${SIMD_BACKEND} )
 
       target_link_libraries ( envutil $<TARGET_OBJECTS:eu_${isa}>)
 
@@ -287,7 +286,7 @@ else()
 
   set_source_files_properties (
     envutil_main.cc envutil_dispatch.cc envutil_basic.cc
-    PROPERTIES COMPILE_FLAGS "-O3 -std=gnu++17" )
+    PROPERTIES COMPILE_FLAGS ${COMMON_ARGS} )
 
   # if you're building envutil for a specific target ISA, you can add
   # ISA-specific compiler flags via 'ISA_SPECIFIC_ARGS'

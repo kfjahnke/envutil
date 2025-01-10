@@ -155,33 +155,6 @@ struct rotate_3d
       q.invert() ;
   }
 
-  // for the actual rotation (the 'multiplication' with teh rotational
-  // quaternion), we don't use Imath code. See comments in 'eval'.
-
-  // calculate the cross product of two vectors
-
-  template < typename U >
-  U cross ( const U & x , const U & y ) const
-  {
-    U result ;
-    result[0] = x[1] * y[2] - x[2] * y[1] ;
-    result[1] = x[2] * y[0] - x[0] * y[2] ;
-    result[2] = x[0] * y[1] - x[1] * y[0] ;
-    return result ;
-  }
-
-  // perform the quaternion multiplication.
-
-  template < typename U >
-  U mulq ( const U & vec ) const
-  {
-    U result ;
-    U qv { q.v[0] , q.v[1] , q.v[2] } ;
-    auto a = cross ( qv , vec ) ;
-    auto b = cross ( qv , a ) ;
-    return vec + T(2) * (q.r * a + b);
-  }
-
   // eval applies the quaternion. Note how we use a template of
   // typename U for the formulation. This way, we can handle both
   // scalar and simdized arguments.
@@ -203,11 +176,6 @@ struct rotate_3d
       = reinterpret_cast < Imath::Vec3 < U > & > ( out ) ;
     
     out_e = in_e * Imath::Quat < U > ( q ) ;
-
-    // instead, we calculate 'manually' like this, using the mulq
-    // member function above.
-
-    // out = mulq ( in ) ;
   }
 
   // for convenience:
