@@ -224,8 +224,8 @@ struct ray_to_ll_t
     < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
 {
   template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out ) const
+  static void eval ( const in_type & in ,
+                     out_type & out )
   {
     // incoming, we have a 3D directional vector
     
@@ -274,8 +274,8 @@ struct ray_to_rect_t
     < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
 {
   template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out ) const
+  static void eval ( const in_type & in ,
+                     out_type & out )
   {
     // incoming, we have a 3D directional vector
     
@@ -309,8 +309,8 @@ struct rect_to_ray_t
     < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
 {
   template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out ) const
+  static void eval ( const in_type & in ,
+                     out_type & out )
   {
     // incoming, we have a 2D planar coordinate
     
@@ -335,8 +335,8 @@ struct ray_to_cyl_t
     < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
 {
   template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out ) const
+  static void eval ( const in_type & in ,
+                     out_type & out )
   {
     // incoming, we have a 3D directional vector
     
@@ -363,8 +363,8 @@ struct cyl_to_ray_t
     < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
 {
   template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out ) const
+  static void eval ( const in_type & in ,
+                     out_type & out )
   {
     // incoming, we have a 2D planar coordinate
     
@@ -391,8 +391,8 @@ struct ray_to_ster_t
     < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
 {
   template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out ) const
+  static void eval ( const in_type & in ,
+                     out_type & out )
   {
     auto reciprocal_norm = T ( 1 ) / sqrt (   in[0] * in[0]
                                             + in[1] * in[1]
@@ -427,8 +427,8 @@ struct ster_to_ray_t
     < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
 {
   template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out ) const
+  static void eval ( const in_type & in ,
+                     out_type & out )
   {
     // incoming, we have a 2D planar coordinate
     
@@ -459,8 +459,8 @@ struct ray_to_fish_t
     < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
 {
   template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out ) const
+  static void eval ( const in_type & in ,
+                     out_type & out )
   {
     auto const & right ( in[RIGHT] ) ;
     auto const & down ( in[DOWN] ) ;
@@ -485,8 +485,8 @@ struct fish_to_ray_t
     < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
 {
   template < typename in_type , typename out_type >
-  void eval ( const in_type & in ,
-              out_type & out ) const
+  static void eval ( const in_type & in ,
+                     out_type & out )
   {
     // incoming, we have a 2D planar coordinate
     
@@ -535,7 +535,7 @@ struct in_face_to_ray
   // coordinate is not normalized.
 
   template < typename I , typename O >
-  void eval ( const I & crd2 , O & crd3 ) const
+  static void eval ( const I & crd2 , O & crd3 )
   {
     if constexpr ( F == CM_FRONT )
     {

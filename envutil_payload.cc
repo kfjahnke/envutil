@@ -317,6 +317,31 @@ void roll_out ( int ninputs )
     zz = rr3 ( zz ) ;
   }
 
+  typedef environment < float , float , NCH , 16 > env_t ;
+  env_t * p_env = nullptr ;
+
+  if ( args.itp == 1 || args.itp == -2 )
+  {
+    // both direct spline interpolation and twining need an
+    // 'environment' object.
+
+    // create an 'environment' object. This will persist while the
+    // input image remains the same, so if we're creating an image
+    // sequence, it will be reused for each individual image.
+    // we 'hold' the environment object in current_env, an 'asset'
+    // object, which destructs and dealocates it's client object
+    // only when itself destructs or is 'cleared'.
+
+    p_env = (env_t*) current_env.has ( args.input ) ;
+
+    if ( ! p_env )
+    {
+      current_env.clear() ;
+      p_env = new env_t() ;
+      current_env.reset ( args.input , p_env ) ;
+    }
+  }
+
   // There are two code paths: one taking the getters yielding
   // simple single-ray 3D coordinates, and one taking the three-ray
   // variant needed to compute the derivatives. They use specific
@@ -326,31 +351,12 @@ void roll_out ( int ninputs )
   if ( ninputs == 3 )
   {
     // set up a simple single-coordinate stepper of the type
-    // fixed by 'STP'. This route is taken with direct bilinear
+    // fixed by 'STP'. This route is taken with direct b-spline
     // interpolation (itp 1)
 
     STP < float , 16 > get_ray
       ( xx , yy , zz , args.width , args.height ,
         args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-    // create an 'environment' object. This will persist while the
-    // input image remains the same, so if we're creating an image
-    // sequence, it will be reused for each individual image.
-
-    typedef environment < float , float , NCH , 16 > env_t ;
-
-    // we 'hold' the environment object in current_env, an 'asset'
-    // object, which destructs and dealocates it's client object
-    // only when itself destructs or is 'cleared'.
-
-    env_t * p_env = (env_t*) current_env.has ( args.input ) ;
-
-    if ( ! p_env )
-    {
-      current_env.clear() ;
-      p_env = new env_t() ;
-      current_env.reset ( args.input , p_env ) ;
-    }
 
     // now we call the final 'work' template which uses the get_t
     // and act objects we've set up so far
@@ -368,7 +374,10 @@ void roll_out ( int ninputs )
       ( xx , yy , zz , args.width , args.height ,
         args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-    environment9 < NCH , 16 > env ;
+    // we pass p_env - a pointer to an environment object.
+    // if itp is set to -1 (use OIIO) this pointer is nullptr.
+
+    static environment9 < NCH , 16 > env ( p_env ) ;
 
     work ( get_ray , env ) ;
   }

@@ -180,7 +180,7 @@ endif()
 
 if ( MULTI_SIMD_ISA OR ( "${BACKEND}" STREQUAL "highway" ) )
 
-  message ( STATUS "multi-SIMD-ISA build, backend: ${BACKEND}" )
+  message ( STATUS "build is using highway; backend: ${BACKEND}" )
 
   # for multi-ISA builds, and for use of the highway SIMD back-end,
   # we positively need highway. If it wasn't already found earlier
@@ -256,7 +256,7 @@ endif()
 set( required_libraries
       ${required_libraries} OpenImageIO OpenImageIO_Util )
 
-set ( COMMON_ARGS "-O3 -std=gnu++17" )
+set ( COMMON_ARGS "-O3" )
 
 if ( MULTI_SIMD_ISA )
 
@@ -275,8 +275,11 @@ if ( MULTI_SIMD_ISA )
       # the TG_ISA variable 'tells' the build which ISA to use for the
       # object file at hand.
 
+      # TODO: would use '${COMMON_ARGS} here, but build fails,
+      # hence stating explicitly: -O3
+
       target_compile_options (
-        eu_${isa} PUBLIC -DTG_ISA=HWY_${isa} -DMULTI_SIMD_ISA -O3 -std=gnu++17 ${SIMD_BACKEND} )
+        eu_${isa} PUBLIC -DTG_ISA=HWY_${isa} -DMULTI_SIMD_ISA -O3 ${SIMD_BACKEND} )
 
       target_link_libraries ( envutil $<TARGET_OBJECTS:eu_${isa}>)
 
@@ -293,7 +296,7 @@ else()
 
   set_source_files_properties ( envutil_payload.cc
                   PROPERTIES COMPILE_FLAGS
-                  "${COMMON_ARGS} ${SIMD_BACKEND} ${ISA_SPECIFIC_ARGS}" )
+                  "-g ${COMMON_ARGS} ${SIMD_BACKEND} ${ISA_SPECIFIC_ARGS}" )
 
   add_executable ( envutil
                    envutil_main.cc envutil_basic.cc envutil_payload.cc)

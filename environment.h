@@ -1557,7 +1557,6 @@ struct source_t
   int width ;
   int height ;
   zimt::xel_t < int , 2 > strides ;
-  const float * const p = nullptr ;
   ts_ptr_t ts ;
   OIIO::TextureSystem::TextureHandle * th ;
   OIIO::TextureOptBatch batch_options ;
@@ -1570,13 +1569,6 @@ struct source_t
   // the relevant values to access these data directly. This is the route
   // taken for direct bilinear interpolation of the source data. Note how
   // we cast data() to float to 'shed' the channel count from the type
-
-  source_t ( const zimt::view_t < 2 , px_t > & src )
-  : width ( src.shape [ 0 ] ) ,
-    height ( src.shape [ 1 ] ) ,
-    strides ( src.strides ) ,
-    p ( (const float* const) src.data() )
-  { }
 
   source_t ( std::shared_ptr < spl_t > _p_bspl )
   : p_bspl ( _p_bspl ) ,
@@ -1828,28 +1820,23 @@ struct mount_t
   {
     if constexpr ( P == RECTILINEAR )
     {
-      crd[0] = crd3[0] / crd3[2] ;
-      crd[1] = crd3[1] / crd3[2] ;
+      ray_to_rect_t<float,L>::eval ( crd3 , crd ) ;
     }
     else if constexpr ( P == SPHERICAL )
     {
-      static ray_to_ll_t ray_to_ll ;
-      ray_to_ll.eval ( crd3 , crd ) ;
+      ray_to_ll_t<float,L>::eval ( crd3 , crd ) ;
     }
     else if constexpr ( P == CYLINDRICAL )
     {
-      static ray_to_cyl_t ray_to_cyl ;
-      ray_to_cyl.eval ( crd3 , crd ) ;
+      ray_to_cyl_t<float,L>::eval ( crd3 , crd ) ;
     }
     else if constexpr ( P == STEREOGRAPHIC )
     {
-      static ray_to_ster_t ray_to_ster ;
-      ray_to_ster.eval ( crd3 , crd ) ;
+      ray_to_ster_t<float,L>::eval ( crd3 , crd ) ;
     }
     else if constexpr ( P == FISHEYE )
     {
-      static ray_to_fish_t ray_to_fish ;
-      ray_to_fish.eval ( crd3 , crd ) ;
+      ray_to_fish_t<float,L>::eval ( crd3 , crd ) ;
     }
   }
 
@@ -2351,7 +2338,11 @@ struct environment
 
 // environment9 objects mediate lookup with derivatives. Their eval
 // member function takes 'ninepacks' and provides pixels with
-// nchannels channels.
+// nchannels channels. We have two variants: The first one,
+// which is created when p_env is passed a pointer to an
+// 'environment' object, is used with 'twining'. The second
+// one, receiving nullptr, is used with OIIO's texture system
+// and does not use an environment object.
 
 template < std::size_t nchannels , std::size_t L >
 struct environment9
@@ -2373,35 +2364,15 @@ struct environment9
 
   zimt::grok_type < crd9_t , px_t , 16 > act ;
 
-  environment9()
+  typedef environment < float , float , nchannels , 16 > env_t ;
+
+  environment9 ( env_t * p_env = nullptr )
   {
     if ( args.itp == -2 )
     {
-      // use twining (--itp -2). first create an 'environment' object.
-      // This is an object holding pixel data and using direct
-      // bilinear interpolation to get pixel values. But this
-      // object won't directly yield output data - the 'twining'
-      // will use it to obtain several pixel values in close
-      // vicinity and form a weighted sum from them.
-  
-      // Note how this object will persist (we declare it static), so
-      // it's only created right when control flow arrives here for
-      // the very first time (parameterization is taken from 'args').
-      // This is deliberate: subsequent invocations of 'work' are
-      // supposed to use the same environment, so it would be
-      // wasteful to set up a new one - it's an expensive asset.
+      // with itp -2, we expect a non-nullptr p_env argument
 
-      // static environment < float , float , nchannels , 16 > env ;
-
-      typedef environment < float , float , nchannels , 16 > env_t ;
-      env_t * p_env = (env_t*) current_env.has ( args.input ) ;
-
-      if ( ! p_env )
-      {
-        current_env.clear() ;
-        p_env = new env_t() ;
-        current_env.reset ( args.input , p_env ) ;
-      }
+      assert ( p_env != nullptr ) ;
 
       // set up the twining filter
 
@@ -2502,7 +2473,7 @@ struct environment9
 
       // wrap the 'environment' object in a twine_t object and assign
       // to 'act' - this 'groks' the twine_t object to act's type.
-      // Note how this object is not declared static: the twining
+      // Note how this object is re-created for every run: the twining
       // parameters may change due to changing hfov from one invocation
       // of 'work' to the next.
 
@@ -2517,6 +2488,12 @@ struct environment9
     }
     else
     {
+      assert ( args.itp == -1 ) ;
+
+      // with itp -1, we expect a nullptr p_env argument
+
+      assert ( p_env == nullptr ) ;
+
       // use OIIO's 'environment' or 'texture' lookup functions.
       // These code paths are coded in the 'latlon' and 'cubemap'
       // objects, which are created and also grokked to 'act'.
@@ -2530,56 +2507,55 @@ struct environment9
 
       if ( args.mount_image != std::string() )
       {
-        typedef source_t < nchannels , 6 , 16 > env_t ;
-        env_t * p_env = (env_t*) current_env.has ( args.mount_image ) ;
+        // note how we create a source_t with no arguments to the c'tor.
+        // this routes to the code using OIIO. The parameters to set up
+        // the source_t object are taken from 'args'.
 
-        if ( ! p_env )
-        {
-          current_env.clear() ;
-          p_env = new env_t() ;
-          current_env.reset ( args.mount_image , p_env ) ;
-        }
-        // static source_t < nchannels , 6 , 16 > src ;
+        source_t < nchannels , 6 , 16 > src ;
+
         auto extent = get_extent ( args.mount_prj , args.mount_width ,
                                    args.mount_height , args.mount_hfov  ) ;
 
         // same case switch as for the single-coordinate code path;
-        // might be factored out - for now we just copy and paste
+        // might be factored out - for now we just copy and paste.
+        // note the second template argument, '9'. This produces
+        // an object evaluating 'ninepacks' - three sets of 3D
+        // coordinates.
 
         switch ( args.mount_prj )
         {
           case RECTILINEAR:
           {
             mount_t < nchannels , 9 , RECTILINEAR , 16 >
-              mnt ( extent , *p_env ) ;
+              mnt ( extent , src ) ;
             act = mnt ;
             break ;
           }
           case SPHERICAL:
           {
             mount_t < nchannels , 9 , SPHERICAL , 16 >
-              mnt ( extent , *p_env ) ;
+              mnt ( extent , src ) ;
             act = mnt ;
             break ;
           }
           case CYLINDRICAL:
           {
             mount_t < nchannels , 9 , CYLINDRICAL , 16 >
-              mnt ( extent , *p_env ) ;
+              mnt ( extent , src ) ;
             act = mnt ;
             break ;
           }
           case STEREOGRAPHIC:
           {
             mount_t < nchannels , 9 , STEREOGRAPHIC , 16 >
-              mnt ( extent , *p_env ) ;
+              mnt ( extent , src ) ;
             act = mnt ;
             break ;
           }
           case FISHEYE:
           {
             mount_t < nchannels , 9 , FISHEYE , 16 >
-              mnt ( extent , *p_env ) ;
+              mnt ( extent , src ) ;
             act = mnt ;
             break ;
           }
@@ -2593,11 +2569,8 @@ struct environment9
       else if ( args.env_width == args.env_height * 2 )
       {
         // set up an environment object picking up pixel values from
-        // a lat/lon image using OIIO's 'environment' function. Again
-        // we set up a static object, but it's assigned to 'act' in
-        // every invocation of 'work'.
+        // a lat/lon image using OIIO's 'environment' function.
 
-        // static latlon < float , float , nchannels , 16 > ll ;
         typedef latlon < float , float , nchannels , 16 > env_t ;
         env_t * p_env = (env_t*) current_env.has ( args.input ) ;
 
@@ -2615,7 +2588,6 @@ struct environment9
         // a texture representing the cubemap image, using OIIO's
         // 'texture' function
 
-        // static cubemap < float , float , nchannels , 16 > cbm ;
         typedef cubemap < float , float , nchannels , 16 > env_t ;
         env_t * p_env = (env_t*) current_env.has ( args.input ) ;
 
