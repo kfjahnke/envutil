@@ -296,7 +296,7 @@ else()
 
   set_source_files_properties ( envutil_payload.cc
                   PROPERTIES COMPILE_FLAGS
-                  "-g ${COMMON_ARGS} ${SIMD_BACKEND} ${ISA_SPECIFIC_ARGS}" )
+                  "${COMMON_ARGS} ${SIMD_BACKEND} ${ISA_SPECIFIC_ARGS}" )
 
   add_executable ( envutil
                    envutil_main.cc envutil_basic.cc envutil_payload.cc)

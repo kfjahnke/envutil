@@ -208,6 +208,10 @@ void arguments::init ( int argc , const char ** argv )
     .help("horiziontal field of view of cubemap input (default: 90)")
     .metavar("ANGLE");
 
+  ap.arg("--cbm_prj PRJ")
+    .help("projection for cubemaps (default: cubemap - alt. biatan6)")
+    .metavar("PRJ");
+
   ap.arg("--support_min EXTENT")
     .help("minimal additional support around the cube face proper")
     .metavar("EXTENT");
@@ -365,6 +369,10 @@ void arguments::init ( int argc , const char ** argv )
                   &mount_image , &mount_prj_str, &mount_hfov, &mount_yaw, &mount_pitch, &mount_roll)
     .help("load oriented non-environment source image") ;
 
+  ap.arg("--fct_file FCT_FILE")
+    .help("read multi-facet environment from FCT_FILE")
+    .metavar("FCT_FILE");
+
   if (ap.parse(argc, argv) < 0 ) {
       std::cerr << ap.geterror() << std::endl;
       ap.print_help();
@@ -382,6 +390,7 @@ void arguments::init ( int argc , const char ** argv )
   output = ap["output"].as_string ( "" ) ;
   seqfile = ap["seqfile"].as_string ( "" ) ;
   twf_file = ap["twf_file"].as_string ( "" ) ;
+  fct_file = ap["fct_file"].as_string ( "" ) ;
   codec = ap["codec"].as_string ( "libx265" ) ; 
   mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
   fps = ap["fps"].get<int>(60);
@@ -418,10 +427,12 @@ void arguments::init ( int argc , const char ** argv )
   pitch = ap["pitch"].get<float>(0.0);
   roll = ap["roll"].get<float>(0.0);
   prj_str = ap["projection"].as_string ( "rectilinear" ) ;
+  cbm_prj_str = ap["cbm_prj"].as_string ( "cubemap" ) ;
 
   if ( prefilter_degree < 0 )
     prefilter_degree = spline_degree ;
 
+  // determine output projection
   int prj = 0 ;
   for ( const auto & p : projection_name )
   {
@@ -430,8 +441,28 @@ void arguments::init ( int argc , const char ** argv )
     ++ prj ;
   }
   projection = projection_t ( prj ) ;
+
+  // optionally, determine cubeface projection: cubemap = rectilinear,
+  // biatan6 = biatan6
+
+  prj = 0 ;
+  for ( const auto & p : projection_name )
+  {
+    if ( p == cbm_prj_str )
+      break ;
+    ++ prj ;
+  }
+  cbm_prj = projection_t ( prj ) ;
+  assert ( cbm_prj == CUBEMAP || cbm_prj == BIATAN6 ) ;
+
+  if ( verbose )
+    std::cout << "cbm_prj = " << projection_name [ cbm_prj ]
+              << std::endl ;
+
   if ( mount_image != std::string() )
   {
+    // determine projection of mounted image input
+
     prj = 0 ;
     for ( const auto & p : projection_name )
     {
@@ -442,10 +473,18 @@ void arguments::init ( int argc , const char ** argv )
     mount_prj = projection_t ( prj ) ;
 
     // we set 'input' to the name of the mounted image; we use
-    // 'input' ad id for the environment 'asset', so we can't
+    // 'input' as id for the environment 'asset', so we can't
     // just leave it blank.
 
     input = mount_image ;
+  }
+  else if ( fct_file != std::string() )
+  {
+    // we set 'input' to the name of the mounted image; we use
+    // 'input' as id for the environment 'asset', so we can't
+    // just leave it blank.
+
+    input = fct_file ;
   }
   else
   {
@@ -454,7 +493,7 @@ void arguments::init ( int argc , const char ** argv )
   assert ( output != std::string() ) ;
   if ( width == 0 )
     width = 1024 ;
-  if ( projection == CUBEMAP )
+  if ( projection == CUBEMAP || projection == BIATAN6 )
   {
     height = 6 * width ;
     assert ( hfov >= 90.0 ) ;
@@ -502,6 +541,11 @@ void arguments::init ( int argc , const char ** argv )
     mount_pitch *= M_PI / 180.0 ;
     mount_roll *= M_PI / 180.0 ;
   }
+  else if ( fct_file != std::string() )
+  {
+    std::cout << "input is a multi-facet file: "
+              << fct_file << std::endl ;
+  }
   else
   {
     // some member variables in the args object are gleaned from
@@ -536,7 +580,7 @@ void arguments::init ( int argc , const char ** argv )
         env_width = spec.width ;
         env_height = spec.height * 6 ;
         nchannels = spec.nchannels ;
-        env_projection = CUBEMAP ;
+        env_projection = cbm_prj ;
         if ( ctc )
         {
           double half_md = tan ( cbmfov / 2.0 ) ;
@@ -582,7 +626,8 @@ void arguments::init ( int argc , const char ** argv )
             std::cout << "ctc is set, adjusted cbmfov to "
                       << ( cbmfov * 180.0 / M_PI ) << std::endl ;
         }
-        env_projection = CUBEMAP ;
+        env_projection = cbm_prj ;
+        // TODO: might be slightly different for biatan6, check!
         env_step = cbmfov / env_width ;
       }
       else
@@ -641,7 +686,7 @@ void arguments::init ( int argc , const char ** argv )
     pitch *= M_PI / 180.0 ;
     roll *= M_PI / 180.0 ;
 
-    if ( ( projection == CUBEMAP ) && ctc )
+    if ( ( projection == CUBEMAP || projection == BIATAN6 ) && ctc )
     {
       double half_md = tan ( hfov / 2.0 ) ;
       half_md *= ( ( width + 1.0 ) / width ) ;

@@ -492,6 +492,14 @@ protected:
 // both the old and the new cargo at the same time until the old
 // cargo is destructed.
 
+// TODO: I think using the object as-is is cumbersome due to
+// the no-copy policy. But if one were to create a shared_ptr to
+// the asset, it could be used and passed around and would still
+// be unique - and if the last copy of the shared_ptr goes out of
+// scope, the asset would also be destructed. The shared_ptr(s)
+// can be used in containers, whereas asset_t cannot (due to the
+// no-copy policy).
+
 template < typename id_t = std::string >
 struct asset_t
 {
@@ -514,14 +522,14 @@ struct asset_t
 
   asset_t ( const asset_t & rhs ) = delete ;
   
-  // have without arguments returns true if p_cargo is not nullptr
+  // have without arguments returns p_cargo
 
   void * has()
   {
     return p_cargo ;
   }
 
-  // have with an id_t argument returns true if the contained id
+  // have with an id_t argument returns p_cargo if the contained id
   // is the same as the one passed
 
   void * has ( const id_t & which )

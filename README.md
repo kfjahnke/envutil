@@ -208,6 +208,7 @@ envutil --help gives a summary of command line options:
       --height EXTENT                height of the output (default: same as width)
     additional input parameters for cubemap input:
       --cbmfov ANGLE                 horiziontal field of view of cubemap input (default: 90)
+      --cbm_prj PRJ                  in-plane transformation for cube faces (default: "cubemap")
       --support_min EXTENT           minimal additional support around the cube face proper
       --tile_size EXTENT             tile size for the internal representation image
       --ctc CTC                      pass '1' to interpret cbmfov as center-to-center (default 0)
@@ -318,8 +319,11 @@ produce video output to the given filename.
 ## --projection PRJ  target projection
 
 Pass one of the supported output projections: "spherical", "cylindrical",
-"rectilinear", "stereographic", "fisheye" or "cubemap". The default is
-"rectilinear".
+"rectilinear", "stereographic", "fisheye", "cubemap" or "biatan6". The
+default is "rectilinear". "biatan6" is a recent addition: it's a cubemap
+with an additional in-plane transformation to sample the sphere more
+evenly than can be done with rectilinear cube faces. See the remarks on
+biatan6 in the "--cbm_prj PRJ" chapter.
 
 ## --hfov ANGLE      horiziontal field of view of the output (in degrees)
 
@@ -364,6 +368,53 @@ field of view of the cube face images with this parameter. The default is
 precisely ninety degrees, but values greater than ninety are allowed as well.
 You can create such wider-angle cubemaps by passing --hfov greater than ninety
 when creating a cubemap with envutil.
+
+## --cbm_prj PRJ          in-plane transformation for cube faces (default: "cubemap")
+
+On top of the default, "cubemap", which does not use an in-plane transformation
+(the cube faces are in rectilinear transformation and used just so), envutil
+now supports "biatan6" in-plane transformation. This is a transformation which,
+when used to create a cubemap, The result is a compression of the content
+towards the edges of the cube faces (where it is normally unduly stretched
+because of the rectilinear projection) and a widening in the center, where
+there is now more space due to the compression near the edges. Where the
+sample steps along a horizon line (central horizontal of one of the surrounding
+four cube faces) correspond with rays whose angular difference decreases
+towards the edges with rectilinear projection, with this in-plane 
+transformation the corresponding rays are all separated by the same angular
+step. There is still a distortion which can't be helped (we're modelling
+a curved 2D manifold on a plane), but it amounts to a maximum of 4/pi in
+the center of a vertical near a horizontal edge (or vice versa) due to the
+scaling factor used both ways. Why 'biatan6'? because it uses the arcus tangens
+(atan) in both the vertical and horizontal of all six cube faces. The tangens
+and it's inverse, the arcus tangens, translate between an angle and the length
+of a tangent - the latter is what's used by the rectlinear projection, which
+projects to the tangent plane, and is the default for cube faces. Using
+equal angular steps is closer to an even sampling of the sphere. The in-plane
+transformation functions are used on the in-plane coordinates of the cube faces,
+which, in envutil, range from -1 to 1 in 'model space' (the cube is modelled
+to have unit center-to-plane distance, so as to just enclose a unit sphere).
+There is a pair of them, which are inverses of each other, meaning that
+applying them to a 2D coordinate one after the other will reproduce the
+initial value. These are the two functions:
+
+    float ( 4.0 / M_PI ) * atan ( in_face ) ;
+
+    tan ( in_face * float ( M_PI / 4.0 ) ) ;
+
+Using transcendental functions (tan, atan) is costly in terms of CPU
+cycles, but both functions have SIMD implementations which make the cost
+acceptable, because they can still process several values at once. An
+alternative would be to use a pair of two functions roughly modelling
+the two curves above, but with the same property of being inverses of
+each other. I leave this option for further development - another idea
+would be to introduce the in-plane transformation as a functional paramter,
+so that user code can 'slot in' such a transformation.
+The advantage of the 'biatan' transformation is that it transforms each
+2X2 square to another 2X2 square - if one were to use e.g. spherical
+transformation, there would be redundant parts in several images. So
+with biatan transformation, each point in the cubemap has precisely one
+correspondence on the sphere, just as with rectilinear projection. 
 
 ## --support_min EXTENT  minimal additional support around the cube face proper
 
@@ -543,7 +594,8 @@ currently three modes of interpolation:
 
     -1 - use OpenImageIO's 'environemnt' or 'texture' function for lookup.
          without additional arguments, this will use a sophisticated
-         interpolator with good antialiasing and bicubic interpolation.
+         interpolator with good antialiasing and bicubic interpolation,
+         but without prefiltering - the output will look slightly blurred.
 
     -2 - use 'twining' - this is a method which first super-samples and then
          combines several pixels to one output pixel ('binning'). This is my
@@ -559,16 +611,64 @@ currently three modes of interpolation:
          the 'substrate' of the twining operator will be a cubic b-spline,
          rather than a degree-1 b-spline (a.k.a bilinear interpolation).
 
+In general, producing visible output is often a two-step process. The first
+step is to provide some sort of 'ground truth' - an internal representation
+of the image data which will provide a specific value for a specific pick-up
+location. This step tends to aim for speed and precision, without taking
+into account considerations like aliasing or artifacts introduced by the
+interpolation. The signal which is provided by the first step is also
+continuous due to interpolation. Sometimes, the first stage will not use
+true interpolation, meaning that the value of the first-stage signal is
+not necessarily equal to the image data at discrete coordinates. If so,
+the signal is typically blurred - e.g. by using a b-spline kernel on the
+raw data without adequate prefiltering.
+
+The second step - if present - operates on the first-stage signal. This step
+is often added to avoid problems from using the first-stage signal directly.
+The most important effect which the second stage tries to produce is
+anti-aliasing. If the output is a scaled-down version of the input, direct
+interpolation at the pick-up points will produce aliasing where the input
+signal has high-frequency content. A typical strategy to avoid this is to
+consider a section of the first-stage signal corresponding to the 'footprint'
+of each target pixel and form a weighted sum over source pixels in that area.
+The precise way of how this is done varies - OIIO can use an elliptic shape
+placed over the first-stage signal and produces an average over this area,
+whereas 'twining' gathers several point-samples in this area and forms a
+weighted sum. Both methods produce similar results.
+
+A third strategy adds scaled-down versions of the image data, which are then
+used to provide 'ground truth' for rendering jobs which would down-scale
+from the original resolution. The archetypal construct for this strategy is
+an 'image pyramid' - a set of images where each has half the resolution
+of the one 'below' it. OIIO can use this strategy (look for mip-mapping),
+and it's advantage is that pickup kernels can remain relatively small,
+because there are fewer pixels to form a sum over to avoid aliasing.
+Other rendering schemes in envutil do not currently use image pyramids;
+twining deals with the aliasing problem by picking adequately large
+kernels directly on the first-stage signal. It would be feasible, though,
+to add pyramid schemes. One problem with image pyramids is the fact that
+they have to be produced at all: they take up memory and generating them
+costs computational resources. envutil often does 'one-shot' jobs, and
+rather than producing an image pyramid with *all* resolutions, producing
+output with just one resolution - even if that requires a large kernel -
+is usually more efficient. If an image pyramid is present, it's an option
+to mix 'ground truth' data from two adjacent pyramid levels for output
+whose resolution is between that of the two pyramid levels (look e.g.
+for 'trilinear interpolation'). twining, which uses a scalable filter,
+can adapt the filter size to the change in resolution, so it doesn't use
+this method.
+
 Why use negative values for ITP for the second and third mode? This is similar
 to the values used in lux for 'decimators' - in lux, positive values are
 reserved for degrees of a b-spline reconstruction filter used as low-pass
 filter. bilinear interpolation is the same as a degree-1 b-spline, hence the
 value 1 for bilinear interpolation. In envutil, I have decided against using
 positive 'itp' values from 'meaning' b-splines -here, you pass --itp 1 for
-all splines, and --degree and --prefilter additionally condition the spline.
+all splines, and --degree and, optionally, --prefilter additionally condition
+the spline:
 
-##  --prefilter DEG   prefilter degree (>= 0) for the b-spline
 ##  --degree DEG      degree of the b-spline (>= 0)
+##  --prefilter DEG   prefilter degree (>= 0) for the b-spline
 
 Images created with itp set to 1 or -2 both use b-splines as their substrate.
 If you don't pass --degree or --prefilter, a degree-1 b-spline is used - this
@@ -586,7 +686,7 @@ degree than spline degree) or to sharpen them (higher prefilter degree than
 spline degree). A disadvantage of interpolating splines is that they will
 produce ringing artifacts if the input signal isn't band-limited to half the
 Nyquist frequency. With raw images straight from the camera this is usually
-the case, but processed or generated images ofthen have high frequency content
+the case, but processed or generated images often have high frequency content
 which will result in these artifacts, which become annoyingly visible at high
 magnifications. One way to deal with this problem is to accept a certain amount
 of smoothing by omitting the prefilter - so, passing --prefilter 0 and --degree
@@ -621,9 +721,9 @@ twining filter (obeying the sampling theorem), the twining filter needs to
 have sufficiently many coefficients spread 'quite evenly' over the pickup
 area to avoid sampling at lower rates than the source texture's sampling
 rate. While OIIO's filter forms a weighted sum over pixels in one of the
-texture's mip levels, twining relies on a bilinear interpolation of the
+texture's mip levels, twining relies on a b-spline interpolation of the
 originally-sized texture as it's substrate. If the sub-pickup locations are
-'too close' to each other, the shortcomings of the bilinear interpolation
+'too close' to each other, the shortcomings of a bilinear interpolation
 may 'shine through' if the transformation magnifies the image (you'll see
 the typical star-shaped artifacts). If the sub-pick-ups are 'too far apart',
 you may notice aliasing - of course depending on the input's spectrum as well.
@@ -678,19 +778,18 @@ and any kind of non-recursive filter can be realized. envutil applies this
 filter to 3D ray coordinates rather than to the 2D coordinates which occur
 after projecting the 3D ray coordinate to a source image coordinate, so
 the effect is similar to what you get from OIIO's 'environment' lookup
-with the elliptic filter, but not limited to full spherical sources -
-it will work just the same with cubemap or mounted image input.
+with the elliptic filter.
 
 Because the two vectors, xv and yv, are recalculated for every contributing
 coordinate, the filer adapts to the location, and handles varying local
 geometry within it's capability: the sampling theorem still has to be
 obeyed insofar as generated sub-pickups in a cluster mustn't spread out
 too far and when they are too close, shortcomings of the underlying
-bilinear interpolation will show. And there have to be sufficiently many
+interpolation may show. And there have to be sufficiently many
 sub-pickups. Automatic twining produces a 'reasonable' filter which
 tries to address all these issues - play with automatic twining and
 various magnifications to see what envutil comes up with (pass -v
-to see the filer coefficients).
+to see the filter coefficients).
 
 ## --twine_normalize   normalize twining filter weights gleaned from a file
 
@@ -742,7 +841,7 @@ try and pass a twine_width up to the magnitude of the scale change,
 or rely on automatic twining, which calculates a good value for you.
 On the other hand, passing a twine_width smaller than 1.0 will make the
 kernel proportionally smaller, producing 'sharper' output, at the cost of
-poptentially producing more aliasing.
+potentially producing more aliasing.
 
 twine_width is the only one of the twining-related options which also
 affect a twining filter read from a file - apart from --twf_file itself,
@@ -753,10 +852,47 @@ in the filter geometry being unchanged.
 Input with low resolution is often insufficiently band-limited which will
 result in artifacts in the output or become very blurred when you try to
 counteract the artifacts with excessive blurring. There's little to be
-gained from scaling up anyway - the lost detail can't be regained. If
-you don't get satisfactory results with twining and adequate twine_width,
+gained from scaling up anyway - the lost detail can't be regained.
+Scaling up with a b-spline of degree two or higher is a good idea, but
+to see why this is so, a bit of explanation is needed. Most image viewers
+produce up-scaled views by rendering the source image's pixels as small
+rectangles, producing a 'pixelated' view. A b-spline rendition is smooth,
+though. This leads to the common misconception that the b-spline is
+somehow 'blurred' compared to the 'pixelated' rendition. If the b-spline
+is made from properly prefiltered coefficients, there is no blurring:
+the smoothness is just so much as to adequately represent the uncertainty
+created by sampling the ambient information. The 'pixelated' look shows
+you the size of the pixels, but a lot of it's visual quality consists
+of artifacts: namely the distinct rectangular shapes of the 'pixels'
+with discontinuities where one pixel borders on the next one. These
+artifacts are often the most prominent part of a 'pixelated' image,
+and users are often surprised that the seemingly 'blurred' image from
+a b-spline rendition is easier to decipher than the 'pixelated' one.
+In fact, if 'pixelation' is used to make faces unrecognizable and the
+size of the 'pixels' is not chosen large enough, *smoothing* the
+'pixelated' image may reveal a recognizable face, because the information
+is no longer 'spoiled' by the high-frequency artifacts resulting from
+the artifical rectangles in the pixelated area. Only if prefiltering
+is omitted blurring does indeed happen. envutil decouples the prefilter
+and spline degree, so you can observe the effects of picking each of
+them individually.
+
+If you don't get good results with twining and adequate twine_width,
 you may be better off with one of the better OIIO interpolators, e.g.
-bicubic.
+bicubic. If the signal is sufficiently band-limited, using a b-spline with
+a degree of two or higher is a good idea: there are no more star-shaped
+artifacts, and for magnifying views, evaluating the spline yields a good
+result without further processing. If the signal is not band-limited, but
+you can live with slight blurring, a degree-2 b-spline with no prefiltering
+(--prefilter 0) is often a good compromise, especially if the resolution
+of the input is 'excessive', like the sensor data from very small sensors
+and very high resolution - and this very high resolution is not actually
+exploited (or usable) to provide fine detail. AFAICT, OIIO's spline-based
+interpolators (e.g. bicubic) don't use prefiltering and therefore produce
+noticeable blurring. Try a b-spline with proper prefiltering and no twining
+(--itp 1 -degree 3) to see the difference - you'll see no blurring, but if
+the view magnifies and the signal isn't band-limited, you may see ringing
+artifacts.
 
 The twine_width parameter also only affects single-image output - for image
 sequences, it's set automatically to fit the relation of input and output.

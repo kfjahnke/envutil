@@ -103,6 +103,7 @@ typedef enum
   STEREOGRAPHIC ,
   FISHEYE ,
   CUBEMAP ,
+  BIATAN6 ,
   PRJ_NONE
 }  projection_t ;
 
@@ -113,7 +114,8 @@ const char * const projection_name[]
   "rectilinear" ,
   "stereographic" ,
   "fisheye" ,
-  "cubemap"
+  "cubemap" ,
+  "biatan6"
 } ;
 
 extern long rt_cumulated ;
@@ -324,6 +326,7 @@ struct arguments
   std::string input ;
   std::string output ;
   std::string mount_image ;
+  std::string fct_file ;
   double hfov ;
   float mount_hfov ;
   std::size_t width ;
@@ -332,8 +335,10 @@ struct arguments
   std::size_t mount_height ;
   std::string prj_str ;
   std::string mount_prj_str ;
+  std::string cbm_prj_str ;
   projection_t projection ;
   projection_t mount_prj;
+  projection_t cbm_prj;
   float mount_yaw ;
   float mount_pitch ;
   float mount_roll ;

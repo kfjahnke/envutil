@@ -1140,6 +1140,202 @@ public:
   }
 } ;
 
+// This is a variation on cubemap_stepper, where the planar coordinate
+// is modified to produce a more even sampling over the spherical
+// surface. cubemaps use rectilinear projection, which produces
+// denser sampling near the edges. Here, the sampling proceeds
+// along equal angular steps in the horizontal and vertical,
+// resulting in steps which become larger towards the edges in the
+// plane (due to the tangens growing faster than the angle).
+
+template < typename T ,     // fundamental type
+           std::size_t L >  // lane count
+struct biatan6_stepper
+: public stepper_base < T , L >
+{
+  typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
+  using typename base_t::crd_t ;
+  using typename base_t::crd3_t ;
+  using typename base_t::crd3_v ;
+  using typename base_t::f_v ;
+  using base_t::planar ;
+  using base_t::init ;
+  using base_t::increase ;
+  using base_t::width ;
+
+  // we have three 3D vectors of unit length. The are orthogonal and
+  // can be produced e.g. by applying a rotational quaternion to the
+  // three cardinal vectors (1,0,0), (0,1,0), (0,0,1)
+
+  const crd3_t xx ; 
+  const crd3_t yy ;
+  const crd3_t zz ;
+  const int dy ;
+  int face ;
+
+  // some helper variables, used for efficiency.
+
+  crd3_v ccc , vvv ;
+  T section_md , refc_md ;
+
+public:
+
+  biatan6_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
+                       int _width ,
+                       int _height ,
+                       T _a0 ,
+                       T _a1 ,
+                       T _b0 ,
+                       T _b1 ,
+                       int _dy = 0
+                     )
+  : xx ( _xx ) ,
+    yy ( _yy ) ,
+    zz ( _zz ) ,
+    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ) ,
+    section_md ( _a1 - _a0 ) ,
+    refc_md ( ( _a1 - _a0 ) / 2.0 ) ,
+    dy ( _dy )
+  { }
+
+  // init is used to initialize the vectorized value to the value
+  // it should hold at the beginning of the run. The discrete
+  // coordinate 'crd' gives the location of the first value, and
+  // this function infers the start value from it.
+
+  void init ( crd3_v & trg , const crd_t & crd )
+  {
+    // the base type's init initializes 'planar'
+
+    init ( crd ) ;
+
+    // when using derivative_stepper, two additional steppers are
+    // employed: one where the coordinate is shifted by one to the
+    // right and one where it's shifted by one downwards. In the
+    // cubemap stepper, this would result in the latter value being
+    // calculated with a different face index if
+    // crd[1] % ( width - 1 ) is zero. The 'dy' term is to counteract
+    // this problem. It's passed to the c'tor and the face index is
+    // calculated with the correct crd[1].
+
+    face = ( crd[1] + dy ) / width ;
+    assert ( face >= 0 && face <= 5 ) ;
+
+    // when traversing a line of a cubemap image, the cube face
+    // remains the same. The variation is along the planar
+    // horizontal, which, for the given cube face, is collinear
+    // with one of the three vectors xx, yy or zz. The remaining
+    // two vectors can be contracted into a constant expression.
+    // Here we get maximal benefits from the invariants: once set
+    // up, the code to produce the rays is as simple as for the
+    // rectilinear case. The set-up is quite complex, though.
+
+    // find p1, the in-face coordinate derived from the planar
+    // y coordinate in planar[1]
+
+    auto p1 = planar[1] + ( 3 - face ) * section_md - refc_md ;
+    auto p0 = planar[0] ;
+
+    // instead of using p0 and p1 directly (which would be right
+    // for rectilinear cube faces) we scale from +/- 1 to +/- pi/4
+    // and calculate the tangens. The result is again in +/- 1.
+    // This is the inverse in-plane function to the one used on
+    // 'biatan6'-type cubemap input, namely: atan ( p ) * 4 / pi
+    // The result is a compression of the content towards the edges
+    // of the cube faces (where it is normally unduly stretched
+    // because of the rectilinear projection) and a widening in
+    // the center, where there is now more space due to the
+    // compression near the edges. Where the sample steps along
+    // a horizon line (central horizontal of one of the surrounding
+    // four cube faces) correspond with rays whose angular difference
+    // decreases towards the edges with rectilinear projection, with
+    // this in-plane transformation the corresponding rays are all
+    // separated by the same angular step. There is still a distortion
+    // which can't be helped (we're modelling a curved 2D manifold
+    // on a plane), but it amounts to a maximum of 4/pi in the
+    // center of a vertical near a horizontal edge (or vice versa)
+    // due to the scaling factor used both ways.
+
+    p1 = tan ( p1 * float ( M_PI / 4.0 ) ) ;
+    p0 = tan ( p0 * float ( M_PI / 4.0 ) ) ;
+
+    // now we set up two vectors: ccc for the part which remains
+    // constant throughout the segment, and vvv, which is in the
+    // direction of the variable component given by planar[0]
+    // the code is built along the case switch in ir_to_ray
+    // (in geometry.h) - we could use this functor here, but
+    // that would not exploit the invariants, which is the
+    // whole point of setting up the stepper.
+
+    switch ( face )
+    {
+      case CM_LEFT :
+        ccc = -1.0 * xx + p1 * yy ;
+        vvv = zz ;
+        break ;
+      case CM_RIGHT :
+        ccc =  1.0 * xx + p1 * yy ;
+        vvv = - zz ;
+        break ;
+      case CM_TOP :
+        ccc = -1.0 * yy - p1 * zz ;
+        vvv = - xx ;
+        break ;
+      case CM_BOTTOM :
+        ccc =  1.0 * yy + p1 * zz ;
+        vvv = - xx ;
+        break ;
+      case CM_FRONT :
+        ccc =  p1 * yy + 1.0 * zz ;
+        vvv = xx ;
+        break ;
+      case CM_BACK :
+      default :
+        ccc =  p1 * yy - 1.0 * zz ;
+        vvv = - xx ;
+        break ;
+    }
+
+    // now we can produce the target value with just three
+    // multiplications and three additions:
+
+    trg = ccc + p0 * vvv ;
+  }
+
+  // increase modifies it's argument to contain the next value
+
+  void increase ( crd3_v & trg )
+  {
+    // the base class increase increases planar[0]
+
+    increase() ;
+
+    trg = ccc + ( tan ( planar[0] * float ( M_PI / 4.0 ) ) ) * vvv ;
+  }
+
+  // the capped variants:
+
+  void init ( crd3_v & trg ,
+              const crd_t & crd ,
+              const std::size_t & cap )
+  {
+    init ( trg , crd ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+
+  void increase ( crd3_v & trg ,
+                  const std::size_t & cap ,
+                  const bool & _stuff = true )
+  {
+    increase ( trg ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+} ;
+
 // variant of stepper which yields the ray coordinate for
 // the pick-up location itself and two more locations, which
 // are one canonical step in x- or y-direction away. The caller

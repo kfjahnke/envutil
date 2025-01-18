@@ -629,7 +629,7 @@ struct ir_to_ray_t
   { }
 
   // incoming, we have 2D model space coordinates.
-  // Tthis functor takes centered planar cordinates - note the
+  // This functor takes centered planar cordinates - note the
   // addition of ul2c at the beginning of the eval functions, which
   // converts the coordinates from to center-based to ul-based for
   // processing.

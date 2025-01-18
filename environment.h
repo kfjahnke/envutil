@@ -492,7 +492,7 @@ struct repix
 // with widened support, to provide for easy mip-mapping and
 // interpolation.
 
-template < std::size_t nchannels >
+template < std::size_t nchannels , projection_t cbm_prj >
 struct sixfold_t
 : public metrics_t
 {
@@ -945,9 +945,9 @@ struct sixfold_t
     {
       // get a pointer to the upper left of the cube face 'proper'
 
-      auto * p_frame = p_base + face * section_px * store.strides[1]
-                              + left_frame_px * store.strides[1]
-                              + left_frame_px * store.strides[0] ;
+      auto * p_frame =   p_base 
+                       + face * section_px * store.strides[1]
+                       + ( left_frame_px * store.strides ) .sum() ;
 
       // get a zimt view to the current cube face
 
@@ -1014,7 +1014,7 @@ struct sixfold_t
   : public zimt::unary_functor
       < v2i_t , zimt::xel_t < float , nchannels > , LANES >
   {
-    const sixfold_t < nchannels > & sf ;
+    const sixfold_t < nchannels , cbm_prj > & sf ;
     const int face ;
     const int ithird ;
 
@@ -1026,12 +1026,12 @@ struct sixfold_t
     // TODO: when specializing with 1, invocation with
     // --spline_degree 0 crashes.
 
-    zimt::evaluator < crd2_t , px_t , LANES , 0 > ev ;
+    zimt::evaluator < crd2_t , px_t , LANES , 1 > ev ;
 
     // note the factor of two in the initialization of 'ithird':
     // incoming coordinates are doubled (!) for the purpose at hand.
 
-    fill_frame_t ( const sixfold_t < nchannels > & _cubemap ,
+    fill_frame_t ( const sixfold_t < nchannels , cbm_prj > & _cubemap ,
                    const int & _face )
     : sf ( _cubemap ) ,
       face ( _face ) ,
@@ -1107,6 +1107,16 @@ struct sixfold_t
       i_v fv ;
       crd2_v in_face ;
       ray_to_cubeface < float , LANES > ( crd3 , fv , in_face ) ;
+
+      // initially I coded to use the in-plane transformation here:
+
+      // if constexpr ( cbm_prj == BIATAN6 )
+      //   in_face = float ( 4.0 / M_PI ) * atan ( in_face ) ;
+
+      // but that's an error: the incoming image is already in
+      // the given in-plane representation, and we're only copying
+      // content from a different cube face.
+
       crd2_v pickup ;
       sf.get_pickup_coordinate_px ( fv , in_face , pickup ) ;
 
@@ -1211,9 +1221,8 @@ struct sixfold_t
                              long(left_frame_px) } ;
         bill.upper_limit = { long(section_px) ,
                              long(section_px) - long(right_frame_px) } ;
+        zimt::process ( shp , ls , fill_frame , st , bill ) ;
       }
-
-      zimt::process ( shp , ls , fill_frame , st , bill ) ;
     }
   }
 
@@ -1252,7 +1261,7 @@ struct sixfold_t
 
 // functor to obtain pixel values for ray coordinates from a cubemap
 
-template < std::size_t nchannels >
+template < std::size_t nchannels , projection_t cbm_prj >
 struct cbm_to_px_t
 : public zimt::unary_functor
    < zimt::xel_t < float , 3 > ,
@@ -1266,13 +1275,13 @@ struct cbm_to_px_t
   typedef zimt::xel_t < float , nchannels > px_t ;
   typedef zimt::simdized_type < px_t , LANES > px_v ;
 
-  sixfold_t < nchannels > cubemap ;
+  sixfold_t < nchannels , cbm_prj > cubemap ;
 
   // cbm_to_px_t's c'tor obtains a const reference to the sixfold_t
   // object holding pixel data. It receives 3D ray coordinates and
   // produces pixel values gleaned with bilinear interpolation.
 
-  cbm_to_px_t ( const sixfold_t < nchannels > & _cubemap )
+  cbm_to_px_t ( const sixfold_t < nchannels , cbm_prj > & _cubemap )
   : cubemap ( _cubemap )
   { }
 
@@ -1284,12 +1293,15 @@ struct cbm_to_px_t
     crd2_v in_face ;
     ray_to_cubeface < float , LANES > ( crd3 , face , in_face ) ;
 
+    if constexpr ( cbm_prj == BIATAN6 )
+      in_face = float ( 4.0 / M_PI ) * atan ( in_face ) ;
+
     cubemap.cubemap_to_pixel ( face , in_face , px ) ;
   }
 
 } ;
 
-template < std::size_t nchannels >
+template < std::size_t nchannels , projection_t cbm_prj >
 struct cbm_to_px_t2
 : public zimt::unary_functor
    < zimt::xel_t < float , 9 > ,
@@ -1305,7 +1317,7 @@ struct cbm_to_px_t2
   typedef zimt::xel_t < float , nchannels > px_t ;
   typedef zimt::simdized_type < px_t , LANES > px_v ;
 
-  sixfold_t < nchannels > cubemap ;
+  sixfold_t < nchannels , cbm_prj > cubemap ;
 
   // for lookup with OIIO's texture system, we need batch options.
   // I'd keep them in the code which actually uses them, but the
@@ -1325,7 +1337,7 @@ struct cbm_to_px_t2
   // object holding pixel data. It receives 3D ray coordinates and
   // produces pixel values gleaned with bilinear interpolation.
 
-  cbm_to_px_t2 ( const sixfold_t < nchannels > & _cubemap ,
+  cbm_to_px_t2 ( const sixfold_t < nchannels , cbm_prj > & _cubemap ,
                  const OIIO::TextureOptBatch & _batch_options )
   : cubemap ( _cubemap ) ,
     scale_s ( _cubemap.model_to_px / _cubemap.store.shape[0] ) ,
@@ -1359,6 +1371,13 @@ struct cbm_to_px_t2
       ( dy , face , in_face_01 ) ;
 
     // obtain the pickup coordinate in texture units (in [0,1])
+
+    if constexpr ( cbm_prj == BIATAN6 )
+    {
+      in_face_00 = float ( 4.0 / M_PI ) * atan ( in_face_00 ) ;
+      in_face_10 = float ( 4.0 / M_PI ) * atan ( in_face_10 ) ;
+      in_face_01 = float ( 4.0 / M_PI ) * atan ( in_face_01 ) ;
+    }
 
     crd2_v c3_tx ;
     cubemap.get_pickup_coordinate_tx ( face , in_face_00 , c3_tx ) ;
@@ -1507,18 +1526,36 @@ public:
                 << std::endl ;
     }
 
-    sixfold_t<C> sf ( args.env_width , args.cbmfov ,
-                      args.support_min , args.tile_size ) ;
-    if ( args.multiple_input )
-      sf.load ( args.cfs.get_filenames() ) ;
-    else
-      sf.load ( inp ) ;
-    inp->close() ;
-    sf.mirror_around() ;
-    sf.fill_support() ;
-    sf.gen_texture ( args.tsoptions ) ;
+    if ( args.cbm_prj == CUBEMAP )
+    {
+      sixfold_t < C , CUBEMAP > sf ( args.env_width , args.cbmfov ,
+                                     args.support_min , args.tile_size ) ;
+      if ( args.multiple_input )
+        sf.load ( args.cfs.get_filenames() ) ;
+      else
+        sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support() ;
+      sf.gen_texture ( args.tsoptions ) ;
 
-    env =   cbm_to_px_t2 < C > ( sf , batch_options ) ;
+      env =   cbm_to_px_t2 < C , CUBEMAP > ( sf , batch_options ) ;
+    }
+    else
+    {
+      sixfold_t < C , BIATAN6 > sf ( args.env_width , args.cbmfov ,
+                                     args.support_min , args.tile_size ) ;
+      if ( args.multiple_input )
+        sf.load ( args.cfs.get_filenames() ) ;
+      else
+        sf.load ( inp ) ;
+      inp->close() ;
+      sf.mirror_around() ;
+      sf.fill_support() ;
+      sf.gen_texture ( args.tsoptions ) ;
+
+      env =   cbm_to_px_t2 < C , BIATAN6 > ( sf , batch_options ) ;
+    }
   }
 
   void eval ( const typename zimt::grok_type < ray_t , px_t , L >::in_v & in ,
@@ -2257,6 +2294,8 @@ struct environment
         }
         default:
         {
+          std::cerr << "unknown projection: "
+                    << args.mount_prj_str << std::endl ;
           assert ( false ) ;
           break ;
         }
@@ -2304,18 +2343,36 @@ struct environment
           std::cout << "environment has 1:6 aspect ratio, assuming cubemap"
                     << std::endl ;
         }
-        sixfold_t<C> sf ( args.env_width , args.cbmfov ,
-                          args.support_min , args.tile_size ) ;
-        if ( args.multiple_input )
-          sf.load ( args.cfs.get_filenames() ) ;
-        else
-          sf.load ( inp ) ;
-        inp->close() ;
-        sf.mirror_around() ;
-        sf.fill_support( ) ;
-        sf.prefilter ( args.prefilter_degree ) ;
+        if ( args.cbm_prj == CUBEMAP )
+        {
+          sixfold_t < C , CUBEMAP > sf ( args.env_width , args.cbmfov ,
+                                         args.support_min , args.tile_size ) ;
+          if ( args.multiple_input )
+            sf.load ( args.cfs.get_filenames() ) ;
+          else
+            sf.load ( inp ) ;
+          inp->close() ;
+          sf.mirror_around() ;
+          sf.fill_support( ) ;
+          sf.prefilter ( args.prefilter_degree ) ;
 
-        env =   cbm_to_px_t < C > ( sf ) ;
+          env =   cbm_to_px_t < C , CUBEMAP > ( sf ) ;
+        }
+        else
+        {
+          sixfold_t < C , BIATAN6 > sf ( args.env_width , args.cbmfov ,
+                                         args.support_min , args.tile_size ) ;
+          if ( args.multiple_input )
+            sf.load ( args.cfs.get_filenames() ) ;
+          else
+            sf.load ( inp ) ;
+          inp->close() ;
+          sf.mirror_around() ;
+          sf.fill_support( ) ;
+          sf.prefilter ( args.prefilter_degree ) ;
+
+          env =   cbm_to_px_t < C , BIATAN6 > ( sf ) ;
+        }
       }
       else
       {

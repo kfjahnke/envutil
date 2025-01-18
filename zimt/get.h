@@ -934,7 +934,7 @@ struct no_input
 // do still use the 'grokked' object, but it's type is hidden from
 // view - it's been 'erased'.
 // For a get_t, we need an object providing two init and two increase
-// overloads - both for the 'normal' and the capped variants if init
+// overloads - both for the 'normal' and the capped variants of init
 // and increase. Here's the class definition - it's quite a mouthful,
 // but further down there's a factory function to perform the 'grok'
 // which uses ATD, making the process simple.
@@ -1077,6 +1077,102 @@ grok_get_t < T , N , D , L > grok_get ( G grokkee )
 {
   return grok_get_t < T , N , D , L > ( grokkee ) ;
 }
+
+// confluence_t is used to form a synopsis of the values produced by
+// several get_t objects. The get_t objects are passed to confluence_t's
+// c'tor as a std::vector of grok_get_t, so the get_t objects which are
+// put to use can be of different types, but their argument types have
+// to agree, so that they can be held by the same type of grok_get_t.
+// confluence_t itself acts as a get_t. All of it's member functions
+// invoke the grok_get_t's corresponding member functions, and the
+// results are stored in a std::vector of the grok_get_t's result type
+// (a simdized datum, here called 'partial_v'). Once all the grok_get_t
+// have been invoked and src_v - the std::vector of partial_v - is filled,
+// the 'synopsis' callback is called. It receives a const& to the
+// confluence_t object, from which it can glean the content of it's src_v,
+// and a reference to the final result of the confluence_t's operation -
+// the datum which is passed on to the 'act' functor in the zimt::process
+// invocation. The synopsis callback handles the reduction from the set
+// of results of the 'inner' grok_get_t objects into the 'outer' result.
+// An example: if the grok_get_t objects in 'get_v' produce coordinates,
+// the synopsis function might have a set of interpolators to produce
+// pixel values from coordinates. It might feed each interpolator with
+// a corresponding coordinate and form a weighted sum of the results,
+// which it writes to the final result - the synopsis. This is received
+// by the act functor and processing continues as usual.
+
+template < typename T ,     // fundamental type
+           std::size_t N ,  // channel count
+           std::size_t D ,  // dimensions
+           std::size_t L ,  // lane count
+           typename U ,
+           std::size_t M >
+struct confluence_t
+{
+  typedef zimt::xel_t < T , N > value_t ;
+  typedef simdized_type < value_t , L > value_v ;
+  typedef zimt::xel_t < long , D > crd_t ;
+  typedef zimt::xel_t < U , M > partial_t ;
+  typedef simdized_type < partial_t , L > partial_v ;
+  typedef grok_get_t < U , M , D , L > gg_t ;
+
+  std::vector < gg_t > get_v ;
+  std::vector < partial_v > src_v ;
+  const std::size_t sz ;
+
+  typedef std::function < void ( const confluence_t & ,
+                                 value_v & ,
+                                 const std::size_t & ) > syn_f ;
+  syn_f synopsis ;
+
+  confluence_t ( const std::vector < gg_t > & _get_v ,
+                 syn_f _synopsis )
+  : src_v ( _get_v.size() ) ,
+    sz ( _get_v.size() ) ,
+    get_v ( _get_v ) ,
+    synopsis ( _synopsis )
+  { }
+
+  void init ( value_v & trg , const crd_t & crd )
+  {
+    for ( std::size_t i = 0 ; i < sz ; i++ )
+    {
+      get_v[i].init ( src_v[i] , crd ) ;
+    }
+    synopsis ( *this , trg , L ) ;
+  }
+
+  void init ( value_v & trg ,
+              const crd_t & crd ,
+              std::size_t cap )
+  {
+    for ( std::size_t i = 0 ; i < sz ; i++ )
+    {
+      get_v[i].init ( src_v[i] , crd , cap ) ;
+    }
+    synopsis ( *this , trg , cap ) ;
+  }
+
+  void increase ( value_v & trg )
+  {
+    for ( std::size_t i = 0 ; i < sz ; i++ )
+    {
+      get_v[i].increase ( src_v[i] ) ;
+    }
+    synopsis ( *this , trg , L ) ;
+  }
+
+  void increase ( value_v & trg ,
+                  std::size_t cap ,
+                  bool _stuff = true )
+  {
+    for ( std::size_t i = 0 ; i < sz ; i++ )
+    {
+      get_v[i].increase ( src_v[i] , cap , _stuff ) ;
+    }
+    synopsis ( *this , trg , cap ) ;
+  }
+} ;
 
 END_ZIMT_SIMD_NAMESPACE
 HWY_AFTER_NAMESPACE() ;

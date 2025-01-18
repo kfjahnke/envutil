@@ -83,6 +83,7 @@ double get_vfov ( projection_t projection ,
       break ;
     }
     case CUBEMAP:
+    case BIATAN6:
     {
       vfov = 2.0 * M_PI ;
     }
@@ -118,6 +119,7 @@ double get_step ( projection_t projection ,
   {
     case RECTILINEAR:
     case CUBEMAP:
+    case BIATAN6:
     {
       step = atan ( 2.0 * tan ( hfov / 2.0 ) / width ) ;
       break ;
@@ -205,6 +207,7 @@ extent_type get_extent ( projection_t projection ,
       break ;
     }
     case CUBEMAP:
+    case BIATAN6:
     {
       x0 = tan ( alpha_x ) ;
       x1 = tan ( beta_x ) ;
