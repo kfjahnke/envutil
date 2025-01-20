@@ -1886,16 +1886,17 @@ struct mount_t
   {
     get_coordinate_nomask ( crd3 , crd ) ;
 
-    auto mask =    ( crd[0] < extent.x0 )
-                || ( crd[0] > extent.x1 )
-                || ( crd[1] < extent.y0 )
-                || ( crd[1] > extent.y1 ) ;
+    auto mask =    ( crd[0] >= extent.x0 )
+                && ( crd[0] <= extent.x1 )
+                && ( crd[1] >= extent.y0 )
+                && ( crd[1] <= extent.y1 ) ;
 
     if constexpr ( P == RECTILINEAR )
-      mask |= ( crd3[2] <= 0.0f ) ;
+      mask &= ( crd3[2] > 0.0f ) ;
 
-    crd[0] ( mask ) = center[0] ;
-    crd[1] ( mask ) = center[1] ;
+    crd[0] ( ! mask ) = center[0] ;
+    crd[1] ( ! mask ) = center[1] ;
+
     return mask ;
   }
 
@@ -1910,10 +1911,15 @@ struct mount_t
     crd_v crd ;
 
     auto mask = get_coordinate ( crd3 , crd ) ;
+    if ( none_of ( mask ) )
+    {
+      px = 0.0f ;
+      return ;
+    }
 
     if constexpr ( ncrd == 3 )
     {
-      // thsi is easy: just call shade
+      // this is easy: just call shade
 
       px = shade ( crd ) ;
     }
@@ -1947,11 +1953,62 @@ struct mount_t
     }
     // mask out 'misses' to all-zero
 
-    if ( any_of ( mask ) )
+    if ( ! all_of ( mask ) )
     {
       for ( int i = 0 ; i < nchannels ; i++ )
-        px[i] ( mask ) = 0.0f ;
+        px[i] ( ! mask ) = 0.0f ;
     }
+  }
+
+  // variant which returns a mask and does not paint misses 0000
+
+  mask_t mask_eval ( const in_v & ray , px_v & px )
+  {
+    // the first three components have the 3D pickup coordinate itself
+
+    crd3_v crd3 { ray[0] , ray[1] , ray[2] } ;
+    crd_v crd ;
+
+    auto mask = get_coordinate ( crd3 , crd ) ;
+
+    if ( any_of ( mask ) )
+    {
+      if constexpr ( ncrd == 3 )
+      {
+        // this is easy: just call shade
+
+        px = shade ( crd ) ;
+      }
+      else
+      {
+        // extract the 3D ray coordinates for the two adjacent locations
+
+        crd3_v dx3 { ray[3] , ray[4] , ray[5] } ;
+        crd3_v dy3 { ray[6] , ray[7] , ray[8] } ;
+
+        // obtain their corresponding 2D source image coordinates
+
+        crd_v dx2 , dy2 ;
+        get_coordinate_nomask ( dx3 , dx2 ) ;
+        get_coordinate_nomask ( dy3 , dy2 ) ;
+
+        // scale to texture coordinates
+
+        crd[0] = ( crd[0] - extent.x0 ) * rgirth[0] ;
+        dx2[0] = ( dx2[0] - extent.x0 ) * rgirth[0] ;
+        dy2[0] = ( dy2[0] - extent.x0 ) * rgirth[0] ;
+        crd[1] = ( crd[1] - extent.y0 ) * rgirth[1] ;
+        dx2[1] = ( dx2[1] - extent.y0 ) * rgirth[1] ;
+        dy2[1] = ( dy2[1] - extent.y0 ) * rgirth[1] ;
+
+        // delegate to 'inner' to glean the pixel value
+
+        inner.eval ( { crd[0] , crd[1] ,
+                       dx2[0] , dx2[1] ,
+                       dy2[0] , dy2[1] } , px ) ;
+      }
+    }
+    return mask ;
   }
 } ;
 
