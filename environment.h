@@ -2582,100 +2582,100 @@ struct environment9
 
       // set up the twining filter
 
-      std::vector < zimt::xel_t < float , 3 > > spread ;
-
-      if ( args.twf_file != std::string() )
-      {
-        // if user passes a twf-file, it's used to set up the twining
-        // filter, and all the other twining-related arguments apart
-        // from twine_width and twine_normalize are ignored.
-
-        read_twf_file ( spread ) ;
-        assert ( spread.size() ) ;
-      }
-      else
-      {
-        if ( args.twine == 0 )
-        {
-          // user has passed twine 0, or not passed anything - but itp
-          // is -2. We set up the twining with automatically generated
-          // parameters.
-
-          // figure out the magnification in the image center as a
-          // guideline
-
-          double mag = args.env_step / args.step ;
-
-          if ( mag > 1.0 )
-          {
-            // if the transformation magnifies, we use a moderate twine
-            // size and a twine_width equal to the magnification, to
-            // avoid the star-shaped artifacts from the bilinear
-            // interpolation used for the lookup of the contributing
-            // rays. If mag is small, the star-shaped artifacts aren't
-            // really an issue, and twine values beyond, say, five
-            // do little to improve the filter response, so we cap
-            // the twine value at five, but lower it when approaching
-            // mag 1, down to two - where the next case down starts.
-
-            args.twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
-            args.twine_width = mag ;
-          }
-          else
-          {
-            // otherwise, we use a twine size which depends on the
-            // downscaling factor (reciprocal of 'mag') and a twine_width
-            // of 1.0: we only want anti-aliasing. picking a sufficiently
-            // large twine value guarantees that we're not skipping any
-            // pixels in the source (due to undersampling).
-
-            args.twine = int ( 1.0 + 1.0 / mag ) ;
-            args.twine_width = 1.0 ;
-          }
-
-          if ( args.twine_density != 1.0f )
-          {
-            // if the user has passed twine_density, we use it as a
-            // multiplicative factor to change args.twine - typically
-            // twine_density will be larger than one, so we'll get
-            // more filter taps.
-
-            double twine = args.twine * args.twine_density ;
-            args.twine = std::round ( twine ) ;
-          }
-
-          if ( args.verbose )
-          {
-            std::cout << "automatic twining for magnification " << mag
-                      << ":" << std::endl ;
-            std::cout << "twine: " << args.twine
-                      << " twine_width: " << args.twine_width
-                      << std::endl ;
-          }
-        }
-        else
-        {
-          if ( args.verbose )
-          {
-            std::cout << "using fixed twine: " << args.twine
-                      << " twine_width: " << args.twine_width
-                      << std::endl ;
-          }
-        }
-
-        // with the given twining parameters, we can now set up a 'spread':
-        // the generalized equivalent of a filter kernel. While a 'standard'
-        // convolution kernel has pre-determined geometry (it's a matrix of
-        // coefficients meant to be applied to an equally-shaped matrix of
-        // data) - here we have three values for each coefficient: the
-        // first two define the position of the look-up relative to the
-        // 'central' position, and the third is the weight and corresponds
-        // to a 'normal' convolution coefficient.
-
-          make_spread ( spread , args.twine , args.twine ,
-                        args.twine_width , args.twine_sigma ,
-                        args.twine_threshold ) ;
-      }
+      // std::vector < zimt::xel_t < float , 3 > > spread ;
+      // 
+      // if ( args.twf_file != std::string() )
+      // {
+      //   // if user passes a twf-file, it's used to set up the twining
+      //   // filter, and all the other twining-related arguments apart
+      //   // from twine_width and twine_normalize are ignored.
+      // 
+      //   read_twf_file ( spread ) ;
+      //   assert ( spread.size() ) ;
+      // }
+      // else
+      // {
+      //   if ( args.twine == 0 )
+      //   {
+      //     // user has passed twine 0, or not passed anything - but itp
+      //     // is -2. We set up the twining with automatically generated
+      //     // parameters.
+      // 
+      //     // figure out the magnification in the image center as a
+      //     // guideline
+      // 
+      //     double mag = args.env_step / args.step ;
+      // 
+      //     if ( mag > 1.0 )
+      //     {
+      //       // if the transformation magnifies, we use a moderate twine
+      //       // size and a twine_width equal to the magnification, to
+      //       // avoid the star-shaped artifacts from the bilinear
+      //       // interpolation used for the lookup of the contributing
+      //       // rays. If mag is small, the star-shaped artifacts aren't
+      //       // really an issue, and twine values beyond, say, five
+      //       // do little to improve the filter response, so we cap
+      //       // the twine value at five, but lower it when approaching
+      //       // mag 1, down to two - where the next case down starts.
+      // 
+      //       args.twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
+      //       args.twine_width = mag ;
+      //     }
+      //     else
+      //     {
+      //       // otherwise, we use a twine size which depends on the
+      //       // downscaling factor (reciprocal of 'mag') and a twine_width
+      //       // of 1.0: we only want anti-aliasing. picking a sufficiently
+      //       // large twine value guarantees that we're not skipping any
+      //       // pixels in the source (due to undersampling).
+      // 
+      //       args.twine = int ( 1.0 + 1.0 / mag ) ;
+      //       args.twine_width = 1.0 ;
+      //     }
+      // 
+      //     if ( args.twine_density != 1.0f )
+      //     {
+      //       // if the user has passed twine_density, we use it as a
+      //       // multiplicative factor to change args.twine - typically
+      //       // twine_density will be larger than one, so we'll get
+      //       // more filter taps.
+      // 
+      //       double twine = args.twine * args.twine_density ;
+      //       args.twine = std::round ( twine ) ;
+      //     }
+      // 
+      //     if ( args.verbose )
+      //     {
+      //       std::cout << "automatic twining for magnification " << mag
+      //                 << ":" << std::endl ;
+      //       std::cout << "twine: " << args.twine
+      //                 << " twine_width: " << args.twine_width
+      //                 << std::endl ;
+      //     }
+      //   }
+      //   else
+      //   {
+      //     if ( args.verbose )
+      //     {
+      //       std::cout << "using fixed twine: " << args.twine
+      //                 << " twine_width: " << args.twine_width
+      //                 << std::endl ;
+      //     }
+      //   }
+      // 
+      //   // with the given twining parameters, we can now set up a 'spread':
+      //   // the generalized equivalent of a filter kernel. While a 'standard'
+      //   // convolution kernel has pre-determined geometry (it's a matrix of
+      //   // coefficients meant to be applied to an equally-shaped matrix of
+      //   // data) - here we have three values for each coefficient: the
+      //   // first two define the position of the look-up relative to the
+      //   // 'central' position, and the third is the weight and corresponds
+      //   // to a 'normal' convolution coefficient.
+      // 
+      //     make_spread ( spread , args.twine , args.twine ,
+      //                   args.twine_width , args.twine_sigma ,
+      //                   args.twine_threshold ) ;
+      // }
 
       // wrap the 'environment' object in a twine_t object and assign
       // to 'act' - this 'groks' the twine_t object to act's type.
@@ -2685,11 +2685,13 @@ struct environment9
 
       if ( args.twine_precise )
       {
-        act = twine_t < nchannels , 16 , true > ( *p_env , spread ) ;
+        act = twine_t < nchannels , 16 , true >
+          ( *p_env , args.twine_spread ) ;
       }
       else
       {
-        act = twine_t < nchannels , 16 , false > ( *p_env , spread ) ;
+        act = twine_t < nchannels , 16 , false >
+          ( *p_env , args.twine_spread ) ;
       }
     }
     else

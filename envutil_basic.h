@@ -320,6 +320,8 @@ struct cubeface_series
   }
 } ;
 
+#include "zimt/array.h"
+
 struct facet_spec
 {
   int facet_no ;
@@ -379,6 +381,7 @@ struct arguments
   bool twine_normalize ;
   bool twine_precise ;
   double twine_width , twine_density , twine_sigma , twine_threshold ;
+  std::vector < zimt::xel_t < float , 3 > > twine_spread ;
   std::string swrap, twrap, mip, interp , tsoptions ;
   float stwidth , stblur ;
   bool conservative_filter ;
@@ -412,11 +415,10 @@ struct arguments
   std::vector < std::string > facet_pitch_v ;
   std::vector < std::string > facet_roll_v ;
   std::vector < facet_spec > facet_spec_v ;
+
 } ;
 
 extern arguments args ;
-
-#include "zimt/array.h"
 
 // helper function to save a zimt array of pixels to an image file, or
 // to a set of six cube face images, if 'output' has a format string.

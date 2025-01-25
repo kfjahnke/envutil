@@ -262,6 +262,14 @@ void work ( get_t & get , act_t & act )
   }
 }
 
+// this class is a simple example for giving preference to one specific
+// facet - as opposed to code mixing several values. There are two
+// member functions. The first one processes a std::vector of simdized
+// rays, selectig the one which is most central (approximated here only
+// by forming x*x + y*y) and evaluating there. The second member function
+// receives a std::vector of 'ninepacks' which are the basis for using
+// 'twining'. It does in turn call the first member repeatedly.
+
 template < typename ENV >
 struct voronoi_syn
 {
@@ -298,6 +306,64 @@ struct voronoi_syn
       }
     }
   }
+
+  void crd_syn ( const std::vector
+          < simdized_type < zimt::xel_t < float , 9 > , 16 > > & pv ,
+        simdized_type < px_t , 16 > & trg ,
+        const std::size_t & cap = 16 ) const
+  {
+    typedef simdized_type < zimt::xel_t < float , 3 > , 16 > ray_v ;
+    typedef simdized_type < zimt::xel_t < float , 9 > , 16 > ray9_v;
+
+    std::size_t sz = pv.size() ;
+
+    // 'scratch' will hold all ray packets which will react with
+    // a given twining coefficient 'cf'
+  
+    std::vector < ray_v > scratch ( sz ) ;
+
+    const std::vector < xel_t < float , 3 > > & cfv ( args.twine_spread ) ;
+
+    // trg is built up as a weighted sum of contributing values
+    // resulting from the reaction with a given coefficient, so we
+    // clear it befor we begin.
+  
+    trg = 0.0f ;
+
+    // for each coefficient in the twining 'spread'
+
+    for ( const auto & cf : cfv )
+    {
+      // calculate the ray resulting from applying the deltas
+      // du and dv, wich are formed by subtracting the first
+      // set of three coordinate from the second, and third,
+      // respectively. Store the 'deflected' ray in 'scratch'
+
+      for ( std::size_t i = 0 ; i< sz ; i++ )
+      {
+        const ray9_v & c ( pv[i] ) ;
+        px_v p0 { c[0] , c[1] , c[2] } ;
+        px_v du { c[3] - c[0] , c[4] - c[1] , c[5] - c[2] } ;
+        px_v dv { c[6] - c[0] , c[7] - c[1] , c[8] - c[2] } ;
+
+        scratch[i] = p0 + cf[0] * du + cf [ 1 ] * dv ;
+      }
+
+      // now we have sz entries in scratch, and we can call
+      // the three-component form above to produce a synopsis
+      // for the contributors reacting with the current coefficient
+
+      px_v help ;
+      crd_syn ( scratch , help , cap ) ;
+
+      // 'help' is the pixel value, which is weighted with the
+      // weighting value in the twining kernel and added to what's
+      // in trg already.
+
+      trg += cf[2] * help ;
+    }  
+    // and that's it - trg has the result.
+  }
 } ;
 
 template < int NCH ,
@@ -333,14 +399,16 @@ void fuse ( int ninputs )
   // It's up to the synopsis object to decide how to compose the
   // result.
 
-  std::vector < gg_t > get_v ;
+  // TODO: rather than using the env_t's 'eval', we should use a
+  // function yielding a mask, so we can ignore blank areas.
+
   std::vector < env_t > env_v ;
 
   for ( int i = 0 ; i < args.nfacets ; i++ )
   {
     // both code paths - processing single rays and 'ninepacks' -
     // need 'environment' objects. So we create one of these for
-    // each facet. Note how we pass 'fact' to the env_t's c'tor,
+    // each facet. Note how we pass 'fct' to the env_t's c'tor,
     // whereas the single-environment code passes no argument.
 
     auto const & fct ( args.facet_spec_v [ i ] ) ;
@@ -388,6 +456,7 @@ void fuse ( int ninputs )
 
   if ( ninputs == 3 )
   {
+    std::vector < gg_t > get_v ;
     for ( int i = 0 ; i < args.nfacets ; i++ )
     {
       // set up a simple single-coordinate stepper of the type
@@ -402,7 +471,13 @@ void fuse ( int ninputs )
       get_v.push_back ( get_ray ) ;
     }
 
+    // for now, we use a hard-coded synopsis-forming object
+
     voronoi_syn vs ( env_v ) ;
+
+    // to use it with a fusion_t object (this is now a stock object
+    // in zimt) we need to pass a callback. We use a lambda which
+    // invokes the synopsis-forming object. TODO: refactor
 
     auto syn = [=] (
         const std::vector
@@ -413,10 +488,13 @@ void fuse ( int ninputs )
       vs.crd_syn ( pv , trg , cap ) ;
     } ;
 
+    // now we can create the fusion_t object
+
     fs_t fs ( get_v , syn ) ;
 
     // now we call the final 'work' template which uses the fusion_t
     // which directly produces a pixel value, so we use a pass_through
+    // act functor, rather than having the interpolator step in the
     // act functor.
 
     zimt::pass_through < float , NCH , 16 > act ;
@@ -424,28 +502,48 @@ void fuse ( int ninputs )
   }
   else // ninputs == 9
   {
-    std::cerr << "interpolation with derivatives not yet implemented"
-              << std::endl
-              << "for multi-facet input" << std::endl ;
-    exit ( -1 ) ;
+    // again we set up a vector of grok_get_t, but this time they
+    // are getters yielding 'ninepack' values
 
-    // std::cout << "set up deriv_stepper" << std::endl ;
-    // // do the same, but with a deriv_stepper and an 'environment9'
-    // // object. This code path is taken for lookup with 'ninepacks'
-    // // holding three rays - the additional two used to calculate
-    // // the derivatives.
-    // 
-    // deriv_stepper < float , 16 , STP > get_ray
-    //   ( xx , yy , zz , args.width , args.height ,
-    //     args.x0 , args.x1 , args.y0 , args.y1 ) ;
-    // 
-    // // we pass p_env - a pointer to an environment object.
-    // // if itp is set to -1 (use OIIO) this pointer is nullptr.
-    // 
-    // environment9 < NCH , 16 > env ( &(env_v[i]) ) ;
-    // 
-    // // get_v.push_back ( get_ray ) ;
-    // // work ( get_ray , env ) ;
+    std::vector < gg9_t > get_v ;
+
+    for ( int i = 0 ; i < args.nfacets ; i++ )
+    {
+      // we set up a deriv_stepper (specialized with the stepper
+      // type given in template argument STP) which produces ninepacks
+
+      deriv_stepper < float , 16 , STP > get_ray
+          ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
+            args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+      // and push it to the get_v vector
+
+      get_v.push_back ( get_ray ) ;
+    }
+    // now we set up the synopsis-forming object and introduce it to
+    // the fusion_t object - which is now used via it's ninepack-
+    // processing member function.
+
+    voronoi_syn vs ( env_v ) ;
+
+    auto syn = [=] (
+        const std::vector
+          < simdized_type < zimt::xel_t < float , 9 > , 16 > > & pv ,
+        px_v & trg ,
+        const std::size_t & cap = 16 )
+    {
+      vs.crd_syn ( pv , trg , cap ) ;
+    } ;
+
+    fs9_t fs ( get_v , syn ) ;
+
+    // now we call the final 'work' template which uses the fusion_t
+    // which directly produces a pixel value, so we use a pass_through
+    // act functor.
+
+    zimt::pass_through < float , NCH , 16 > act ;
+    work ( fs , act ) ;
   }
 }
 

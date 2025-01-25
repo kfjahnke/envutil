@@ -209,6 +209,164 @@ bool facet_spec::init ( int argc , const char ** argv )
   return true ;
 }
 
+// to avoid having to pass the arguments around, we us a global
+// 'args' object (declared extern in basic.h)
+
+arguments args ;
+
+void make_spread ( std::vector < zimt::xel_t < float , 3 > > & trg ,
+                   int w = 2 ,
+                   int h = 0 ,
+                   float d = 1.0f ,
+                   float sigma = 0.0f ,
+                   float threshold = 0.0f )
+{
+  if ( w <= 2 )
+    w = 2 ;
+  if ( h <= 0 )
+    h = w ;
+  float wgt = 1.0 / ( w * h ) ;
+  double x0 = - ( w - 1.0 ) / ( 2.0 * w ) ;
+  double dx = 1.0 / w ;
+  double y0 = - ( h - 1.0 ) / ( 2.0 * h ) ;
+  double dy = 1.0 / h ;
+  trg.clear() ;
+  sigma *= - x0 ;
+  double sum = 0.0 ;
+
+  for ( int y = 0 ; y < h ; y++ )
+  {
+    for ( int x = 0 ; x < w ; x++ )
+    {
+      float wf = 1.0 ;
+      if ( sigma > 0.0 )
+      {
+        double wx = ( x0 + x * dx ) / sigma ;
+        double wy = ( y0 + y * dy ) / sigma ;
+        wf = exp ( - sqrt ( wx * wx + wy * wy ) ) ;
+      }
+      zimt::xel_t < float , 3 >
+        v { float ( d * ( x0 + x * dx ) ) ,
+            float ( d * ( y0 + y * dy ) ) ,
+            wf * wgt } ;
+      trg.push_back ( v ) ;
+      sum += wf * wgt ;
+    }
+  }
+
+  double th_sum = 0.0 ;
+  bool renormalize = false ;
+
+  if ( sigma != 0.0 )
+  {
+    for ( auto & v : trg )
+    {
+      v[2] /= sum ;
+      if ( v[2] >= threshold )
+      {        
+        th_sum += v[2] ;
+      }
+      else
+      {
+        renormalize = true ;
+        v[2] = 0.0f ;
+      }
+    }
+    if ( renormalize )
+    {
+      for ( auto & v : trg )
+      {
+        v[2] /= th_sum ;
+      }
+    }
+  }
+
+  if ( args.verbose )
+  {
+    if ( sigma != 0.0 )
+    {
+      std::cout << "using this twining filter kernel:" << std::endl ;
+      for ( int y = 0 ; y < h ; y++ )
+      {
+        for ( int x = 0 ; x < w ; x++ )
+        {
+          std::cout << '\t' << trg [ y * h + x ] [ 2 ] ;
+        }
+        std::cout << std::endl ;
+      }
+    }
+    else
+    {
+      std::cout << "using box filter for twining" << std::endl ;
+    }
+  }
+
+  if ( renormalize )
+  {
+    auto help = trg ;
+    trg.clear() ;
+    for ( auto v : help )
+    {
+      if ( v[2] > 0.0f )
+        trg.push_back ( v ) ;
+    }
+    if ( args.verbose )
+    {
+      std::cout << "twining filter taps after after thresholding: "
+                << trg.size() << std::endl ;
+    }
+  }
+}
+
+// read the twining filter from a twf-file.
+
+void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
+{
+  zimt::xel_t < float , 3 > c ;
+
+  std::ifstream ifs ( args.twf_file ) ;
+  assert ( ifs.good() ) ;
+
+  double sum = 0.0 ;
+
+  while ( ifs.good() )
+  {
+    ifs >> c[0] >> c[1] >> c[2] ;
+    if ( ifs.eof() )
+      break ;
+    trg.push_back ( c ) ;
+    sum += c[2] ;
+  }
+
+  for ( auto & c : trg )
+  {
+    c[0] *= args.twine_width ;
+    c[1] *= args.twine_width ;
+    if ( args.twine_normalize )
+      c[2] /= sum ;
+  }
+
+  if ( args.verbose )
+  {
+    std::cout << args.twf_file << " yields twining filter kernel:"
+              << std::endl ;
+    for ( const auto & c : trg )
+    {
+       std::cout << "x: " << c[0] << " y: " << c[1]
+                 << " w: " << c[2] << std::endl ;
+    }
+    if ( args.twine_normalize )
+    {
+      std::cout << "twining filter weights sum: 1.0" << std::endl ;
+    }
+    else
+    {
+      std::cout << "twining filter weights sum: " << sum << std::endl ;
+    }
+  }
+  ifs.close() ;
+}
+
 void arguments::init ( int argc , const char ** argv )
 {
   // we're using OIIO's argparse, since we're using OIIO anyway.
@@ -789,12 +947,100 @@ void arguments::init ( int argc , const char ** argv )
       std::cout << "step: " << step << std::endl ;
     }
   }
+
+  if ( twf_file != std::string() )
+  {
+    // if user passes a twf-file, it's used to set up the twining
+    // filter, and all the other twining-related arguments apart
+    // from twine_width and twine_normalize are ignored.
+
+    read_twf_file ( twine_spread ) ;
+    assert ( twine_spread.size() ) ;
+  }
+  else if ( itp == -2 )
+  {
+    if ( twine == 0 )
+    {
+      // user has passed twine 0, or not passed anything - but itp
+      // is -2. We set up the twining with automatically generated
+      // parameters.
+
+      // figure out the magnification in the image center as a
+      // guideline
+
+      double mag = env_step / step ;
+
+      if ( mag > 1.0 )
+      {
+        // if the transformation magnifies, we use a moderate twine
+        // size and a twine_width equal to the magnification, to
+        // avoid the star-shaped artifacts from the bilinear
+        // interpolation used for the lookup of the contributing
+        // rays. If mag is small, the star-shaped artifacts aren't
+        // really an issue, and twine values beyond, say, five
+        // do little to improve the filter response, so we cap
+        // the twine value at five, but lower it when approaching
+        // mag 1, down to two - where the next case down starts.
+
+        twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
+        twine_width = mag ;
+      }
+      else
+      {
+        // otherwise, we use a twine size which depends on the
+        // downscaling factor (reciprocal of 'mag') and a twine_width
+        // of 1.0: we only want anti-aliasing. picking a sufficiently
+        // large twine value guarantees that we're not skipping any
+        // pixels in the source (due to undersampling).
+
+        twine = int ( 1.0 + 1.0 / mag ) ;
+        twine_width = 1.0 ;
+      }
+
+      if ( twine_density != 1.0f )
+      {
+        // if the user has passed twine_density, we use it as a
+        // multiplicative factor to change twine - typically
+        // twine_density will be larger than one, so we'll get
+        // more filter taps.
+
+        double twine = twine * twine_density ;
+        twine = std::round ( twine ) ;
+      }
+
+      if ( verbose )
+      {
+        std::cout << "automatic twining for magnification " << mag
+                  << ":" << std::endl ;
+        std::cout << "twine: " << twine
+                  << " twine_width: " << twine_width
+                  << std::endl ;
+      }
+    }
+    else
+    {
+      if ( verbose )
+      {
+        std::cout << "using fixed twine: " << twine
+                  << " twine_width: " << twine_width
+                  << std::endl ;
+      }
+    }
+
+    // with the given twining parameters, we can now set up a 'spread':
+    // the generalized equivalent of a filter kernel. While a 'standard'
+    // convolution kernel has pre-determined geometry (it's a matrix of
+    // coefficients meant to be applied to an equally-shaped matrix of
+    // data) - here we have three values for each coefficient: the
+    // first two define the position of the look-up relative to the
+    // 'central' position, and the third is the weight and corresponds
+    // to a 'normal' convolution coefficient.
+
+    make_spread ( twine_spread , twine , twine ,
+                  twine_width , twine_sigma ,
+                  twine_threshold ) ;
+  }
 }
-
-// to avoid having to pass the arguments around, we us a global
-// 'args' object (declared extern in basic.h)
-
-arguments args ;
 
 // cumulated frame rendering time
 

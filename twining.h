@@ -52,6 +52,10 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 #include <fstream>
 #include "common.h"
 
+// two functions are now in envutil_main.cc and are invoked
+// directly during argument processing, hence:
+
+/*
 // this function sets up a simple box filter to use with the
 // twine_t functor above. The given w and h values determine
 // the number of pick-up points in the horizontal and vertical
@@ -214,6 +218,9 @@ void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
   }
   ifs.close() ;
 }
+*/
+
+// this might go to environment.h
 
 // class twine_t takes data from a deriv_stepper which yields
 // 3D ray coordinates of the pick-up point and two more points
