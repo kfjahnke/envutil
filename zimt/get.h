@@ -1078,19 +1078,18 @@ grok_get_t < T , N , D , L > grok_get ( G grokkee )
   return grok_get_t < T , N , D , L > ( grokkee ) ;
 }
 
-// confluence_t is used to form a synopsis of the values produced by
-// several get_t objects. The get_t objects are passed to confluence_t's
+// fusion_t is used to form a synopsis of the values produced by
+// several get_t objects. The get_t objects are passed to fusion_t's
 // c'tor as a std::vector of grok_get_t, so the get_t objects which are
 // put to use can be of different types, but their argument types have
 // to agree, so that they can be held by the same type of grok_get_t.
-// confluence_t itself acts as a get_t. All of it's member functions
+// fusion_t itself acts as a get_t. All of it's member functions
 // invoke the grok_get_t's corresponding member functions, and the
 // results are stored in a std::vector of the grok_get_t's result type
 // (a simdized datum, here called 'partial_v'). Once all the grok_get_t
 // have been invoked and src_v - the std::vector of partial_v - is filled,
-// the 'synopsis' callback is called. It receives a const& to the
-// confluence_t object, from which it can glean the content of it's src_v,
-// and a reference to the final result of the confluence_t's operation -
+// the 'synopsis' callback is called. It receives a const& to src_v,
+// and a reference to the final result of the fusion_t's operation -
 // the datum which is passed on to the 'act' functor in the zimt::process
 // invocation. The synopsis callback handles the reduction from the set
 // of results of the 'inner' grok_get_t objects into the 'outer' result.
@@ -1099,7 +1098,18 @@ grok_get_t < T , N , D , L > grok_get ( G grokkee )
 // pixel values from coordinates. It might feed each interpolator with
 // a corresponding coordinate and form a weighted sum of the results,
 // which it writes to the final result - the synopsis. This is received
-// by the act functor and processing continues as usual.
+// by the act functor and processing continues as usual. An alternative
+// modus operandi for the synopsis function would be a 'winner takes all'
+// scheme, where the synopsis function picks the 'best' one from the
+// set of values produced by the grok_get_t and only evaluates the
+// single corresponding interpolator to produce a pixel output.
+// Note how - in this example of fusing interpolated values - the value_v
+// held in zimt::process is not of the type of the coordinates (that's
+// partial_t/partial_v) but instead value_t/value_v which is the result
+// of the synopsis function, so when this is part of a pixel pipeline,
+// the act functor in zimt::process needs to be set up to accept a
+// pixel value rather than a coordinate value - it may be sufficient to
+// use a pass_through, if the pixel is already 'ready' at this stage.
 
 template < typename T ,     // fundamental type
            std::size_t N ,  // channel count
@@ -1107,7 +1117,7 @@ template < typename T ,     // fundamental type
            std::size_t L ,  // lane count
            typename U ,
            std::size_t M >
-struct confluence_t
+struct fusion_t
 {
   typedef zimt::xel_t < T , N > value_t ;
   typedef simdized_type < value_t , L > value_v ;
@@ -1120,16 +1130,23 @@ struct confluence_t
   std::vector < partial_v > src_v ;
   const std::size_t sz ;
 
-  typedef std::function < void ( const confluence_t & ,
-                                 value_v & ,
+  // the synopsis function receives a const reference to src_v, a
+  // reference to 'trg' - the datum in zimt::process which holds the
+  // values which are next to be fed to the act functor, and a size_t,
+  // which is set to the lane count or to the cap value in capped calls.
+  // The synopsis function is expected to write a value to 'trg' which
+  // it produces as a synopsis of the partial_t
+
+  typedef std::function < void ( const std::vector < partial_v > & ,
+                                 value_v & trg ,
                                  const std::size_t & ) > syn_f ;
   syn_f synopsis ;
 
-  confluence_t ( const std::vector < gg_t > & _get_v ,
-                 syn_f _synopsis )
+  fusion_t ( const std::vector < gg_t > & _get_v ,
+             syn_f _synopsis )
   : src_v ( _get_v.size() ) ,
-    sz ( _get_v.size() ) ,
     get_v ( _get_v ) ,
+    sz ( _get_v.size() ) ,
     synopsis ( _synopsis )
   { }
 
@@ -1139,7 +1156,7 @@ struct confluence_t
     {
       get_v[i].init ( src_v[i] , crd ) ;
     }
-    synopsis ( *this , trg , L ) ;
+    synopsis ( src_v , trg , L ) ;
   }
 
   void init ( value_v & trg ,
@@ -1150,7 +1167,7 @@ struct confluence_t
     {
       get_v[i].init ( src_v[i] , crd , cap ) ;
     }
-    synopsis ( *this , trg , cap ) ;
+    synopsis ( src_v , trg , cap ) ;
   }
 
   void increase ( value_v & trg )
@@ -1159,7 +1176,7 @@ struct confluence_t
     {
       get_v[i].increase ( src_v[i] ) ;
     }
-    synopsis ( *this , trg , L ) ;
+    synopsis ( src_v , trg , L ) ;
   }
 
   void increase ( value_v & trg ,
@@ -1170,9 +1187,131 @@ struct confluence_t
     {
       get_v[i].increase ( src_v[i] , cap , _stuff ) ;
     }
-    synopsis ( *this , trg , cap ) ;
+    synopsis ( src_v , trg , cap ) ;
   }
 } ;
+
+/*
+// this is a similar class which does not actually store the
+// products of all the grok_get_t, but instead only keeps a 'winner'
+// or 'best so far' according to a criterion which is introduced
+// by the 'rank' function. Each get_t is used in turn. The first
+// one initializes 'winner', subsequent get_t provide alternative
+// values. the 'rank' function receives a const reference to the
+// winner so far and the current alternative value, and overwrites
+// 'winner' with the current value if the current one turns out to
+// be 'better' according to the criterion which 'rank' encodes.
+// After all get_t have been processed, 'syn' is called, which
+// receives the 'winner' and the ordinal value of the get_t which
+// produced it, so that the 'syn' function can invoke the
+// corresponding object to provide the final 'trg' value.
+// This logic makes the 'ranking' decision at the level of the
+// results of the several get_t - in the case of pixel pipelines,
+// this would typically be coordinates, so a spatial criterion
+// is used, and only once the 'winner' is found, a single invocation
+// of the corresponding interpolator is done in 'syn' to produce the
+// pixel value which is passed on to 'trg' and processed next by
+// the 'act' functor in zimt::process.
+// currently unused - by using a suitable 'syn' function in the class
+// above, the same effect can be achieved, and it's doubtful that
+// this class can perform the task better - it may in fact be worse
+// due to the frequent callbacks.
+
+template < typename T ,     // fundamental type
+           std::size_t N ,  // channel count
+           std::size_t D ,  // dimensions
+           std::size_t L ,  // lane count
+           typename U ,
+           std::size_t M >
+struct patchwork_t
+{
+  typedef zimt::xel_t < T , N > value_t ;
+  typedef simdized_type < value_t , L > value_v ;
+  typedef zimt::xel_t < long , D > crd_t ;
+  typedef zimt::xel_t < U , M > partial_t ;
+  typedef simdized_type < partial_t , L > partial_v ;
+  typedef grok_get_t < U , M , D , L > gg_t ;
+
+  std::vector < gg_t > get_v ;
+  partial_v winner ;
+  const std::size_t sz ;
+
+  typedef std::function < void ( const partial_v & current ,
+                                 partial_v & winner ,
+                                 const std::size_t & ) > rank_f ;
+  rank_f rank ;
+
+  typedef std::function < void ( partial_v & winner ,
+                                 value_v & trg ,
+                                 const std::size_t & ) > syn_f ;
+  syn_f synopsis ;
+
+  patchwork_t ( const std::vector < gg_t > & _get_v ,
+                rank_f _rank , syn_f _syn )
+  : sz ( _get_v.size() ) ,
+    get_v ( _get_v ) ,
+    rank ( _rank ) ,
+    syn ( _syn )
+  {
+    // the first get_t is invoked unconditionally, so there must
+    // be one at least.
+
+    assert ( sz > 0 ) ;
+  }
+
+  void init ( value_v & trg , const crd_t & crd ) const
+  {
+    partial_v current , winner ;
+    get_v[0].init ( winner , crd ) ;
+    for ( std::size_t i = 1 ; i < sz ; i++ )
+    {
+      get_v[i].init ( current , crd ) ;
+      rank ( current , winner , L ) ;
+    }
+    syn ( winner , trg ) ;
+  }
+
+  void init ( value_v & trg ,
+              const crd_t & crd ,
+              std::size_t cap ) const
+  {
+    partial_v current , winner ;
+    get_v[0].init ( winner , crd , cap ) ;
+    for ( std::size_t i = 1 ; i < sz ; i++ )
+    {
+      get_v[i].init ( current , crd , cap ) ;
+      rank ( current , winner , cap ) ;
+    }
+    syn ( winner , trg ) ;
+  }
+
+  void increase ( value_v & trg ) const
+  {
+    partial_v current , winner ;
+    get_v[0].increase ( winner ) ;
+    for ( std::size_t i = 1 ; i < sz ; i++ )
+    {
+      get_v[i].increase ( current ) ;
+      rank ( current , winner , L ) ;
+    }
+    syn ( winner , trg ) ;
+  }
+
+  void increase ( value_v & trg ,
+                  std::size_t cap ,
+                  bool _stuff = true ) const
+  {
+    partial_v current , winner ;
+    get_v[0].increase ( winner , cap , _stuff ) ;
+    for ( std::size_t i = 1 ; i < sz ; i++ )
+    {
+      get_v[i].increase ( current , cap , _stuff ) ;
+      rank ( current , winner , cap ) ;
+    }
+    syn ( winner , trg ) ;
+  }
+} ;
+*/
 
 END_ZIMT_SIMD_NAMESPACE
 HWY_AFTER_NAMESPACE() ;

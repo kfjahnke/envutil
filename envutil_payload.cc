@@ -226,6 +226,7 @@ void work ( get_t & get , act_t & act )
   // a multithreaded pipeline which fills the target image.
   
   zimt::bill_t bill ;
+  bill.njobs = 1 ;
 
   std::chrono::system_clock::time_point start
     = std::chrono::system_clock::now() ;
@@ -261,6 +262,193 @@ void work ( get_t & get , act_t & act )
   }
 }
 
+template < typename ENV >
+struct voronoi_syn
+{
+  typedef typename ENV::px_t px_t ;
+  typedef simdized_type < px_t , 16 > px_v ;
+  static const std::size_t nch = px_t::size() ;
+
+  std::vector < ENV > & env_v ;
+
+  voronoi_syn ( std::vector < ENV > & _env_v )
+  : env_v ( _env_v )
+  { }
+
+  void crd_syn ( const std::vector
+          < simdized_type < zimt::xel_t < float , 3 > , 16 > > & pv ,
+        simdized_type < px_t , 16 > & trg ,
+        const std::size_t & cap = 16 ) const
+  {
+    std::size_t sz = pv.size() ;
+    auto sqd_min = ( pv[0][0] * pv[0][0] + pv[0][1] * pv[0][1] ) ;
+    env_v [ 0 ] . eval ( pv[0] , trg ) ;
+
+    for ( std::size_t i = 1 ; i < sz ; i++ )
+    {
+      auto sqd_current = pv[i][0] * pv[i][0] + pv[i][1] * pv[i][1] ;
+      auto mask = ( sqd_current < sqd_min ) ;
+      if ( any_of ( mask ) )
+      {
+        sqd_min ( mask ) = sqd_current ;
+        px_v help ;
+        env_v [ i ] . eval ( pv[i] , help ) ;
+        for ( std::size_t ch = 0 ; ch < nch ; ch++ )
+          trg[ch] ( mask ) = help[ch] ;
+      }
+    }
+  }
+} ;
+
+template < int NCH ,
+           template < typename , std::size_t > class STP >
+void fuse ( int ninputs )
+{
+  typedef zimt::xel_t < float , NCH > px_t ;
+  typedef simdized_type < px_t , 16 > px_v ;
+
+  typedef grok_get_t < float , 3 , 2 , 16 > gg_t ;
+  typedef grok_get_t < float , 9 , 2 , 16 > gg9_t ;
+
+  typedef environment < float , float , NCH , 16 > env_t ;
+  typedef environment9 < NCH , 16 > env9_t ;
+
+  typedef fusion_t < float , NCH , 2 , 16 , float , 3 > fs_t ;
+  typedef typename fs_t::syn_f syn_f ;
+  typedef fusion_t < float , NCH , 2 , 16 , float , 9 > fs9_t ;
+  typedef typename fs9_t::syn_f syn9_f ;
+
+  typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
+  std::vector < basis_t > basis_v ;
+
+  // we have a set of facet specs in args.facet_spec_v, which already
+  // have the information about the facet image. Now we set up get_v,
+  // a vector of grok_get_t containing pre-rotated steppers for the
+  // facets. We also set up env_v, a vector of 'environment' objects
+  // which provide access to the image data via 3D ray coordinates.
+  // The pre-rotated steppers will provide 3D ray coordinates in the
+  // facet images' coordinate system, the synopsis object will look
+  // at the ray coordinates and evaluate some or all of the environment
+  // objects at these coordinates and provide a single pixel result.
+  // It's up to the synopsis object to decide how to compose the
+  // result.
+
+  std::vector < gg_t > get_v ;
+  std::vector < env_t > env_v ;
+
+  for ( int i = 0 ; i < args.nfacets ; i++ )
+  {
+    // both code paths - processing single rays and 'ninepacks' -
+    // need 'environment' objects. So we create one of these for
+    // each facet. Note how we pass 'fact' to the env_t's c'tor,
+    // whereas the single-environment code passes no argument.
+
+    auto const & fct ( args.facet_spec_v [ i ] ) ;
+    env_v.push_back ( env_t ( fct ) ) ;
+
+    // we also need the combined rotations stemming from the
+    // orientation of the virtual camera and the orientation
+    // of the facet. Again we create one such 'basis' for each
+    // of the facets and store them in a vector 'basis_v'
+
+    zimt::xel_t < double , 3 > xx { 1.0 , 0.0 , 0.0 } ;
+    zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
+    zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
+
+    // apply the camera rotation
+
+    rotate_3d < double , 16 > r3 ( args.roll ,
+                                   args.pitch ,
+                                   args.yaw ,
+                                   false ) ;
+
+    xx = r3 ( xx ) ;
+    yy = r3 ( yy ) ;
+    zz = r3 ( zz ) ;
+
+    // apply the facet's orientation
+
+    if ( fct.yaw != 0.0 || fct.pitch != 0.0 || fct.roll != 0.0 )
+    {
+      rotate_3d < double , 16 > rr3 ( fct.roll ,
+                                      fct.pitch ,
+                                      fct.yaw ,
+                                      true ) ;
+
+      xx = rr3 ( xx ) ;
+      yy = rr3 ( yy ) ;
+      zz = rr3 ( zz ) ;
+    }
+
+    basis_t bs { xx , yy , zz } ;
+    basis_v.push_back ( bs ) ;
+  }
+
+  // next step: produce the fusion stepper
+
+  if ( ninputs == 3 )
+  {
+    for ( int i = 0 ; i < args.nfacets ; i++ )
+    {
+      // set up a simple single-coordinate stepper of the type
+      // fixed by 'STP'. This route is taken with direct b-spline
+      // interpolation (itp 1)
+
+      STP < float , 16 > get_ray
+        ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
+          args.width , args.height ,
+          args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+      get_v.push_back ( get_ray ) ;
+    }
+
+    voronoi_syn vs ( env_v ) ;
+
+    auto syn = [=] (
+        const std::vector
+          < simdized_type < zimt::xel_t < float , 3 > , 16 > > & pv ,
+        px_v & trg ,
+        const std::size_t & cap = 16 )
+    {
+      vs.crd_syn ( pv , trg , cap ) ;
+    } ;
+
+    fs_t fs ( get_v , syn ) ;
+
+    // now we call the final 'work' template which uses the fusion_t
+    // which directly produces a pixel value, so we use a pass_through
+    // act functor.
+
+    zimt::pass_through < float , NCH , 16 > act ;
+    work ( fs , act ) ;
+  }
+  else // ninputs == 9
+  {
+    std::cerr << "interpolation with derivatives not yet implemented"
+              << std::endl
+              << "for multi-facet input" << std::endl ;
+    exit ( -1 ) ;
+
+    // std::cout << "set up deriv_stepper" << std::endl ;
+    // // do the same, but with a deriv_stepper and an 'environment9'
+    // // object. This code path is taken for lookup with 'ninepacks'
+    // // holding three rays - the additional two used to calculate
+    // // the derivatives.
+    // 
+    // deriv_stepper < float , 16 , STP > get_ray
+    //   ( xx , yy , zz , args.width , args.height ,
+    //     args.x0 , args.x1 , args.y0 , args.y1 ) ;
+    // 
+    // // we pass p_env - a pointer to an environment object.
+    // // if itp is set to -1 (use OIIO) this pointer is nullptr.
+    // 
+    // environment9 < NCH , 16 > env ( &(env_v[i]) ) ;
+    // 
+    // // get_v.push_back ( get_ray ) ;
+    // // work ( get_ray , env ) ;
+  }
+}
+
 // to call the appropriate instantiation of 'work' (above)
 // we need to do some dispatching: picking types depending
 // on run-time variables. We achieve this with a staged 'roll_out'
@@ -276,171 +464,119 @@ template < int NCH ,
            template < typename , std::size_t > class STP >
 void roll_out ( int ninputs )
 {
+  if ( args.nfacets )
+  {
+    fuse < NCH , STP > ( ninputs ) ;
+    return ;
+  }
+
   typedef environment < float , float , NCH , 16 > env_t ;
   env_t * p_env = nullptr ;
 
-  if constexpr ( NCH == 0 )
+  // set up an orthonormal system of basis vectors for the view
+
+  zimt::xel_t < double , 3 > xx { 1.0 , 0.0 , 0.0 } ;
+  zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
+  zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
+
+  // the three vectors are rotated with the given yaw, pitch and
+  // roll, and later passed on to the to 'steppers', the objects
+  // which provide 3D 'ray' coordinates. They incorporate the
+  // rotated basis in their ray generation, resulting in
+  // appropriately oriented ray coordinates which can be formed
+  // more efficiently in the steppers - first calculating the
+  // rays and then rotating the rays in a second step takes
+  // (many) more CPU cycles.
+
+  rotate_3d < double , 16 > r3 ( args.roll ,
+                                  args.pitch ,
+                                  args.yaw ,
+                                  false ) ;
+
+  xx = r3 ( xx ) ;
+  yy = r3 ( yy ) ;
+  zz = r3 ( zz ) ;
+
+  // if we have a 'facet' - a mounted image with non-standard
+  // orientation - we add a second rotation, now with the inverse
+  // of the quaternion formed from the orientation Euler angles.
+  // Why inverse? If the facet is oriented precisely like the
+  // virtual camera, both rotations should cancel each other out
+  // precisely.
+
+  if (   args.mount_yaw != 0.0f
+      || args.mount_pitch != 0.0f
+      || args.mount_roll != 0.0f )
   {
-    // just a stub:
-    std::cout << "processing multi-facet file " << args.fct_file
-              << " not yet implemented!" << std::endl ;
-    return ;
-
-    // TODO: extend class 'environment' with a c'tor taking a
-    // facet file. The resulting object should behave like any
-    // other environment object, but internally use several
-    // sub-environments for the mounted facets and logic to
-    // form a weighted sum of pixels from the contributing
-    // facets.
-
-    // just to show how the assets could be set up:
-
-    typedef asset_t < std::string > named_asset_t ;
-    auto p_image_v = new std::vector < std::shared_ptr < named_asset_t > >  ;
-    
-    std::string img_name1 = "dummy1" ;
-    std::string img_name2 = "dummy2" ;
-
-    // these pointers would be made to point to image data - right now we
-    // just need something in dynamic memory:
-
-    std::string * p_str1 = new std::string ( "cargo1" ) ;
-    std::string * p_str2 = new std::string ( "cargo2" ) ;
-
-    // TODO: alternatively hold e.g. pointers to class environment.
-
-    auto p_image1 = std::make_shared < named_asset_t > ( img_name1 , p_str1 ) ;
-    auto p_image2 = std::make_shared < named_asset_t > ( img_name2 , p_str2 ) ;
-
-    // the shared_ptrs can be stored in a vector
-
-    p_image_v->push_back ( p_image1 ) ;
-    p_image_v->push_back ( p_image2 ) ;
-
-    // after scanning the facet file, image_v should contain shared pointers
-    // to all the assets corresponding to images files in the facet file.
-    // Then, corresponding steppers can be set up, and the set of steppers
-    // combined in a confluence_t object, with a synopsis function which
-    // produces e.g. a voronoid by evaluating corresponding interpolators
-    // and prioritizing them by distance-from-center.
-
-    // image_v can be made the current_env by clearing current_env and
-    // placing a pointer to a dynamically created asset vector in it, with
-    // the facet file's name as ID:
-
-    current_env.reset ( args.fct_file , p_image_v ) ;
-
-    // now this multi-image environment will persist until a new environment
-    // is set up or unti the program ends. environment-wise: there can only be
-    // one!
+    rotate_3d < double , 16 > rr3 ( args.mount_roll ,
+                                    args.mount_pitch ,
+                                    args.mount_yaw ,
+                                    true ) ;
+    xx = rr3 ( xx ) ;
+    yy = rr3 ( yy ) ;
+    zz = rr3 ( zz ) ;
   }
-  else
+
+  if ( args.itp == 1 || args.itp == -2 )
   {
-    // set up an orthonormal system of basis vectors for the view
+    // both direct spline interpolation and twining need an
+    // 'environment' object.
 
-    zimt::xel_t < double , 3 > xx { 1.0 , 0.0 , 0.0 } ;
-    zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
-    zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
+    // create an 'environment' object. This will persist while the
+    // input image remains the same, so if we're creating an image
+    // sequence, it will be reused for each individual image.
+    // we 'hold' the environment object in current_env, an 'asset'
+    // object, which destructs and dealocates it's client object
+    // only when itself destructs or is 'cleared'.
 
-    // the three vectors are rotated with the given yaw, pitch and
-    // roll, and later passed on to the to 'steppers', the objects
-    // which provide 3D 'ray' coordinates. They incorporate the
-    // rotated basis in their ray generation, resulting in
-    // appropriately oriented ray coordinates which can be formed
-    // more efficiently in the steppers - first calculating the
-    // rays and then rotating the rays in a second step takes
-    // (many) more CPU cycles.
+    p_env = (env_t*) current_env.has ( args.input ) ;
 
-    rotate_3d < double , 16 > r3 ( args.roll ,
-                                   args.pitch ,
-                                   args.yaw ,
-                                   false ) ;
-
-    xx = r3 ( xx ) ;
-    yy = r3 ( yy ) ;
-    zz = r3 ( zz ) ;
-
-    // if we have a 'facet' - a mounted image with non-standard
-    // orientation - we add a second rotation, now with the inverse
-    // of the quaternion formed from the orientation Euler angles.
-    // Why inverse? If the facet is oriented precisely like the
-    // virtual camera, both rotations should cancel each other out
-    // precisely.
-
-    if (   args.mount_yaw != 0.0f
-        || args.mount_pitch != 0.0f
-        || args.mount_roll != 0.0f )
+    if ( ! p_env )
     {
-      rotate_3d < double , 16 > rr3 ( args.mount_roll ,
-                                      args.mount_pitch ,
-                                      args.mount_yaw ,
-                                      true ) ;
-      xx = rr3 ( xx ) ;
-      yy = rr3 ( yy ) ;
-      zz = rr3 ( zz ) ;
+      current_env.clear() ;
+      p_env = new env_t() ;
+      current_env.reset ( args.input , p_env ) ;
     }
+  }
 
-    if ( args.itp == 1 || args.itp == -2 )
-    {
-      // both direct spline interpolation and twining need an
-      // 'environment' object.
+  // There are two code paths: one taking the getters yielding
+  // simple single-ray 3D coordinates, and one taking the three-ray
+  // variant needed to compute the derivatives. They use specific
+  // types of 'environment' objects. The code for the environment
+  // objects is in environment.h
 
-      // create an 'environment' object. This will persist while the
-      // input image remains the same, so if we're creating an image
-      // sequence, it will be reused for each individual image.
-      // we 'hold' the environment object in current_env, an 'asset'
-      // object, which destructs and dealocates it's client object
-      // only when itself destructs or is 'cleared'.
+  if ( ninputs == 3 )
+  {
+    // set up a simple single-coordinate stepper of the type
+    // fixed by 'STP'. This route is taken with direct b-spline
+    // interpolation (itp 1)
 
-      p_env = (env_t*) current_env.has ( args.input ) ;
+    STP < float , 16 > get_ray
+      ( xx , yy , zz , args.width , args.height ,
+        args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-      if ( ! p_env )
-      {
-        current_env.clear() ;
-        p_env = new env_t() ;
-        current_env.reset ( args.input , p_env ) ;
-      }
-    }
+    // now we call the final 'work' template which uses the get_t
+    // and act objects we've set up so far
 
-    // There are two code paths: one taking the getters yielding
-    // simple single-ray 3D coordinates, and one taking the three-ray
-    // variant needed to compute the derivatives. They use specific
-    // types of 'environment' objects. The code for the environment
-    // objects is in environment.h
+    work ( get_ray , *p_env ) ;
+  }
+  else // ninputs == 9
+  {
+    // do the same, but with a deriv_stepper and an 'environment9'
+    // object. This code path is taken for lookup with 'ninepacks'
+    // holding three rays - the additional two used to calculate
+    // the derivatives.
 
-    if ( ninputs == 3 )
-    {
-      // set up a simple single-coordinate stepper of the type
-      // fixed by 'STP'. This route is taken with direct b-spline
-      // interpolation (itp 1)
+    deriv_stepper < float , 16 , STP > get_ray
+      ( xx , yy , zz , args.width , args.height ,
+        args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-      STP < float , 16 > get_ray
-        ( xx , yy , zz , args.width , args.height ,
-          args.x0 , args.x1 , args.y0 , args.y1 ) ;
+    // we pass p_env - a pointer to an environment object.
+    // if itp is set to -1 (use OIIO) this pointer is nullptr.
 
-      // now we call the final 'work' template which uses the get_t
-      // and act objects we've set up so far
+    environment9 < NCH , 16 > env ( p_env ) ;
 
-      work ( get_ray , *p_env ) ;
-    }
-    else // ninputs == 9
-    {
-      // do the same, but with a deriv_stepper and an 'environment9'
-      // object. This code path is taken for lookup with 'ninepacks'
-      // holding three rays - the additional two used to calculate
-      // the derivatives.
-
-      deriv_stepper < float , 16 , STP > get_ray
-        ( xx , yy , zz , args.width , args.height ,
-          args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-      // we pass p_env - a pointer to an environment object.
-      // if itp is set to -1 (use OIIO) this pointer is nullptr.
-
-      environment9 < NCH , 16 > env ( p_env ) ;
-
-      work ( get_ray , env ) ;
-    }
+    work ( get_ray , env ) ;
   }
 }
 
@@ -523,9 +659,6 @@ struct dispatch
   {
     switch ( nchannels )
     {
-      case 0:
-        roll_out < 0 > ( ninputs , projection ) ;
-        break ;
       case 1:
         roll_out < 1 > ( ninputs , projection ) ;
         break ;
@@ -539,83 +672,6 @@ struct dispatch
         roll_out < 4 > ( ninputs , projection ) ;
         break ;
     }
-
-    /*
-    typedef zimt::confluence_t < float , 3 , 2 , 16 , float , 2 > cf_t ;
-    typedef zimt::loader < float , 2 , 2 , 16 > get_t ;
-    typedef zimt::storer < float , 3 , 2 , 16 > put_t ;
-
-    typedef zimt::pass_through < float , 3 , 16 > pass_t ;
-
-    typedef zimt::simdized_type < crd_t , 16 > crd_v ;
-    typedef zimt::simdized_type < px_t , 16 > px_v ;
-
-    zimt::bill_t bill ;
-    zimt::array_t < 2 , crd_t > src1 ( { 100 , 100 } ) ;
-    zimt::array_t < 2 , crd_t > src2 ( { 100 , 100 } ) ;
-    zimt::array_t < 2 , px_t > trg ( { 100 , 100 } ) ;
-
-    for ( int y = 0 ; y < 100 ; y++ )
-    {
-      for ( int x = 0 ; x < 100 ; x++ )
-      {
-        src1 [ { x , y } ] = x + 100 * y * 3 ;
-        src2 [ { x , y } ] = x + 100 * y ;
-      }
-    }
-    src1 [ { 1 , 1 } ] = { .3f , .4f } ;
-
-    typedef zimt::grok_get_t < float , 2 , 2 , 16 > gg_t ;
-    std::vector < gg_t > get_v ;
-    get_v.push_back ( get_t ( src1 , bill ) ) ;
-    get_v.push_back ( get_t ( src2 , bill ) ) ;
-
-    std::vector < fake_eval > evv ( 2 ) ;
-
-    cf_t cf ( get_v ,
-              [&evv] ( const cf_t & cfr ,
-                       px_v & out ,
-                       const std::size_t & cap )
-              {
-                // 'voronoi' function: of the set of coordinates produced
-                // by the grok_get_t, pick the one with the smallest
-                // squared norm, and evaluate the corresponding evaluator.
-                auto peak = squared_norm ( cfr.src_v[0] ) ;
-                zimt::simdized_type < int , 16 > winner ( 0 ) ;
-                // evv[0].eval ( cfr.src_v[0] , out ) ;
-                for ( std::size_t i = 1 ; i < cfr.sz ; i++ )
-                {
-                  auto sqn = squared_norm ( cfr.src_v[i] ) ;
-                  auto mask = sqn < peak ;
-                  if ( any_of ( mask ) )
-                  {
-                    peak ( mask ) = sqn ;
-                    winner ( mask ) = i ;
-                  }
-                }
-                for ( std::size_t i = 0 ; i < cfr.sz ; i++ )
-                {
-                  auto mask = ( winner == i ) ;
-                  if ( any_of ( mask ) )
-                  {
-                    px_v help ;
-                    evv[i].eval ( cfr.src_v[i] , help ) ;
-                    out[0] ( mask ) = help[0] ;
-                    out[1] ( mask ) = help[1] ;
-                    out[2] ( mask ) = help[2] ;
-                  }
-                }
-              } ) ;
-
-    pass_t ps ;
-    put_t p ( trg ) ;
-
-    zimt::process ( src1.shape , cf , ps , p , bill ) ;
-
-    std::cout << trg [ { 0 , 1 } ] << std::endl ;
-    std::cout << trg [ { 1 , 1 } ] << std::endl ;
-    */
-
     return 0 ;
   }
 } ;

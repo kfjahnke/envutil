@@ -624,7 +624,7 @@ public:
 } ;
 
 // rectilinear_stepper is the simplest of the family, because
-// the planar coordinate can be mapped more or less diretcly
+// the planar coordinate can be mapped more or less directly
 // to the output.
 
 template < typename T ,     // fundamental type

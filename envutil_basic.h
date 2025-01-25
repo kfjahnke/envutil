@@ -320,6 +320,21 @@ struct cubeface_series
   }
 } ;
 
+struct facet_spec
+{
+  int facet_no ;
+  std::string filename ;
+  std::string projection_str ;
+  projection_t projection ;
+  double hfov ;
+  double yaw , pitch , roll ;
+  std::size_t width ;
+  std::size_t height ;
+  std::size_t nchannels ;
+
+  bool init ( int argc , const char ** argv ) ;
+} ;
+
 struct arguments
 {
   bool verbose ;
@@ -388,6 +403,15 @@ struct arguments
   // and argv.
 
   void init ( int argc , const char ** argv ) ;
+
+  std::size_t nfacets ;
+  std::vector < std::string > facet_name_v ;
+  std::vector < std::string > facet_projection_v ;
+  std::vector < std::string> facet_hfov_v ;
+  std::vector < std::string > facet_yaw_v ;
+  std::vector < std::string > facet_pitch_v ;
+  std::vector < std::string > facet_roll_v ;
+  std::vector < facet_spec > facet_spec_v ;
 } ;
 
 extern arguments args ;

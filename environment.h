@@ -66,8 +66,6 @@ using OIIO::ImageInput ;
 using OIIO::TypeDesc ;
 using OIIO::ImageSpec ;
 
-bool verbose = true ;
-
 // This functor 'looks at' a full spherical image. It receives
 // 2D lat/lon coordinates and yields pixel values. Pick-up is done
 // with bilinear interpolation. For this demo program, we keep it
@@ -544,7 +542,7 @@ struct sixfold_t
     // with a section's center - unless the section is also
     // odd-sized, which only occurs when the tile size is one.
 
-    if ( verbose )
+    if ( args.verbose )
     {
       if ( left_frame_px != right_frame_px )
         std::cout << "cube face is not centered in IR" << std::endl ;
@@ -607,7 +605,7 @@ struct sixfold_t
 
     if ( inp->supports ( "scanlines" ) )
     {
-      if ( verbose )
+      if ( args.verbose )
       {
         std::cout << "input supports scanline-based access"
         << std::endl ;
@@ -649,7 +647,7 @@ struct sixfold_t
     }
     else
     {
-      if ( verbose )
+      if ( args.verbose )
       {
         std::cout << "input is tiled" << std::endl ;
       }
@@ -711,7 +709,7 @@ struct sixfold_t
       auto inp = ImageInput::open ( filename6[face] ) ;
       assert ( inp != nullptr ) ;
 
-      if ( verbose )
+      if ( args.verbose )
         std::cout << "load cube face image " << filename6[face]
                   << std::endl ;
 
@@ -749,7 +747,7 @@ struct sixfold_t
     auto temp_path = std::filesystem::temp_directory_path() ;
     texture_file = temp_path / "temp_texture.exr" ;
 
-    if ( verbose )
+    if ( args.verbose )
       std::cout << "saving generated texture to "
                 << texture_file.string() << std::endl ;
 
@@ -762,7 +760,7 @@ struct sixfold_t
 
     if ( ts_options != std::string() )
     {
-      if ( verbose )
+      if ( args.verbose )
         std::cout << "adding texture system options: " << ts_options
                   << std::endl ;
     
@@ -1437,7 +1435,7 @@ public:
 
     assert ( w == 2 * h ) ;
 
-    if ( verbose )
+    if ( args.verbose )
       std::cout << "input has 2:1 aspect ratio, assuming latlon"
                 << std::endl ;
 
@@ -1520,7 +1518,7 @@ public:
     assert ( interp_it != interpmode_map.end() ) ;
     cast_assign ( batch_options.interpmode , interp_it->second ) ;
   
-    if ( verbose )
+    if ( args.verbose )
     {
       std::cout << "input has 1:6 aspect ratio, assuming cubemap"
                 << std::endl ;
@@ -1662,7 +1660,7 @@ struct source_t
 
     if ( args.tsoptions != std::string() )
     {
-      if ( verbose )
+      if ( args.verbose )
         std::cout << "adding texture system options: " << args.tsoptions
                   << std::endl ;
     
@@ -1823,7 +1821,7 @@ struct mount_t
   : extent ( _extent ) ,
     center { ( _extent.x0 + _extent.x1 ) * .5 ,
              ( _extent.y0 + _extent.y1 ) * .5 } ,
-    rgirth { 1.0  / ( _extent.x1 - _extent.x0 ) ,
+    rgirth { 1.0 / ( _extent.x1 - _extent.x0 ) ,
              1.0 / ( _extent.y1 - _extent.y0 ) } ,
     inner ( _inner )
   { }
@@ -2258,6 +2256,100 @@ struct environment
 
   zimt::grok_type < ray_t , px_t , L > env ;
 
+  environment ( const facet_spec & fct )
+  {
+    shape_type shape { fct.width , fct.height } ;
+
+    zimt::bc_code bc0 = zimt::REFLECT ;
+    if (    fct.projection == SPHERICAL
+         || fct.projection == CYLINDRICAL )
+    {
+      if ( fabs ( fct.hfov - 2.0 * M_PI ) < .000001 )
+        bc0 = PERIODIC ;
+    }
+    p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+                                { bc0 , zimt::REFLECT } ) ) ;
+
+    auto inp = ImageInput::open ( fct.filename ) ;
+
+    bool success = inp->read_image (
+      0 , 0 , 0 , C ,
+      TypeDesc::FLOAT ,
+      p_bspl->core.data() ,
+      sizeof ( in_px_t ) ,
+      p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
+    assert ( success ) ;
+    inp->close() ;
+
+    if (    fct.projection == SPHERICAL
+          && fabs ( fct.hfov - 2.0 * M_PI ) < .000001
+          && fct.width == 2 * fct.height )
+    {
+      // assume the mounted image is a full spherical
+      p_bspl->spline_degree = args.prefilter_degree ;
+      spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
+      p_bspl->spline_degree = args.spline_degree ;
+    }
+    else
+    {
+      // assume it's a partial spherical, use ordinary prefilter
+      p_bspl->spline_degree = args.prefilter_degree ;
+      p_bspl->prefilter() ;
+      p_bspl->spline_degree = args.spline_degree ;
+    }
+
+    source_t < C , 2 , 16 > src ( p_bspl ) ;
+
+    // for now, we mount images to the center; other types of cropping
+    // might be added by providing suitable parameterization.
+
+    auto extent = get_extent ( fct.projection , fct.width ,
+                                fct.height , fct.hfov  ) ;
+
+    // we fix the projection as a template argument to class mount_t.
+
+    switch ( fct.projection )
+    {
+      case RECTILINEAR:
+      {
+        mount_t < C , 3 , RECTILINEAR , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        break ;
+      }
+      case SPHERICAL:
+      {
+        mount_t < C , 3 , SPHERICAL , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        break ;
+      }
+      case CYLINDRICAL:
+      {
+        mount_t < C , 3 , CYLINDRICAL , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        break ;
+      }
+      case STEREOGRAPHIC:
+      {
+        mount_t < C , 3 , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        break ;
+      }
+      case FISHEYE:
+      {
+        mount_t < C , 3 , FISHEYE , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        break ;
+      }
+      default:
+      {
+        std::cerr << "unknown projection: "
+                  << fct.projection_str << std::endl ;
+        assert ( false ) ;
+        break ;
+      }
+    }
+  }
+
   environment()
   {
     // we have two different code paths to deal with. The first one
@@ -2269,7 +2361,7 @@ struct environment
     {
       shape_type shape { args.mount_width , args.mount_height } ;
 
-      if ( verbose )
+      if ( args.verbose )
         std::cout << "processing mounted image " << args.mount_image
                   << " shape " << shape << std::endl ;
 
@@ -2372,7 +2464,7 @@ struct environment
 
       if ( w == 2 * h )
       {
-        if ( verbose )
+        if ( args.verbose )
           std::cout << "environment has 2:1 aspect ratio, assuming latlon"
                     << std::endl ;
 
@@ -2395,7 +2487,7 @@ struct environment
       }
       else if ( h == 6 * w )
       {
-        if ( verbose )
+        if ( args.verbose )
         {
           std::cout << "environment has 1:6 aspect ratio, assuming cubemap"
                     << std::endl ;
@@ -2552,7 +2644,7 @@ struct environment9
             args.twine = std::round ( twine ) ;
           }
 
-          if ( verbose )
+          if ( args.verbose )
           {
             std::cout << "automatic twining for magnification " << mag
                       << ":" << std::endl ;
@@ -2563,7 +2655,7 @@ struct environment9
         }
         else
         {
-          if ( verbose )
+          if ( args.verbose )
           {
             std::cout << "using fixed twine: " << args.twine
                       << " twine_width: " << args.twine_width

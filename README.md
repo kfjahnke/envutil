@@ -59,7 +59,7 @@ envutil can also 'mount' images in the supported five projections as
 input (use --mount ...) - currently, the images have to be cropped
 symmetrically, meaning that the optical axis is taken to pass through
 the image center. For mounted input, you can specify the horizontal
-filed of view and the projection together with the image filename.
+field of view and the projection together with the image filename.
 If the view 'looks at' areas not covered by the mounted image, it's
 painted black or transparent black for RGBA.
 
@@ -78,7 +78,7 @@ slicer file for a 3D printer - you don't want to write that by hand,
 either. Default is H265 with 60 fps and 8 Mbit/sec.
 
 You can choose several different interpolation methods with the --itp
-command line argument. The default is --itp 1, which uses bilinear
+command line argument. The default is --itp 1, which uses b-spline
 interpolation. This is fast and often good enough, especially if there
 are no great scale changes involved - so, if the output's resolution is
 similar to the input's. --itp -1 employs OpenImageIO (OIIO for short)
@@ -88,7 +88,7 @@ All of OIIO's interpolation, mip-mapping and wrapping modes can be
 selected by using the relevant additional parameters. Finally, --itp -2
 uses 'twining' - inlined oversampling with subsequent weighted pixel
 binning. The default with this method is to use a simple box filter
-on a signal which is interpolated with bilinear interpolation; the
+on a signal which is interpolated with b-spline interpolation; the
 number of taps and the footprint of the pick-up are set automatically.
 Additional parameters can change the footprint and the amount of
 oversampling and add gaussian weights to the filter parameters.
@@ -124,7 +124,7 @@ users to compare it with other anti-aliasing and interpolation methods
 and share the results!
 
 Currently, single-ISA build are set up to produce binary for AVX2-capable
-CPUs - nowadays most 'better' CPUs support this SIMD ISA. When
+CPUs - nowadays most 'better' x86 CPUs support this SIMD ISA. When
 building for other (and non-i86) CPUs, suitable parameters should
 be passed to the compiler (you'll have to modify the CMakeLists.txt).
 I strongly suggest you install highway on your system - the build
@@ -1098,6 +1098,7 @@ needing support can operate without need for special-casing access to marginal
 pixels. The formation and use of the IR image is transparent, it's used automatically.
 There are two parameters which influence the size of the 'support margin', namely
 --support_min and --tile_size - usually it's best to leave them at their defaults.
+
 To access pixels in lat/lon environment maps which are marginal, envutil exploits the
 inherent periodicity of the lat/lon image - simple periodicity in the horizontal and
 'over-the-pole' periodicity in the vertical (that's reflecting in the vertical plus
@@ -1107,10 +1108,13 @@ half, rotating it by 180 degrees and pasting it to the bottom of the first half.
 lux does just that for it's 'spherical filter', so that the image pyramids used
 internally can be created with geometrically correct down-scaling. envutil does
 not use mip-mapping or other pyramid-like code itself (even though OIIO's texture
-system code does so), so this is merely a technical hint.
+system code does so), so this is merely a technical hint. If you use b-spline
+interpolation with full-spherical source images, a specialized prefilter function
+is used which is correctly set up to handle both dimensions as periodic signals,
+producing artifact-free evaluation near the poles.
 
 As an alternative to the antialiasing and interpolation provided by OIIO, envutil
-offers processing with bilinear interpolation and it's own antialiasing filter, using
+offers processing with b-spline interpolation and it's own antialiasing filter, using
 a method which I call 'twining'. Both for OIIO-based lookup and for twining, the
 beginning of the pixel pipeline receives not just one 3D directional 'ray' coordinate
 pointing 'into' the environment, but three: the second and third ray are calculated
@@ -1148,6 +1152,12 @@ a suitable process by inspecting the output. envutil's 'twining' can cover a
 certain range of input/output relations with a given parameter set, but for
 extreme distortions, it may be suboptimal. This should be analyzed in depth,
 for now, it's just a promising new method which seems to work 'well enough'.
+When using b-splines 'better' than degree-1 (a.k.a. bilinear interpolation),
+upscaling should be artifact-free - apart from possible ringing artifacts if
+the signal isn't band-limited to half the Nyquist frequency. The ringing
+artifacts can be avoided by omitting the prefilter, which will produce a
+smoothed and bounded signal, but remove some high frequency content (if there
+is any).
 
 I think that twining offers a good compromise beween speed and quality. I'm sure
 I'm not the first one to think of this method, but I haven't done research to
@@ -1221,7 +1231,10 @@ of the kernel width. By using a large kernel on a level 'a few steps
 down' you obtain better quality pyramid levels, because they suffer less
 from the inevitable degradation due to decimation, which necessarily
 introduces some aliasing, because the low-pass never successfully
-eliminates the upper half of the frequency band completely. By the
-time you 'reach down' to a level 'a few steps down', no intermediate
-decimations have taken place, so the only effect is what the twining
-filter does to the signal.
+eliminates the upper half of the frequency band completely. Especially
+if one limits the choice of filter to all-positive, there is a good deal
+of high frequency left in the result which will alias when the signal
+is decimated. Using the scheme described above, by the time you 'reach
+down' to a level 'a few steps down', no intermediate decimations have
+taken place, so the only effect is what the twining filter does to the
+signal - and you can shape that kernel any way you like.

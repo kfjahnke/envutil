@@ -355,6 +355,8 @@ xel_t < value_type , nch + 1 > widen ( const value_type & by ,
   return result ;
 }
 
+// TODO: this is wrong: the mask should consist of nch bool-equivalents
+
 // to use the idiom A(M) = B for simple xel_t, we have to repeat
 // the code we use for vectorized types using bool instead of
 // a mask. With this bit of syntactic sugar, we can use more

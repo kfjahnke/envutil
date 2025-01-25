@@ -152,6 +152,63 @@ namespace project
 using OIIO::ArgParse ;
 using OIIO::Filesystem::convert_native_arguments ;
 
+bool facet_spec::init ( int argc , const char ** argv )
+{
+  convert_native_arguments(argc, (const char**)argv);
+  ArgParse ap;
+
+  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL",
+                  &filename , &projection_str, &hfov, &yaw, &pitch, &roll)
+    .help("load oriented non-environment source image") ;
+
+  if (ap.parse(argc, argv) < 0 ) {
+      std::cerr << ap.geterror() << std::endl;
+      ap.print_help();
+      return false ;
+  }
+
+  if ( hfov <= 0.0 )
+  {
+    std::cerr << "facet hfov invalid: " << hfov << std::endl ;
+    return false ;
+  }
+
+  // determine facet image's projection
+  int prj = 0 ;
+  for ( const auto & p : projection_name )
+  {
+    if ( p == projection_str )
+      break ;
+    ++ prj ;
+  }
+  projection = projection_t ( prj ) ;
+  if ( prj >= PRJ_NONE )
+  {
+    std::cerr << "facet projection invalid: " << projection_str << std::endl ;
+    return false ;
+  }
+
+  // all seems well so far, let's open the image
+
+  auto inp = ImageInput::open ( filename ) ;
+
+  if ( ! inp )
+  {
+    std::cerr << "failed to open facet image '"
+              << filename << "'" << std::endl ;
+    return false ;
+  }
+
+  const ImageSpec &spec = inp->spec() ;
+
+  width = spec.width ;
+  height = spec.height ;
+  nchannels = spec.nchannels ;
+  inp->close() ;
+
+  return true ;
+}
+
 void arguments::init ( int argc , const char ** argv )
 {
   // we're using OIIO's argparse, since we're using OIIO anyway.
@@ -365,8 +422,12 @@ void arguments::init ( int argc , const char ** argv )
                   &mount_image , &mount_prj_str, &mount_hfov)
     .help("load non-environment source image") ;
 
-  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %f:HFOV %f:YAW %f:PITCH %f:ROLL",
-                  &mount_image , &mount_prj_str, &mount_hfov, &mount_yaw, &mount_pitch, &mount_roll)
+  // ap.add_argument("--facet %s:IMAGE %s:PROJECTION %f:HFOV %f:YAW %f:PITCH %f:ROLL",
+  //                 &mount_image , &mount_prj_str, &mount_hfov, &mount_yaw, &mount_pitch, &mount_roll)
+  //   .help("load oriented non-environment source image") ;
+
+  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL",
+                  &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v)
     .help("load oriented non-environment source image") ;
 
   ap.arg("--fct_file FCT_FILE")
@@ -486,7 +547,7 @@ void arguments::init ( int argc , const char ** argv )
 
     input = fct_file ;
   }
-  else
+  else if ( args.facet_name_v.size() == 0 )
   {
     assert ( input != std::string() ) ;
   }
@@ -511,7 +572,6 @@ void arguments::init ( int argc , const char ** argv )
 
   if ( mount_image != std::string() )
   {
-    std::cout << "create env from mount image " << mount_image << std::endl ;
     mount_inp = ImageInput::open ( mount_image ) ;
     assert ( mount_inp ) ;
 
@@ -543,10 +603,10 @@ void arguments::init ( int argc , const char ** argv )
   }
   else if ( fct_file != std::string() )
   {
-    std::cout << "input is a multi-facet file: "
-              << fct_file << std::endl ;
+    std::cerr << "not implemented: input is a multi-facet file "
+                << fct_file << std::endl ;
   }
-  else
+  else if ( args.facet_name_v.size() == 0 )
   {
     // some member variables in the args object are gleaned from
     // the input image.
@@ -706,8 +766,6 @@ void arguments::init ( int argc , const char ** argv )
       x1 = extent.x1 ;
       y0 = extent.y0 ;
       y1 = extent.y1 ;
-      std::cout << "x0 " << x0 << " x1 " << x1 << " y0 " << y0 << " y1 " << y1
-                << std::endl ;
     }
     assert ( x0 < x1 ) ;
     assert ( y0 < y1 ) ;
@@ -748,6 +806,59 @@ int main ( int argc , const char ** argv )
   // of member variables in the global 'args' object
 
   args.init ( argc , argv ) ;
+
+  // do we have facets?
+
+  // TODO: this is a bit rough-and-ready - correct arguments will be
+  // parsed correctly, but if the numeric parameters aren't receiving
+  // a string representing a number, there is no error - the field
+  // will contain zero.
+
+  args.nfacets = args.facet_name_v.size() ;
+  if ( args.nfacets )
+  {
+    facet_spec fspec ;
+    for ( int i = 0 ; i < args.nfacets ; i++ )
+    {
+      const char * spec[8] ;
+      spec [ 0 ] = "facet_spec" ;
+      spec [ 1 ] = "--facet" ;
+      spec [ 2 ] = args.facet_name_v[i].c_str() ;
+      spec [ 3 ] = args.facet_projection_v[i].c_str() ;
+      spec [ 4 ] = args.facet_hfov_v[i].c_str() ;
+      spec [ 5 ] = args.facet_yaw_v[i].c_str() ;
+      spec [ 6 ] = args.facet_pitch_v[i].c_str() ;
+      spec [ 7 ] = args.facet_roll_v[i].c_str() ;
+      bool success = fspec.init ( 8 , spec ) ;
+      if ( ! success )
+      {
+        std::cerr << "parse of facet argument with index " << i
+                  << " failed" << std::endl ;
+        exit ( -1 ) ;
+      }
+      fspec.facet_no = i ;
+      fspec.hfov *= M_PI / 180.0 ;
+      fspec.yaw *= M_PI / 180.0 ;
+      fspec.pitch *= M_PI / 180.0 ;
+      fspec.roll *= M_PI / 180.0 ;
+      args.facet_spec_v.push_back ( fspec ) ;
+    }
+    std::size_t nch = args.facet_spec_v[0].nchannels ;
+    for ( auto & m : args.facet_spec_v )
+    {
+      assert ( m.nchannels == nch ) ;
+      if ( args.verbose )
+        std::cout << "facet " << m.facet_no
+                  << " '" << m.filename << "' "
+                  << projection_name[m.projection]
+                  << " " << m.width << "*" << m.height << "#" << m.nchannels
+                  << " hfov: " << m.hfov * 180.0 / M_PI
+                  << " y:" << m.yaw * 180.0 / M_PI 
+                  << " p:" << m.pitch * 180.0 / M_PI
+                  << " r:" << m.roll * 180.0 / M_PI << std::endl ;
+    }
+    args.nchannels = nch ;
+  }
 
   // are we to process a sequence file? If so, open the file
 
