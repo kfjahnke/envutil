@@ -1618,7 +1618,7 @@ struct source_t
   // function to handle the lookup. Here, we rely on OIIO's TextureSystem
   // to provide the data - we don't need to set up image storage.
 
-  source_t()
+  source_t ( std::size_t facet_no = 0 )
   {
     // itp == -1 means 'use OIIO's 'texture' function
 
@@ -1667,8 +1667,17 @@ struct source_t
       ts->attribute ( "options" , args.tsoptions ) ;
     }
 
-    OIIO::ustring uenvironment ( args.mount_image , 0 ) ;
-    th = ts->get_texture_handle ( uenvironment ) ;
+    if ( args.nfacets == 0 )
+    {
+      OIIO::ustring uenvironment ( args.mount_image , 0 ) ;
+      th = ts->get_texture_handle ( uenvironment ) ;
+    }
+    else
+    {
+      OIIO::ustring uenvironment
+        ( args.facet_spec_v [ facet_no ] . filename , 0 ) ;
+      th = ts->get_texture_handle ( uenvironment ) ;
+    }
   }
 
   void eval ( const pkg_v & _crd , px_v & px )
@@ -1894,6 +1903,22 @@ struct mount_t
 
     crd[0] ( ! mask ) = center[0] ;
     crd[1] ( ! mask ) = center[1] ;
+
+    return mask ;
+  }
+
+  mask_t get_mask ( const crd3_v & crd3 ) const
+  {
+    crd_v crd ;
+    get_coordinate_nomask ( crd3 , crd ) ;
+
+    auto mask =    ( crd[0] >= extent.x0 )
+                && ( crd[0] <= extent.x1 )
+                && ( crd[1] >= extent.y0 )
+                && ( crd[1] <= extent.y1 ) ;
+
+    if constexpr ( P == RECTILINEAR )
+      mask &= ( crd3[2] > 0.0f ) ;
 
     return mask ;
   }
@@ -2235,9 +2260,10 @@ struct environment
                                zimt::xel_t < U , C > ,
                                L > base_t ;
 
-
   using typename base_t::in_v ;
+  using typename base_t::in_ele_v ;
   using typename base_t::out_v ;
+  typedef typename in_ele_v::mask_type mask_t ;
 
   typedef zimt::xel_t < T , 2 > crd2_t ;
   typedef zimt::xel_t < T , 3 > ray_t ;
@@ -2255,6 +2281,8 @@ struct environment
   // member function simply calls this functor.
 
   zimt::grok_type < ray_t , px_t , L > env ;
+  typedef std::function < mask_t ( const in_v & ) > mask_f ;
+  mask_f get_mask ;
 
   environment ( const facet_spec & fct )
   {
@@ -2314,30 +2342,40 @@ struct environment
       {
         mount_t < C , 3 , RECTILINEAR , 16 > mnt ( extent , src ) ;
         env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
         break ;
       }
       case SPHERICAL:
       {
         mount_t < C , 3 , SPHERICAL , 16 > mnt ( extent , src ) ;
         env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
         break ;
       }
       case CYLINDRICAL:
       {
         mount_t < C , 3 , CYLINDRICAL , 16 > mnt ( extent , src ) ;
         env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
         break ;
       }
       case STEREOGRAPHIC:
       {
         mount_t < C , 3 , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
         env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
         break ;
       }
       case FISHEYE:
       {
         mount_t < C , 3 , FISHEYE , 16 > mnt ( extent , src ) ;
         env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
         break ;
       }
       default:
@@ -2415,30 +2453,40 @@ struct environment
         {
           mount_t < C , 3 , RECTILINEAR , 16 > mnt ( extent , src ) ;
           env = mnt ;
+          get_mask = [=] ( const in_v & crd3 )
+            { return mnt.get_mask ( crd3 ) ; } ;
           break ;
         }
         case SPHERICAL:
         {
           mount_t < C , 3 , SPHERICAL , 16 > mnt ( extent , src ) ;
           env = mnt ;
+          get_mask = [=] ( const in_v & crd3 )
+            { return mnt.get_mask ( crd3 ) ; } ;
           break ;
         }
         case CYLINDRICAL:
         {
           mount_t < C , 3 , CYLINDRICAL , 16 > mnt ( extent , src ) ;
           env = mnt ;
+          get_mask = [=] ( const in_v & crd3 )
+            { return mnt.get_mask ( crd3 ) ; } ;
           break ;
         }
         case STEREOGRAPHIC:
         {
           mount_t < C , 3 , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
           env = mnt ;
+          get_mask = [=] ( const in_v & crd3 )
+            { return mnt.get_mask ( crd3 ) ; } ;
           break ;
         }
         case FISHEYE:
         {
           mount_t < C , 3 , FISHEYE , 16 > mnt ( extent , src ) ;
           env = mnt ;
+          get_mask = [=] ( const in_v & crd3 )
+            { return mnt.get_mask ( crd3 ) ; } ;
           break ;
         }
         default:
@@ -2538,6 +2586,13 @@ struct environment
   void eval ( const in_v & in , out_v & out )
   {
     env.eval ( in , out ) ;
+  }
+
+  mask_t masked_eval ( const in_v & in , out_v & out )
+  {
+    mask_t mask = get_mask() ;
+    env.eval ( in , out ) ;
+    return mask ;
   }
 
 } ;

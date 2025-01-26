@@ -262,13 +262,43 @@ void work ( get_t & get , act_t & act )
   }
 }
 
-// this class is a simple example for giving preference to one specific
+// this class is an example for giving preference to one specific
 // facet - as opposed to code mixing several values. There are two
 // member functions. The first one processes a std::vector of simdized
-// rays, selectig the one which is most central (approximated here only
-// by forming x*x + y*y) and evaluating there. The second member function
+// rays, selecting the rays which are most central (by calculating the
+// angle with the 'forward' ray (0,0,1)) and evaluating there. The
+// angle can be calculated in this way because the rays we receive
+// here are in the facets' coordinate system - the orientations of
+// the facets and the virtual camera are encoded in the 'steppers'
+// which generate the rays we receive here. The second member function
 // receives a std::vector of 'ninepacks' which are the basis for using
-// 'twining'. It does in turn call the first member repeatedly.
+// 'twining'. It does in turn call the first member repeatedly - once
+// for each of the twining kernel's coefficients. Note how this softens
+// the hard discontinuity between 'colliding' facets: each of the
+// component values of the weighted sum which is formed by the twining
+// operations may stem from a *different* facet, so near the border,
+// result pixels will contain a *blend* of components from both facets.
+// While twining is computationally expensive, this is a strategy to
+// avoid the ungainly staircase artifacts where facets collide. The
+// final result is like a scaled-down version of a much larger image,
+// and the scaling-down would have the same effect of blending pixels
+// from colliding facets where pixels from two facets fall into the
+// same bin in the scaled-down result.
+// The result is a voronoi diagram - apart from the fact that where
+// facets don't cover their full share of their tangent plane, other
+// facets may be visible. If all facets are sufficiently large and
+// there are no gaps, the result is much like a voronoi diagram. envutil
+// also allows facets in other projections than rectilinear - with
+// such facets, the image center is also the reference but the samples
+// are - conceptually - no longer on a tangent plane but on the 'draped'
+// 2D manifold - e.g. a sphere for spherically-projected facets. Still,
+// the proximity criterion is calculated with 3D rays - but where
+// rectilinear facets have straight intersections, non-rectilinear
+// ones may have curved intersections. The ray-based proximity criterion
+// is slower to compute than the 2D distance-to-center one might also
+// use (on target coordinates) - but ray-based is universally applicable
+// and produces values which compare across different projections,
+// whereas the 2D target coordinate varies with the projection used.
 
 template < typename ENV >
 struct voronoi_syn
@@ -276,46 +306,156 @@ struct voronoi_syn
   typedef typename ENV::px_t px_t ;
   typedef simdized_type < px_t , 16 > px_v ;
   static const std::size_t nch = px_t::size() ;
+  const int sz ;
+  typedef zimt::xel_t < float , 3 > ray_t ;
+  typedef zimt::xel_t < float , 9 > ninepack_t ;
+  typedef simdized_type < float , 16 > f_v ;
+  typedef simdized_type < ray_t , 16 > ray_v ;
+  typedef simdized_type < ninepack_t , 16 > ninepack_v ;
 
   std::vector < ENV > & env_v ;
 
   voronoi_syn ( std::vector < ENV > & _env_v )
-  : env_v ( _env_v )
+  : env_v ( _env_v ) ,
+    sz ( _env_v.size() )
   { }
 
-  void crd_syn ( const std::vector
-          < simdized_type < zimt::xel_t < float , 3 > , 16 > > & pv ,
-        simdized_type < px_t , 16 > & trg ,
+  // this helper function calculates the vector of angles between
+  // two vectors of rays. In this context, the second ray is always
+  // (0,0,1), but the optimizer should figure that out.
+
+  f_v angle ( const ray_v & a , const ray_v & b ) const
+  {
+    auto dot = ( a * b ) . sum() ;
+    auto costheta = dot / ( norm ( a ) * norm ( b ) ) ;
+    return acos ( costheta ) ;
+  }
+
+  // this is the operator() overload for incoming ray data. The next
+  // one down is for 'ninepacks'.
+
+  void operator() (
+        const std::vector < ray_v > & pv ,
+        px_v & trg ,
         const std::size_t & cap = 16 ) const
   {
-    std::size_t sz = pv.size() ;
-    auto sqd_min = ( pv[0][0] * pv[0][0] + pv[0][1] * pv[0][1] ) ;
-    env_v [ 0 ] . eval ( pv[0] , trg ) ;
+    // this vector will contain the index of the 'most suitable'
+    // facet at the given location, according to the criterion.
 
-    for ( std::size_t i = 1 ; i < sz ; i++ )
+    simdized_type < int , 16 > champion_v ( -1 ) ;
+
+    // next_best starts out with an invalid facet index, and if this
+    // isn't updated during processing, it serves as an indicator
+    // that no facet is hit by any ray - a special case which can
+    // be dealt with very efficiently: produce 0000
+
+    int next_best = -1 ;
+
+    // calculate the criterion value for the first facet. If the
+    // ray from 'pv' misses the facet, we set the criterion to
+    // a very large value, so it can't win the competition.
+
+    static const ray_t forward { 0.0f , 0.0f , 1.0f } ;
+
+    auto min_angle = angle ( pv[0] , forward ) ;
+    auto valid = env_v[0].get_mask ( pv[0] ) ;
+    min_angle ( ! valid ) = std::numeric_limits<float>::max() ;
+
+    // do any of the rays hit the facet? then update 'next_best',
+    // which, at this point, is still -1, indicating 'all misses'.
+    // This can't be the case any more.
+
+    if ( any_of ( valid ) )
     {
-      auto sqd_current = pv[i][0] * pv[i][0] + pv[i][1] * pv[i][1] ;
-      auto mask = ( sqd_current < sqd_min ) ;
+      next_best = 0 ;
+      champion_v = 0 ;
+    }
+
+    // create the vector of 'champions' - the indices of the
+    // facets with the 'best' criterion value
+
+    for ( int i = 1 ; i < sz ; i++ )
+    {
+      auto current_angle = angle ( pv[i] , forward ) ;
+      valid = env_v[i].get_mask ( pv[i] ) ;
+      current_angle ( ! valid ) = std::numeric_limits<float>::max() ;
+      auto mask = ( current_angle < min_angle ) ;
+
+      // do any of the rays hit the facet? then update 'next_best',
+      // which, at this point, may still be -1, or already a value
+      // set by a previous loop iteration.
+
       if ( any_of ( mask ) )
       {
-        sqd_min ( mask ) = sqd_current ;
-        px_v help ;
-        env_v [ i ] . eval ( pv[i] , help ) ;
-        for ( std::size_t ch = 0 ; ch < nch ; ch++ )
-          trg[ch] ( mask ) = help[ch] ;
+        min_angle ( mask ) = current_angle ;
+        next_best = i ;
+        champion_v ( mask ) = i ;
+      }
+    }
+
+    // first check: if next_best is still -1, all facets are missed
+    // and the result is 0000. This is the fastest outcome, and if
+    // part of the output isn't covered by any facets, this will
+    // save a good deal of cycles.
+
+    if ( next_best == -1 )
+    {
+      trg = 0.0f ;
+    }
+
+    // now check: if all occupants of 'champion_v' are equal,
+    // we can special-case. Since this is the most common case,
+    // this is beneficial for performance. Note that we don't
+    // check the contents of champion_v for equality - next_best
+    // certainly holds a facet index to a facet which *is* hit,
+    // (it isn't -1, so it is set to a 'hit' facet's index)
+    // and if all champions are equal, they must be equal to this
+    // one, which is the only one in-play in this special case.
+
+    else if ( all_of ( champion_v == next_best ) )
+    {
+      env_v [ next_best ] . eval ( pv [ next_best ] , trg ) ;
+    }
+    else
+    {
+      // champion_v's occupants are not all equal, so we need to
+      // evaluate every in-play facet and compose the result.
+      // some rays may not have hit any facet, so we clear trg
+      // first. We refrain from testing for occupants with value
+      // -1, because foming a mask and performing a masked assignment
+      // is more costly then clearing trg. this is aslo the 'worst
+      // case' - preformance-wise - where the rays hit several facets. 
+
+      trg = 0.0f ;
+
+      for ( int i = 0 ; i < sz ; i++ )
+      {
+        // form a mask which is true where the champion is i.
+
+        auto mask = ( champion_v == i ) ;
+
+        // if this mask has occupants, we need to obtain pixel data
+        // for this facet and transfer them to the corresponding lanes.
+
+        if ( any_of ( mask ) )
+        {
+          px_v help ;
+          env_v [ i ] . eval ( pv [ i ] , help ) ;
+          for ( int ch = 0 ; ch < nch ; ch++ )
+            trg[ch] ( mask ) = help[ch] ;
+        }
       }
     }
   }
 
-  void crd_syn ( const std::vector
+  void operator() (
+        const std::vector
           < simdized_type < zimt::xel_t < float , 9 > , 16 > > & pv ,
         simdized_type < px_t , 16 > & trg ,
         const std::size_t & cap = 16 ) const
   {
     typedef simdized_type < zimt::xel_t < float , 3 > , 16 > ray_v ;
     typedef simdized_type < zimt::xel_t < float , 9 > , 16 > ray9_v;
-
-    std::size_t sz = pv.size() ;
 
     // 'scratch' will hold all ray packets which will react with
     // a given twining coefficient 'cf'
@@ -339,7 +479,7 @@ struct voronoi_syn
       // set of three coordinate from the second, and third,
       // respectively. Store the 'deflected' ray in 'scratch'
 
-      for ( std::size_t i = 0 ; i< sz ; i++ )
+      for ( int i = 0 ; i< sz ; i++ )
       {
         const ray9_v & c ( pv[i] ) ;
         px_v p0 { c[0] , c[1] , c[2] } ;
@@ -354,7 +494,7 @@ struct voronoi_syn
       // for the contributors reacting with the current coefficient
 
       px_v help ;
-      crd_syn ( scratch , help , cap ) ;
+      operator() ( scratch , help , cap ) ;
 
       // 'help' is the pixel value, which is weighted with the
       // weighting value in the twining kernel and added to what's
@@ -377,12 +517,13 @@ void fuse ( int ninputs )
   typedef grok_get_t < float , 9 , 2 , 16 > gg9_t ;
 
   typedef environment < float , float , NCH , 16 > env_t ;
-  typedef environment9 < NCH , 16 > env9_t ;
 
-  typedef fusion_t < float , NCH , 2 , 16 , float , 3 > fs_t ;
-  typedef typename fs_t::syn_f syn_f ;
-  typedef fusion_t < float , NCH , 2 , 16 , float , 9 > fs9_t ;
-  typedef typename fs9_t::syn_f syn9_f ;
+  typedef voronoi_syn < env_t > vs_t ;
+
+  typedef fusion_t < float , NCH , 2 , 16 , float , 3 , vs_t > fs_t ;
+  // typedef typename fs_t::syn_f syn_f ;
+  typedef fusion_t < float , NCH , 2 , 16 , float , 9 , vs_t > fs9_t ;
+  // typedef typename fs9_t::syn_f syn9_f ;
 
   typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
   std::vector < basis_t > basis_v ;
@@ -475,22 +616,9 @@ void fuse ( int ninputs )
 
     voronoi_syn vs ( env_v ) ;
 
-    // to use it with a fusion_t object (this is now a stock object
-    // in zimt) we need to pass a callback. We use a lambda which
-    // invokes the synopsis-forming object. TODO: refactor
-
-    auto syn = [=] (
-        const std::vector
-          < simdized_type < zimt::xel_t < float , 3 > , 16 > > & pv ,
-        px_v & trg ,
-        const std::size_t & cap = 16 )
-    {
-      vs.crd_syn ( pv , trg , cap ) ;
-    } ;
-
     // now we can create the fusion_t object
 
-    fs_t fs ( get_v , syn ) ;
+    fs_t fs ( get_v , vs ) ;
 
     // now we call the final 'work' template which uses the fusion_t
     // which directly produces a pixel value, so we use a pass_through
@@ -521,22 +649,14 @@ void fuse ( int ninputs )
 
       get_v.push_back ( get_ray ) ;
     }
+
     // now we set up the synopsis-forming object and introduce it to
     // the fusion_t object - which is now used via it's ninepack-
     // processing member function.
 
     voronoi_syn vs ( env_v ) ;
 
-    auto syn = [=] (
-        const std::vector
-          < simdized_type < zimt::xel_t < float , 9 > , 16 > > & pv ,
-        px_v & trg ,
-        const std::size_t & cap = 16 )
-    {
-      vs.crd_syn ( pv , trg , cap ) ;
-    } ;
-
-    fs9_t fs ( get_v , syn ) ;
+    fs9_t fs ( get_v , vs ) ;
 
     // now we call the final 'work' template which uses the fusion_t
     // which directly produces a pixel value, so we use a pass_through
@@ -678,6 +798,12 @@ void roll_out ( int ninputs )
   }
 }
 
+// while evolving the code, I narrow the scope to three channels
+// only and only three projections. This lowers turn-around time
+// considerably.
+
+// #define NARROW_SCOPE
+
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate
 // the next roll_out level with a stepper type which fits the
@@ -692,15 +818,18 @@ void roll_out ( int ninputs ,
     case SPHERICAL:
       roll_out < NCH , spherical_stepper > ( ninputs ) ;
       break ;
+#ifndef NARROW_SCOPE
     case CYLINDRICAL:
       roll_out < NCH , cylindrical_stepper > ( ninputs ) ;
       break ;
+#endif
     case RECTILINEAR:
       roll_out < NCH , rectilinear_stepper > ( ninputs ) ;
       break ;
     case FISHEYE:
       roll_out < NCH , fisheye_stepper > ( ninputs ) ;
       break ;
+#ifndef NARROW_SCOPE
     case STEREOGRAPHIC:
       roll_out < NCH , stereographic_stepper > ( ninputs ) ;
       break ;
@@ -710,7 +839,10 @@ void roll_out ( int ninputs ,
     case BIATAN6:
       roll_out < NCH , biatan6_stepper > ( ninputs ) ;
       break ;
+#endif
     default:
+      std::cerr << "unhandled projection # " << int(projection)
+                << std::endl ;
       break ;
   }
 }
@@ -757,18 +889,24 @@ struct dispatch
   {
     switch ( nchannels )
     {
+#ifndef NARROW_SCOPE
       case 1:
         roll_out < 1 > ( ninputs , projection ) ;
         break ;
       case 2:
         roll_out < 2 > ( ninputs , projection ) ;
         break ;
+#endif
       case 3:
         roll_out < 3 > ( ninputs , projection ) ;
         break ;
+#ifndef NARROW_SCOPE
       case 4:
         roll_out < 4 > ( ninputs , projection ) ;
         break ;
+#endif
+      std::cerr << "unhandled channel count " << nchannels
+                << std::endl ;
     }
     return 0 ;
   }

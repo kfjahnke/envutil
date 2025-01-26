@@ -762,6 +762,173 @@ grok ( grokkee_type grokkee )
                   ( grokkee ) ;
 }
 
+// same, but for const grokkees
+
+template < typename IN ,       // argument or input type
+           typename OUT = IN , // result type
+           size_t _vsize = vector_traits < IN > :: size
+         >
+struct cgrok_type
+: private grok_t ,
+  public unary_functor < IN , OUT , _vsize >
+{
+  typedef unary_functor < IN , OUT , _vsize > base_type ;
+
+  using base_type::vsize ;
+  using base_type::dim_in ;
+  using base_type::dim_out ;
+
+  using typename base_type::in_ele_type ;
+  using typename base_type::out_ele_type ;
+  using typename base_type::in_type ;
+  using typename base_type::out_type ;
+  using typename base_type::in_v ;
+  using typename base_type::out_v ;
+
+private:
+
+  // 'inner workings' of cgrok_type, which we keep private
+
+  // define the types for the std::function we will use to
+  // wrap the grokkee's evaluation code in. First the eval
+  // function for full vectors:
+
+  typedef std::function
+    < void ( void * & , const in_v & , out_v & )
+    > v_eval_type ;
+
+  // capped evaluation has an additional 'cap' argument, giving the
+  // number of 'genuine' lanes, while the rest are duplicates of
+  // other lanes to provide valid input and full vectors. The 'cap'
+  // value is rarely relevant: only reductions depend on it for
+  // correct output, because they need to keepe the duplicated
+  // lanes used to fill up the vectors from entring their results.
+
+  typedef std::function
+    < void ( void * & , const in_v & , out_v & ,
+             const std::size_t & cap )
+    > c_eval_type ;
+
+  // these are the class members holding the std::functions:
+
+  v_eval_type _v_ev ;
+  c_eval_type _c_ev ;
+
+
+public:
+
+  /// we provide a default constructor so we can create an empty
+  /// cgrok_type and assign to it later. Calling the empty cgrok_type's
+  /// eval will have no effect (we're using a 'do_nothing' object as
+  /// grokkee) - we need to have a grokkee, or else we can't create
+  /// copies of the empty cgrok_type
+
+  cgrok_type()
+  : grok_t ( do_nothing < in_ele_type , dim_in ,
+                          out_ele_type , dim_out , _vsize >() )
+  { } ;
+  
+  /// constructor from 'grokkee' using lambda expressions
+  /// to initialize the std::functions above. we enable this if
+  /// grokkee_type is a unary_functor. We may relax the
+  /// requirement and accept anything that 'fits'.
+
+  template < class grokkee_type ,
+             typename std::enable_if
+              < std::is_base_of
+                < unary_functor_tag < vsize > ,
+                  grokkee_type
+                > :: value ,
+                int
+              > :: type = 0
+            >
+  cgrok_type ( grokkee_type grokkee )
+  : grok_t ( grokkee )
+  {
+    // use vs_adapter to create a functor with an uncapped and
+    // a capped eval function, even if 'grokkee_type' does not
+    // have a capped variant: in this case, the uncapped variant
+    // will be invoked and the cap value is ignored. Most of the
+    // time, 'act' functors don't need a separate 'capped' eval
+    // overload - the exception being reductions. With the code
+    // to route the call to the capped overload to the uncapped
+    // overload if the capped overload is missing, we gain ease
+    // of use, but we need to be aware of the fact that reductions
+    // must provide a capped overload.
+    // The 'context' is stored as a void pointer, and this void
+    // pointer, which will be distinct for every copy of the
+    // grokked functor, is passed to the lambdas when they are
+    // invoked. This ensures the individuality of each copy of
+    // a cgrok_type object, and at the same time it ensures that
+    // within a specific cgrok_type object, all member functions
+    // work with the same grokkee. If we were to put p_context
+    // 'into' the lambdas right here, all copies would instead
+    // refer to the same grokkee - the one we generate here.
+
+    typedef vs_adapter < grokkee_type > g_t ;
+
+    // now initialize the class members holding std::functions
+    // with lambdas taking first the context, then more arguments.
+    // This is how we delegate to the grokkee: the lambdas
+    // static_cast the context pointer to the grokkee's type
+    // (which is known in this contructor because the argument
+    // is typed so), and then they proceed to delegate the
+    // call to the grokkee. Replication and termination use
+    // the same pattern. Once the lambdas are stored in the
+    // std::functions _e_ev, _c_ev etc. the 'knowledge' of
+    // how to delegate is removed from view: the grokkee's type
+    // is no longer visible or accessible, hence the term 'type
+    // erasure'. Of course the *compiler* can still track what
+    // is going on, and if the grokkee's class definition is
+    // accessible during compilation of the grok, it can
+    // optimize it just as if the grokkee had been used
+    // instead, and there is no overhead. On the other hand,
+    // if the grokkee's class definition is elsewhere, the
+    // mechanism still works, but the context pointer and the
+    // delegation won't be optimized away during compilation.
+    // Even such constructs may be optimized away during
+    // run-time when the code is JITed or submitted to similar
+    // tuning mechanisms.
+
+    _v_ev = [] ( void * p_ctx , const in_v & in , out_v & out )
+            {
+              static_cast<const g_t*> ( p_ctx ) -> eval ( in , out ) ;
+            } ;
+
+    _c_ev = [] ( void * p_ctx , const in_v & in , out_v & out ,
+                 const std::size_t & cap )
+            {
+              static_cast<const g_t*> ( p_ctx ) -> eval ( in , out , cap ) ;
+            } ;
+  } ;
+
+  // the eval member functions pass the cgrok_type object's 'own'
+  // p_context to the lambdas which are captured in the members
+  // _v_ev etc., stored as std::functions.
+
+  // uncapped evaluation member function
+
+  void eval ( const in_v & i , out_v & o ) const
+  {
+    _v_ev ( p_context , i , o ) ;
+  }
+
+  void eval ( const in_type & i , out_type & o ) const
+  {
+    in_v iv ( i ) ;
+    out_v ov ;
+    eval ( iv , ov ) ;
+    o = ov[0] ;
+  }
+
+  // capped evaluation function template
+
+  void eval ( const in_v & i , out_v & o , const std::size_t & cap ) const
+  {
+    _c_ev ( p_context , i , o , cap ) ;
+  }
+} ;
+
 /// amplify_type amplifies it's input with a factor. If the data are
 /// multi-channel, the factor is multi-channel as well and the channels
 /// are amplified by the corresponding elements of the factor.
