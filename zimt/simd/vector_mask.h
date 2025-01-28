@@ -123,7 +123,7 @@ struct masked_type
   // for the masked vector, we define the complete set of assignments:
 
   #define OPEQ_FUNC(OPFUNC,OPEQ,CONSTRAINT) \
-    XEL & OPFUNC ( value_type rhs ) \
+    XEL OPFUNC ( value_type rhs ) \
     { \
       CONSTRAINT \
       for ( size_type i = 0 ; i < vsize ; i++ ) \
@@ -133,7 +133,7 @@ struct masked_type
       } \
       return whither ; \
     } \
-    XEL & OPFUNC ( XEL rhs ) \
+    XEL OPFUNC ( XEL rhs ) \
     { \
       CONSTRAINT \
       for ( size_type i = 0 ; i < vsize ; i++ ) \

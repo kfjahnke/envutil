@@ -1880,39 +1880,37 @@ public:
                   simd_t & _whither )
     : whether ( _whether ) ,
       whither ( _whither )
-      {
-//         whether = _whether ;
-      }
+      { }
 
     // for the masked vector, we define the complete set of assignments:
 
-    simd_t & operator= ( const value_type & rhs ) \
-    { \
-      for ( std::size_t n = 0 , i = 0 ; n < vsize ; ++i , n += L() ) \
-      { \
-        auto m = whether.yield ( i ) ; \
-        auto v = whither.yield ( i ) ; \
-        auto vr = hn::Set ( D() , rhs ) ; \
-        whither.take ( i , hn::IfThenElse ( m , vr , v ) ) ; \
-      } \
-      return whither ; \
-    } \
-    simd_t & operator= ( const simd_t & rhs ) \
-    { \
-      for ( std::size_t n = 0 , i = 0 ; n < vsize ; ++i , n += L() ) \
-      { \
-        auto m = whether.yield ( i ) ; \
-        auto v = whither.yield ( i ) ; \
-        auto vr = rhs.yield ( i ) ; \
-        whither.take ( i , hn::IfThenElse ( m , vr , v ) ) ; \
-      } \
-      return whither ; \
+    simd_t operator= ( const value_type & rhs )
+    {
+      for ( std::size_t n = 0 , i = 0 ; n < vsize ; ++i , n += L() )
+      {
+        auto m = whether.yield ( i ) ;
+        auto v = whither.yield ( i ) ;
+        auto vr = hn::Set ( D() , rhs ) ;
+        whither.take ( i , hn::IfThenElse ( m , vr , v ) ) ;
+      }
+      return whither ;
+    }
+    simd_t operator= ( const simd_t & rhs )
+    {
+      for ( std::size_t n = 0 , i = 0 ; n < vsize ; ++i , n += L() )
+      {
+        auto m = whether.yield ( i ) ;
+        auto v = whither.yield ( i ) ;
+        auto vr = rhs.yield ( i ) ;
+        whither.take ( i , hn::IfThenElse ( m , vr , v ) ) ;
+      }
+      return whither ;
     }
 
     // most operators can be rolled out over vec_t
 
     #define OPEQ_FUNC(OPFUNC,OP,CONSTRAINT) \
-      simd_t & OPFUNC ( const value_type & rhs ) \
+      simd_t OPFUNC ( const value_type & rhs ) \
       { \
         CONSTRAINT \
         for ( std::size_t n = 0 , i = 0 ; n < vsize ; ++i , n += L() ) \
@@ -1924,7 +1922,7 @@ public:
         } \
         return whither ; \
       } \
-      simd_t & OPFUNC ( const simd_t & rhs ) \
+      simd_t OPFUNC ( const simd_t & rhs ) \
       { \
         CONSTRAINT \
         for ( std::size_t n = 0 , i = 0 ; n < vsize ; ++i , n += L() ) \

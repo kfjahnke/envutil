@@ -573,10 +573,17 @@ struct vc_simd_type
   BROADCAST_STD_FUNC(sin)
   BROADCAST_STD_FUNC(cos)
   BROADCAST_STD_FUNC(asin)
-  BROADCAST_STD_FUNC(acos)
+  // BROADCAST_STD_FUNC(acos)
   BROADCAST_STD_FUNC(atan)
 
   #undef BROADCAST_STD_FUNC
+
+  // Vc doesn't offer acos(), but this is easy:
+
+  friend vc_simd_type acos ( const vc_simd_type & arg )
+  {
+    return M_PI_2 - asin ( arg ) ;
+  }
 
   // Vc doesn't offer tan(), but it has sincos.
 

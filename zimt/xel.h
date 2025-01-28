@@ -152,6 +152,44 @@ void interleave ( const xel_t < vec_t , nch > & v ,
     v[i].scatter ( trg , indexes ) ;
 }
 
+// we start out with a traits class to associate a mask type with
+// a few types. We'll use that in the implementation of the Vc-like
+// idiom X(mask) = Y
+
+// the default for a mask is 'bool'
+
+template < typename T , class Enable = void >
+struct mask_traits
+{
+  typedef bool mask_type ;
+} ;
+
+// if T is a type derived from simd_flag (as all simdized types in
+// zimt are), they have a mask_type already defined.
+
+template < typename T >
+struct mask_traits < T ,
+                     typename std::enable_if
+                       < std::is_base_of < simd_flag , T > :: value
+                       > :: type
+                   >
+{
+  typedef typename T::mask_type mask_type ;
+} ;
+
+template < typename T , std::size_t N > struct xel_t ;
+
+// now that we can produce a mask_type for both simdized and 'plain'
+// T, we can produce the mask_type of xel of simdized types. This is
+// itself a xel_t - of N masks of the type which suit T.
+
+template < typename T , std::size_t N >
+struct mask_traits < xel_t < T , N > >
+{
+  typedef xel_t < typename mask_traits < T > :: mask_type , N >
+            mask_type ;
+} ;
+
 /// class template xel_t provides a fixed-size container type for
 /// small sets of fundamentals or SIMD data types which are stored
 /// in a C vector.
@@ -369,56 +407,6 @@ xel_t < value_type , nch + 1 > widen ( const value_type & by ,
 #define BOOL_ONLY \
   static_assert ( std::is_same < value_type , bool > :: value , \
                   "this operation is only allowed for booleans" ) ;
-
-struct masked_xel_t
-{
-  bool whether ; // if the 'mask' is true
-  xel_t & whither ;   // whither will be assigned to
-
-  masked_xel_t ( bool _whether ,
-                 xel_t & _whither )
-  : whether ( _whether ) ,
-    whither ( _whither )
-    { }
-
-  #define OPEQ_FUNC(OPFUNC,OPEQ,CONSTRAINT) \
-    xel_t & OPFUNC ( value_type rhs ) \
-    { \
-      CONSTRAINT \
-      if ( whether ) \
-           whither OPEQ rhs ; \
-      return whither ; \
-    } \
-    xel_t & OPFUNC ( xel_t rhs ) \
-    { \
-      CONSTRAINT \
-        if ( whether ) \
-             whither OPEQ rhs ; \
-      return whither ; \
-    }
-
-  OPEQ_FUNC(operator=,=,)
-  OPEQ_FUNC(operator+=,+=,)
-  OPEQ_FUNC(operator-=,-=,)
-  OPEQ_FUNC(operator*=,*=,)
-  OPEQ_FUNC(operator/=,/=,)
-  OPEQ_FUNC(operator%=,%=,INTEGRAL_ONLY)
-  OPEQ_FUNC(operator&=,&=,INTEGRAL_ONLY)
-  OPEQ_FUNC(operator|=,|=,INTEGRAL_ONLY)
-  OPEQ_FUNC(operator^=,^=,INTEGRAL_ONLY)
-  OPEQ_FUNC(operator<<=,<<=,INTEGRAL_ONLY)
-  OPEQ_FUNC(operator>>=,>>=,INTEGRAL_ONLY)
-
-#undef OPEQ_FUNC
-
-#undef INTEGRAL_ONLY
-#undef BOOL_ONLY
-} ;
-
-masked_xel_t & operator() ( const bool & condition )
-{
-  return masked_xel_t ( condition , *this ) ;
-}
 
 bool any_of ( bool condition )
 {
@@ -649,6 +637,114 @@ template < typename = std::enable_if < ( nch == 1 ) > >
 operator value_type()
 {
   return (*this)[0] ;
+}
+
+// for xel_t, we want to use the same idiom for masked assignments
+// that we already have for simdized types, namely X(mask) = Y,
+// meaning 'assign from Y to X whare mask is true'. We use the same
+// strategy to implement this as we have done in the SIMD code,
+// but additionally we use a traits class mask_traits (defined
+// just before class xel_t).
+
+// To define a masked xel, we proceed roughly in the same way as the
+// code in simd/vector_mask.h, which codes mask types and masked
+// assignements for gen_simd_type
+
+struct masked_xel_t
+{
+  typedef typename mask_traits < T > :: mask_type mask1_type ;
+  typedef typename mask_traits < xel_t > :: mask_type mask_type ;
+
+  mask_type whether ; // where the 'mask' is true
+  xel_t & whither ;   // whither will be assigned to
+
+  masked_xel_t ( mask1_type _whether ,
+                 xel_t & _whither )
+  : whether ( xel_t < mask1_type , N > ( _whether ) ) ,
+    whither ( _whither )
+    { }
+  
+  masked_xel_t ( mask_type _whether ,
+                 xel_t & _whither )
+  : whether ( _whether ) ,
+    whither ( _whither )
+    { }
+
+  // we use tag dispatching to provide two variants of 'assign_slot'.
+  // if value_type is a simdized type, we use the X(mask)=Y idiom
+  // for a masked assignment, and if it's not a simdized type, we
+  // use a conditional assignment instead.
+
+  void assign_slot ( std::size_t ch , T rhs , std::true_type )
+  {
+    whither [ ch ] ( whether [ ch ] ) = rhs ;
+  }
+
+  void assign_slot ( std::size_t ch , T rhs , std::false_type )
+  {
+    if ( whither [ ch ] )
+      whether [ ch ] = rhs ;
+  }
+
+  void assign_slot ( std::size_t ch , T rhs )
+  {
+    typedef std::integral_constant
+      < bool , std::is_base_of < simd_flag , T > :: value > tag_t ;
+    assign_slot ( ch , rhs , tag_t() ) ;
+  }
+
+  // now we can code the operator functions which affect the
+  // masked assignment of some rhs value to 'whither'. Once the
+  // assigment is done, we return the modified value.
+
+  #define OPEQ_FUNC(OPFUNC,OPEQ,CONSTRAINT) \
+    xel_t OPFUNC ( T rhs ) \
+    { \
+      CONSTRAINT \
+      for ( std::size_t ch = 0 ; ch < N ; ch++ ) \
+        assign_slot ( ch , rhs ) ; \
+      return whither ; \
+    } \
+    xel_t OPFUNC ( xel_t rhs ) \
+    { \
+      CONSTRAINT \
+      for ( std::size_t ch = 0 ; ch < N ; ch++ ) \
+        assign_slot ( ch , rhs [ ch ] ) ; \
+      return whither ; \
+    }
+
+  OPEQ_FUNC(operator=,=,)
+  OPEQ_FUNC(operator+=,+=,)
+  OPEQ_FUNC(operator-=,-=,)
+  OPEQ_FUNC(operator*=,*=,)
+  OPEQ_FUNC(operator/=,/=,)
+  OPEQ_FUNC(operator%=,%=,INTEGRAL_ONLY)
+  OPEQ_FUNC(operator&=,&=,INTEGRAL_ONLY)
+  OPEQ_FUNC(operator|=,|=,INTEGRAL_ONLY)
+  OPEQ_FUNC(operator^=,^=,INTEGRAL_ONLY)
+  OPEQ_FUNC(operator<<=,<<=,INTEGRAL_ONLY)
+  OPEQ_FUNC(operator>>=,>>=,INTEGRAL_ONLY)
+
+#undef OPEQ_FUNC
+
+#undef INTEGRAL_ONLY
+#undef BOOL_ONLY
+
+} ; // end of struct masked_xel_t
+
+// finally, we define operator() for xel_t taking a mask as
+// argument. It produces a masked_xel_t which has all sorts
+// of assigments and augmented assignments defined.
+// using a template here is quite permissive, but I can't think
+// of another good meaning for xel_t::operator(). We can pass
+// both mask1_type and mask_type arguments - the former will be
+// broadcast to all channels. The first variant should actually
+// be the more common one.
+
+template < typename MASK >
+masked_xel_t operator() ( const MASK & mask )
+{
+  return masked_xel_t ( mask , *this ) ;
 }
 
 } ; // end of struct xel_t

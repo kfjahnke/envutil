@@ -226,7 +226,7 @@ void work ( get_t & get , act_t & act )
   // a multithreaded pipeline which fills the target image.
   
   zimt::bill_t bill ;
-  bill.njobs = 1 ;
+  // bill.njobs = 1 ;
 
   std::chrono::system_clock::time_point start
     = std::chrono::system_clock::now() ;
@@ -441,8 +441,9 @@ struct voronoi_syn
         {
           px_v help ;
           env_v [ i ] . eval ( pv [ i ] , help ) ;
-          for ( int ch = 0 ; ch < nch ; ch++ )
-            trg[ch] ( mask ) = help[ch] ;
+          trg ( mask ) = help ;
+          // for ( int ch = 0 ; ch < nch ; ch++ )
+          //   trg[ch] ( mask ) = help[ch] ;
         }
       }
     }
@@ -873,8 +874,8 @@ struct dispatch
 
   dispatch()
   {
-    hwy_target = HWY_TARGET ;
     #ifdef HWY_TARGET_STR
+      hwy_target = HWY_TARGET ;
       hwy_target_name = hwy::TargetName ( HWY_TARGET ) ;
       hwy_target_str = HWY_TARGET_STR ;
     #else
