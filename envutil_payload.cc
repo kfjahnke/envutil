@@ -300,6 +300,37 @@ void work ( get_t & get , act_t & act )
 // and produces values which compare across different projections,
 // whereas the 2D target coordinate varies with the projection used.
 
+// The code in voronoi_syn is only suitable for fully-opaque images:
+// to handle data with transparency, figuring out a single 'winner'
+// is not sufficient, because the winning pixel might be partially or
+// fully transparent, in which case worse-ranking pixels should 'shine
+// through'. To achieve this, z-buffering of the data is needed - like
+// it is done in lux (see pv_rendering.cc, class 'multi_facet_type_4').
+// class voronoi_syn_plus implements handling of transparent facets
+// with alpha compositing in z-buffer sequence, see there!
+// The lux code also shows that even with transparency, a lot of
+// potential shortcuts can save time and not every pixel needs the
+// 'full treatment'. lux also employs facet pre-selection, inspecting
+// each facet's frustum and it's intersection with the target image's.
+// This process of 'culling' can greatly reduce computational load if
+// the current view only involves a small amount of facets. When
+// stitching panoramas, though, it's often the case that all facets are
+// involved, so the frustum inspection code does not help. In envutil,
+// I intend to use a different method: coarse masking and tiling. The
+// idea is to use a coarse mask of the intersection of each facet with
+// the target image stored in a cubemap (preferably biatan6 type) with
+// relatively low resolution which coincides with a tiling of the target
+// image so that each pixel in the coarse mask is 'as large' as a tile
+// of the target image. If, then, the target image is built tile by tile,
+// the participating facets can be found by evaluating their corresponding
+// coarse masks and only picking those which aren't zero at the given
+// location. A biatan6-projected cubemap is quite close to ideal when it
+// comes to evenness of represented spherical 'real estate' per pixel
+// of the map. The operation would be more fine-grained compared to the
+// frustum-based approach.
+
+// This aside, here goes: this is the code for fully opaque facets:
+
 template < typename ENV >
 struct voronoi_syn
 {
@@ -320,15 +351,21 @@ struct voronoi_syn
     sz ( _env_v.size() )
   { }
 
-  // this helper function calculates the vector of angles between
-  // two vectors of rays. In this context, the second ray is always
-  // (0,0,1), but the optimizer should figure that out.
+  // general calculation of the angles between rays:
+  //
+  // f_v angle ( const ray_v & a , const ray_v & b ) const
+  // {
+  //   auto dot = ( a * b ) . sum() ;
+  //   auto costheta = dot / ( norm ( a ) * norm ( b ) ) ;
+  //   return acos ( costheta ) ;
+  // }
 
-  f_v angle ( const ray_v & a , const ray_v & b ) const
+  // this helper function calculates the vector of angles between
+  // a vector of rays and (0,0,1) - unit forward in our CS.
+
+  f_v angle_against_001 ( const ray_v & a ) const
   {
-    auto dot = ( a * b ) . sum() ;
-    auto costheta = dot / ( norm ( a ) * norm ( b ) ) ;
-    return acos ( costheta ) ;
+    return acos ( a[2] / norm ( a ) ) ;
   }
 
   // this is the operator() overload for incoming ray data. The next
@@ -344,6 +381,12 @@ struct voronoi_syn
 
     simdized_type < int , 16 > champion_v ( -1 ) ;
 
+    // we initialize 'min-angle' to a very large value - no
+    // 'real' angle can ever be this large.
+
+    simdized_type < float , 16 >
+      min_angle ( std::numeric_limits<float>::max() ) ;
+
     // next_best starts out with an invalid facet index, and if this
     // isn't updated during processing, it serves as an indicator
     // that no facet is hit by any ray - a special case which can
@@ -351,49 +394,66 @@ struct voronoi_syn
 
     int next_best = -1 ;
 
-    // calculate the criterion value for the first facet. If the
-    // ray from 'pv' misses the facet, we set the criterion to
-    // a very large value, so it can't win the competition.
+    // test which of the rays in pv[0] pass through facet 0
 
-    static const ray_t forward { 0.0f , 0.0f , 1.0f } ;
-
-    auto min_angle = angle ( pv[0] , forward ) ;
     auto valid = env_v[0].get_mask ( pv[0] ) ;
-    min_angle ( ! valid ) = std::numeric_limits<float>::max() ;
 
     // do any of the rays hit the facet? then update 'next_best',
     // which, at this point, is still -1, indicating 'all misses'.
-    // This can't be the case any more.
+    // This can't be the case any more. Also update min_angle:
+    // overwrite the initial 'impossible' value with a true angle
+    // where the rays hit the facet.
 
     if ( any_of ( valid ) )
     {
       next_best = 0 ;
       champion_v = 0 ;
+      min_angle ( valid ) = angle_against_001 ( pv[0] ) ;
     }
 
-    // create the vector of 'champions' - the indices of the
-    // facets with the 'best' criterion value
+    // now go through the facets in turn and replace the current
+    // champions where the current facet provides better candidates
 
     for ( int i = 1 ; i < sz ; i++ )
     {
-      auto current_angle = angle ( pv[i] , forward ) ;
+      // find the mask for facet i - if no rays hit the facet,
+      // go to the next loop iteration straight away
+
       valid = env_v[i].get_mask ( pv[i] ) ;
-      current_angle ( ! valid ) = std::numeric_limits<float>::max() ;
+      if ( none_of ( valid ) )
+        continue ;
+
+      // we initialize 'current_angle' with an impossibly large
+      // value and 'patch in' angle values where rays hit the facet.
+      // 'angle_against_001' encodes our 'quality' criterion: the
+      // smallest angle we find is the best.
+
+      simdized_type < float , 16 >
+        current_angle ( std::numeric_limits<float>::max() ) ;
+
+      current_angle ( valid ) = angle_against_001 ( pv[i] ) ;
+
+      // now we test whether current angles are smaller than the
+      // smallest we've seen so far
+
       auto mask = ( current_angle < min_angle ) ;
 
-      // do any of the rays hit the facet? then update 'next_best',
+      // are any current angles smaller? then update 'next_best',
       // which, at this point, may still be -1, or already a value
-      // set by a previous loop iteration.
+      // set by a previous loop iteration. Also update min_angle,
+      // and, finally, update the vector of champions where new
+      // minimal angles were found to the index of the facet we're
+      // looking at now.
 
       if ( any_of ( mask ) )
       {
-        min_angle ( mask ) = current_angle ;
         next_best = i ;
+        min_angle ( mask ) = current_angle ;
         champion_v ( mask ) = i ;
       }
     }
 
-    // first check: if next_best is still -1, all facets are missed
+    // first check: if next_best is still -1, all facets were missed
     // and the result is 0000. This is the fastest outcome, and if
     // part of the output isn't covered by any facets, this will
     // save a good deal of cycles.
@@ -423,7 +483,7 @@ struct voronoi_syn
       // some rays may not have hit any facet, so we clear trg
       // first. We refrain from testing for occupants with value
       // -1, because foming a mask and performing a masked assignment
-      // is more costly then clearing trg. this is aslo the 'worst
+      // is more costly then clearing trg. this is also the 'worst
       // case' - preformance-wise - where the rays hit several facets. 
 
       trg = 0.0f ;
@@ -442,12 +502,26 @@ struct voronoi_syn
           px_v help ;
           env_v [ i ] . eval ( pv [ i ] , help ) ;
           trg ( mask ) = help ;
-          // for ( int ch = 0 ; ch < nch ; ch++ )
-          //   trg[ch] ( mask ) = help[ch] ;
         }
       }
     }
   }
+
+  // operator() for 'ninepacks'. This implements 'twining' - evaluation
+  // at several rays in the vicinity of the central ray and formation
+  // of a weighted sum of these evaluations. The incoming 'ninepack'
+  // holds three concatenated vectorized rays: the 'central' rays,
+  // the rays which result from a discrete target coordinate set off
+  // by one to the right, and the rays which result from a discrete
+  // target coordinate set off one down. By differencing, we can
+  // approximate the derivatives (we don't care to do this absolutely
+  // precisely here and consider the approximation as 'good enough')
+  // which in turn form the basis for application of the twining
+  // kernel coefficients. The code here is quite general and might be
+  // factored out - there is already similar code in 'environment9'
+  // in environment.h, which also has a variant using absolutely
+  // precise basis values by projecting the differences to the
+  // tangent plane.
 
   void operator() (
         const std::vector
@@ -463,7 +537,360 @@ struct voronoi_syn
   
     std::vector < ray_v > scratch ( sz ) ;
 
-    const std::vector < xel_t < float , 3 > > & cfv ( args.twine_spread ) ;
+    // trg is built up as a weighted sum of contributing values
+    // resulting from the reaction with a given coefficient, so we
+    // clear it befor we begin.
+  
+    trg = 0.0f ;
+
+    // for each coefficient in the twining 'spread'
+
+    for ( const auto & cf : args.twine_spread )
+    {
+      // calculate the ray resulting from applying the deltas
+      // du and dv, wich are formed by subtracting the first
+      // set of three coordinate from the second, and third,
+      // respectively. Store the 'deflected' ray in 'scratch'
+
+      for ( std::size_t i = 0 ; i < sz ; i++ )
+      {
+        const ray9_v & c ( pv[i] ) ; // shorthand
+
+        ray_v p0 { c[0] , c[1] , c[2] } ;
+        ray_v du { c[3] - c[0] , c[4] - c[1] , c[5] - c[2] } ;
+        ray_v dv { c[6] - c[0] , c[7] - c[1] , c[8] - c[2] } ;
+
+        scratch[i] = p0 + cf[0] * du + cf[1] * dv ;
+      }
+
+      // now we have sz entries in scratch, and we can call
+      // the three-component form above to produce a synopsis
+      // for the contributors reacting with the current coefficient
+
+      px_v help ;
+      operator() ( scratch , help , cap ) ;
+
+      // 'help' is the pixel value, which is weighted with the
+      // weighting value in the twining kernel and added to what's
+      // in trg already.
+
+      trg += cf[2] * help ;
+    }  
+    // and that's it - trg has the result.
+  }
+} ;
+
+// variant with z-buffering for facets with alpha channel:
+
+template < typename ENV >
+struct voronoi_syn_plus
+{
+  typedef typename ENV::px_t px_t ;
+  typedef simdized_type < px_t , 16 > px_v ;
+  static const std::size_t nch = px_t::size() ;
+  const int sz ;
+  typedef zimt::xel_t < float , 3 > ray_t ;
+  typedef zimt::xel_t < float , 9 > ninepack_t ;
+  typedef simdized_type < float , 16 > f_v ;
+  typedef simdized_type < ray_t , 16 > ray_v ;
+  typedef simdized_type < ninepack_t , 16 > ninepack_v ;
+  typedef simdized_type < int , 16 > index_v ;
+
+  std::vector < ENV > & env_v ;
+
+  voronoi_syn_plus ( std::vector < ENV > & _env_v )
+  : env_v ( _env_v ) ,
+    sz ( _env_v.size() )
+  { }
+
+  // general calculation of the angles between rays:
+  //
+  // f_v angle ( const ray_v & a , const ray_v & b ) const
+  // {
+  //   auto dot = ( a * b ) . sum() ;
+  //   auto costheta = dot / ( norm ( a ) * norm ( b ) ) ;
+  //   return acos ( costheta ) ;
+  // }
+
+  // this helper function calculates the vector of angles between
+  // a vector of rays and (0,0,1) - unit forward in our CS.
+
+  f_v angle_against_001 ( const ray_v & a ) const
+  {
+    return acos ( a[2] / norm ( a ) ) ;
+  }
+
+  // helper function to swap occupants in two vectorized objects
+  // where a mask is true.
+
+  template < typename VT , typename M >
+  static void masked_swap ( VT & a , VT & b , const M & mask )
+  {
+    auto help = a ;
+    a ( mask ) = b ;
+    b ( mask ) = help ;
+  }
+
+  // this is the operator() overload for incoming ray data. The next
+  // one down is for 'ninepacks'.
+
+  void operator() (
+        const std::vector < ray_v > & pv ,
+        px_v & trg ,
+        const std::size_t & cap = 16 ) const
+  {
+    // Here we have a set of sz index vectors to encode the
+    // z-buffering. We'll use a 'trickle-up sort', and when
+    // we're done, the first index vector should hold just the
+    // same 'champions' as the single champion vector in class
+    // voronoi_syn. The next one will hold next-best indices
+    // where the angle_to_001 criterion came out larger, and
+    // so forth down to the 'worst' indices. We also need to
+    // keep track of the angles.
+
+    std::vector < index_v > champion_v ( sz ) ;
+    std::vector < f_v > angle_v ( sz ) ;
+    
+    // next_best starts out with an invalid facet index, and if this
+    // isn't updated during processing, it serves as an indicator
+    // that no facet is hit by any ray - a special case which can
+    // be dealt with very efficiently: produce 0000
+    // 'layers' indicate how many layers we have to alpha-composit
+    // to form the final result.
+
+    int next_best = -1 ;
+    int layers = 0 ;
+
+    // we initialize angle_v[0] to a very large value - no
+    // 'real' angle can ever be this large. This is that when
+    // this angle is compared to a 'real' angle, it will always
+    // come out larger.
+
+    angle_v[0] = std::numeric_limits<float>::max() ;
+
+    // Initailly, we have no valid 'champions'
+
+    champion_v[0] = -1 ;
+
+    // test which of the rays in pv[0] pass through facet 0
+
+    auto valid = env_v[0].get_mask ( pv[0] ) ;
+
+    // do any of the rays hit the facet? then update 'next_best',
+    // which, at this point, is still -1, indicating 'all misses'.
+    // This can't be the case any more. We now have a first layer.
+    // Also update angle_v[0]: overwrite the initial 'impossible'
+    // value with a true angle wherever the rays hit the facet.
+
+    if ( any_of ( valid ) )
+    {
+      next_best = 0 ;
+      layers = 1 ;
+      champion_v[0] ( valid ) = 0 ;
+      angle_v[0] ( valid ) = angle_against_001 ( pv[0] ) ;
+    }
+
+    // now go through the other facets in turn and perform the
+    // 'trickle-up' with values for each current facet. This is
+    // computationally intensive - the worst case it that we 'see'
+    // the lowest angles last and they have to 'trickle up' all
+    // the way. Schemes to pre-order the facets so that the most
+    // likely candidate is processed first can reduce the need for
+    // 'trickling up' - if the values come in in sorted order,
+    // there's no need to sort them.
+
+    for ( int i = 1 ; i < sz ; i++ )
+    {
+      // find the mask for facet i - if no rays hit the facet,
+      // go to the next loop iteration straight away
+
+      valid = env_v[i].get_mask ( pv[i] ) ;
+      if ( none_of ( valid ) )
+        continue ;
+
+      // we let 'next_bast' 'tag along.
+
+      next_best = i ;
+
+      // we initialize 'current_angle' with an impossibly large
+      // value and 'patch in' angle values where rays hit the facet.
+      // 'angle_against_001' encodes our 'quality' criterion: the
+      // smallest angle we find is the best.
+
+      auto & current_angle ( angle_v [ layers ] ) ;
+      auto & current_champion ( champion_v [ layers ] ) ;
+
+      current_angle = std::numeric_limits<float>::max() ;
+      current_angle ( valid ) = angle_against_001 ( pv[i] ) ;
+
+      current_champion = -1 ;
+      current_champion ( valid ) = i ;
+
+      // now the trickle-up
+
+      for ( std::size_t l = layers ; l > 0 ; --l )
+      {
+        // are any angles in layer l smaller than in layer l-1?
+
+        auto mask = ( angle_v [ l ] < angle_v [ l - 1 ] ) ;
+
+        // if not, everything is in sorted order, we can leave
+        // the loop prematurely, because all layers with lower
+        // indices are already sorted.
+
+        if ( none_of ( mask ) )
+          break ;
+
+        // if yes, swap these smaller angles so that they move
+        // to level l - 1, and do the same for the indices. This
+        // is the 'trickle-up' - if a very small angle came in
+        // in some lane, the trickle-up might take it 'through'
+        // all layers which were processed already, until it
+        // 'hits the ceiling'.
+
+        masked_swap ( angle_v [ l ] , angle_v [ l - 1 ] , mask ) ;
+        masked_swap ( champion_v [ l ] , champion_v [ l - 1 ] , mask ) ;
+      }
+
+      // we need to update 'layers'
+
+      ++layers ;
+    }
+
+    // first check: if 'layers'st is still 0, all facets were missed
+    // and the result is 0000. This is the fastest outcome, and if
+    // part of the output isn't covered by any facets, this will
+    // save a good deal of cycles.
+
+    trg = 0.0f ;
+
+    if ( layers == 0 )
+    {
+      return ;
+    }
+
+    if ( all_of ( champion_v[0] == next_best ) )
+    {
+      // a very common scenario which we special-case
+
+      px_v help ;
+      env_v [ next_best ] . eval ( pv [ next_best ] , help ) ;
+      const auto & alpha ( help [ nch - 1 ] ) ;
+      if ( all_of ( alpha >= 1.0f ) )
+      {
+        // fully opaque homogeneous top layer. we're done:
+        trg = help ;
+        return ;
+      }
+    }
+
+    // evaluate all facets. let's assume we have associated alpha.
+    // We assume that the last channel in each pixel holds an alpha
+    // value in the range of zero to one.
+    // It's enough to evaluate the facets which have actually yielded
+    // contributions, but we'd have to save and process that information.
+    
+    std::vector < px_v > lv ( sz ) ;
+    for ( std::size_t i = 0 ; i < sz ; i++ )
+    {
+      env_v [ i ] . eval ( pv [ i ] , lv [ i ] ) ;
+      assert ( all_of ( lv [ i ] [ nch - 1 ] <= 1.0f ) ) ;
+      // if we had unassociated alpha incoming:
+      // for ( int ch = 0 ; ch < ( nch - 1 ) ; ch++ )
+      //   lv [ i ] [ ch ] *= lv [ i ] [ nch - 1 ] ;
+    }
+
+    // now we have extracted the information in pv and the
+    // corresponding pixel data from env_v, and we can work
+    // our way through the layers to form a composite result.
+
+    for ( std::size_t i = 0 ; i < layers ; i++ )
+    {
+      // at the current layer, which are the 'champions'?
+
+      auto indexes = champion_v [ i ] ;
+
+      // we're only interested in 'facet indices proper', not
+      // in any lanes which hold -1 to indicate there are no
+      // contributions in this layer.
+
+      auto mask = ( champion_v[i] != -1 ) ;
+      if ( none_of ( mask ) )
+        continue ;
+    
+      // we convert the vector of 'champion' indices into a set
+      // of indexes for gathering from the pixel values in lv.
+
+      indexes *= ( 16 * nch ) ;
+      indexes += index_v::iota() ;
+
+      // we gather into 'help' - after the gathering is complete,
+      // help will hold a composite, where each lane is set to the
+      // corresponding value in that pixel vector which is the
+      // champion for that lane.
+
+      px_v help ;
+      float * pf = (float*) ( & ( lv[0] ) ) ;
+      for ( int ch = 0 ; ch < nch ; ch++ )
+        help[ch].gather ( pf , indexes + ( ch * 16 ) ) ;
+
+      // if we're processing the top layer, we simply copy 'help'
+      // - omitting lanes which don't comntribute
+
+      if ( i == 0 )
+      {
+        trg ( mask ) = help ;
+      }
+
+      // subsequent layers are alpha-composited onto the result
+      // we have so far. Note that the alpha-compositing is done
+      // with associated alpha, which makes it simple.
+
+      else
+      {
+        for ( int ch = 0 ; ch < nch ; ch++ )
+          trg[ch] ( mask ) += ( 1.0f - trg[nch-1] ) * help[ch] ;
+      }
+    }
+
+    // for unassociated alpha, we'd now de-associate
+
+    // for ( int ch = 0 ; ch < ( nch - 1 ) ; ch++ )
+    // {
+    //   trg[ch] /= trg[nch-1] ;
+    //   trg[ch] ( trg[nch-1] == 0.0f ) = 0.0f ;
+    // }
+  }
+    
+  // operator() for 'ninepacks'. This implements 'twining' - evaluation
+  // at several rays in the vicinity of the central ray and formation
+  // of a weighted sum of these evaluations. The incoming 'ninepack'
+  // holds three concatenated vectorized rays: the 'central' rays,
+  // the rays which result from a discrete target coordinate set off
+  // by one to the right, and the rays which result from a discrete
+  // target coordinate set off one down. By differencing, we can
+  // approximate the derivatives (we don't care to do this absolutely
+  // precisely here and consider the approximation as 'good enough')
+  // which in turn form the basis for application of the twining
+  // kernel coefficients. The code here is quite general and might be
+  // factored out - there is already similar code in 'environment9'
+  // in environment.h, which also has a variant using absolutely
+  // precise basis values by projecting the differences to the
+  // tangent plane.
+
+  void operator() (
+        const std::vector
+          < simdized_type < zimt::xel_t < float , 9 > , 16 > > & pv ,
+        simdized_type < px_t , 16 > & trg ,
+        const std::size_t & cap = 16 ) const
+  {
+    typedef simdized_type < zimt::xel_t < float , 3 > , 16 > ray_v ;
+    typedef simdized_type < zimt::xel_t < float , 9 > , 16 > ray9_v;
+
+    // 'scratch' will hold all ray packets which will react with
+    // a given twining coefficient 'cf'
+  
+    std::vector < ray_v > scratch ( sz ) ;
 
     // trg is built up as a weighted sum of contributing values
     // resulting from the reaction with a given coefficient, so we
@@ -473,21 +900,22 @@ struct voronoi_syn
 
     // for each coefficient in the twining 'spread'
 
-    for ( const auto & cf : cfv )
+    for ( const auto & cf : args.twine_spread )
     {
       // calculate the ray resulting from applying the deltas
       // du and dv, wich are formed by subtracting the first
       // set of three coordinate from the second, and third,
       // respectively. Store the 'deflected' ray in 'scratch'
 
-      for ( int i = 0 ; i< sz ; i++ )
+      for ( std::size_t i = 0 ; i < sz ; i++ )
       {
-        const ray9_v & c ( pv[i] ) ;
-        px_v p0 { c[0] , c[1] , c[2] } ;
-        px_v du { c[3] - c[0] , c[4] - c[1] , c[5] - c[2] } ;
-        px_v dv { c[6] - c[0] , c[7] - c[1] , c[8] - c[2] } ;
+        const ray9_v & c ( pv[i] ) ; // shorthand
 
-        scratch[i] = p0 + cf[0] * du + cf [ 1 ] * dv ;
+        ray_v p0 { c[0] , c[1] , c[2] } ;
+        ray_v du { c[3] - c[0] , c[4] - c[1] , c[5] - c[2] } ;
+        ray_v dv { c[6] - c[0] , c[7] - c[1] , c[8] - c[2] } ;
+
+        scratch[i] = p0 + cf[0] * du + cf[1] * dv ;
       }
 
       // now we have sz entries in scratch, and we can call
@@ -508,7 +936,8 @@ struct voronoi_syn
 } ;
 
 template < int NCH ,
-           template < typename , std::size_t > class STP >
+           template < typename , std::size_t > class STP ,
+           typename synopsis_t >
 void fuse ( int ninputs )
 {
   typedef zimt::xel_t < float , NCH > px_t ;
@@ -519,12 +948,8 @@ void fuse ( int ninputs )
 
   typedef environment < float , float , NCH , 16 > env_t ;
 
-  typedef voronoi_syn < env_t > vs_t ;
-
-  typedef fusion_t < float , NCH , 2 , 16 , float , 3 , vs_t > fs_t ;
-  // typedef typename fs_t::syn_f syn_f ;
-  typedef fusion_t < float , NCH , 2 , 16 , float , 9 , vs_t > fs9_t ;
-  // typedef typename fs9_t::syn_f syn9_f ;
+  typedef fusion_t < float , NCH , 2 , 16 , float , 3 , synopsis_t > fs_t ;
+  typedef fusion_t < float , NCH , 2 , 16 , float , 9 , synopsis_t > fs9_t ;
 
   typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
   std::vector < basis_t > basis_v ;
@@ -615,7 +1040,7 @@ void fuse ( int ninputs )
 
     // for now, we use a hard-coded synopsis-forming object
 
-    voronoi_syn vs ( env_v ) ;
+    synopsis_t vs ( env_v ) ;
 
     // now we can create the fusion_t object
 
@@ -655,7 +1080,7 @@ void fuse ( int ninputs )
     // the fusion_t object - which is now used via it's ninepack-
     // processing member function.
 
-    voronoi_syn vs ( env_v ) ;
+    synopsis_t vs ( env_v ) ;
 
     fs9_t fs ( get_v , vs ) ;
 
@@ -683,13 +1108,21 @@ template < int NCH ,
            template < typename , std::size_t > class STP >
 void roll_out ( int ninputs )
 {
+  typedef environment < float , float , NCH , 16 > env_t ;
+
   if ( args.nfacets )
   {
-    fuse < NCH , STP > ( ninputs ) ;
+    // quick shot: assume one- and three-channel images are
+    // without alpha channel, two- and four-channel images
+    // are with alpha channel.
+
+    if constexpr ( NCH == 1 || NCH == 3 )
+      fuse < NCH , STP , voronoi_syn<env_t> > ( ninputs ) ;
+    else
+      fuse < NCH , STP , voronoi_syn_plus<env_t> > ( ninputs ) ;
     return ;
   }
 
-  typedef environment < float , float , NCH , 16 > env_t ;
   env_t * p_env = nullptr ;
 
   // set up an orthonormal system of basis vectors for the view
@@ -901,11 +1334,11 @@ struct dispatch
       case 3:
         roll_out < 3 > ( ninputs , projection ) ;
         break ;
-#ifndef NARROW_SCOPE
+// #ifndef NARROW_SCOPE
       case 4:
         roll_out < 4 > ( ninputs , projection ) ;
         break ;
-#endif
+// #endif
       std::cerr << "unhandled channel count " << nchannels
                 << std::endl ;
     }
