@@ -56,12 +56,14 @@ Export of a cubemap as six separate images can be achieved by passing a
 format string - the same mechanism as for input is used.
 
 envutil can also 'mount' images in the supported five projections as
-input (use --mount ...) - currently, the images have to be cropped
+input (use --facet ...) - currently, the images have to be cropped
 symmetrically, meaning that the optical axis is taken to pass through
-the image center. For mounted input, you can specify the horizontal
-field of view and the projection together with the image filename.
-If the view 'looks at' areas not covered by the mounted image, it's
-painted black or transparent black for RGBA.
+the image center. For facet input, you must specify the horizontal
+field of view and the projection together with the image filename,
+and additionally three Euler angles (yaw, picth, roll) defining the
+orientation of the facet. If the view 'looks at' areas not covered
+by the facet image, it's painted black or transparent black for
+images with alpha channel.
 
 envutil can also produce image series. The individual images are all
 created from the same environment, but the horizontal field of view
@@ -248,18 +250,19 @@ envutil --help gives a summary of command line options:
       --stblur EXTENT                sblur and tblur OIIO Texture Options
       --conservative YESNO           OIIO conservative_filter Texture Option - pass 0 or 1
     parameters for mounted image input:
-      --mount IMAGE PROJECTION HFOV  load non-environment source image
       --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
                                     load oriented non-environment source image
     
 The input can be either a lat/lon environment image (a.k.a. 'full spherical' or 'full equirect' or '360X180 degree panorama') - or a 'cubemap' - a set of six square images in rectilinear projection showing the view to the six cardinal directions (left, right, up, down, front, back). The cubemap can be provided as a single image with the images concatenated vertically, or as six separate images with 'left', 'right' etc. in their - otherwise identical - filenames, which are introduced via a format string.
 
 On top of 'full' environment images, envutil can also process 'mounted' images:
-images with a given projection and hfov which may or may not cover the entire
-360X180 degrees. If the 'full environment' isn't covered, lookup in areas outside
-the mounted image are returned as black or transparent black. A variation of
-mounted images are 'facets' - they aren't mounted 'straight ahead' but assigned
-an orientation with three Euler angles.
+images with a given projection, hfov, yaw, pitch and roll which may or may not
+cover the entire 360X180 degrees. If the 'full environment' isn't covered,
+lookup in areas outside the mounted image are returned as black or transparent
+black. The virtual camera's orientation and a facet's orientation are given
+with the same set of three 'Euler angles'. If you pass the same values for
+the virtual camera's yaw, pich and roll as for a facet's yaw pich and roll,
+both will cancel each other out.
 
 envutil only processes sRGB and linear RGB data, the output will be in the same
 colour space as the input. If you use the same format for input and output, this
@@ -1052,13 +1055,14 @@ to the processing.
 pass this to switch on OIIO's 'conservative filter' on or off (pass 0 or 1);
 the default is to have it on.
 
-# Parameters for mounted image input
+# Parameters for mounted (facet) image input
 
-When --mount or --facet are given, this overrides any --input parameter
-you may have passed - you wouldn't, usually, but leave 'input' unset if
-you use a mounted image as input.
+When --facet is given, this overrides any --input parameter you may have
+passed - you wouldn't, usually, but leave 'input' unset if you use a mounted
+image as input.
 
-## --mount IMAGE PROJECTION HFOV  load non-environment source image
+## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+##     load oriented non-environment source image
 
 envutil can 'mount' images in various projections and hfov which may only cover
 a part of the full 360X180 degree environment. This routes to different code,
@@ -1066,22 +1070,32 @@ because the parts of the output which don't receive input have to be masked
 out, and because projections apart from spherical (which is present for
 lat/lon environments anyway) have to be dealt with. Supported projections
 for mounted images are 'rectilinear', 'spherical', 'cylindrical',
-'stereographic'  and 'fisheye'. hfov is in degrees. All three values
-(image filename, projection and hfov) must be passed after --mount, separated
-by space. Currently, there is an issue with itp -1 (OIIO pick-up) with the
-default settings when the mounted image is a 360 degree fisheye - some artifacts
-show near the 'back pole'. Use other interpolators, or disable the code
-relying on derivatives (use --stwidth 0).
+'stereographic'  and 'fisheye'. hfov is in degrees. These three values must
+be followed by the facet's orinetation, given as three 'Euler angles' (ywa,
+pich, roll). If you want the facet to be mounted 'straight ahead', just pass
+0 0 0. All six values (image filename, projection, hfov, ywa, pict, roll)
+must be passed after --facet, separated by space. Currently, there is an issue
+with itp -1 (OIIO pick-up) with the default settings when the mounted image
+is a 360 degree fisheye - some artifacts show near the 'back pole'. Use other
+interpolators, or disable the code relying on derivatives (use --stwidth 0).
 
-## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
-##     load oriented non-environment source image
+You may pass more than one facet. Currently, where several facets provide
+visible content for a given viewing ray, envutil gives preference to one of
+them, following this scheme: For every candidate, the angle between the
+viewing ray and the facet's center is calculated. The facet where the angle
+comes out smallest 'wins' the contest - it's content is assigned to the
+viewing ray. The overall result resembles a voronoi diagram - facets with
+transparency let other facets shine through oven if they don't 'win the
+contest'. You can't currently mix facets with and without transparency;
+all facets have to have the same channel count and transparency quality.
 
-This is an extension to 'mounted images', taking three more parameters: these
-are Euler angles specifying the orientation of the mounted image - 'plain'
-mounted images are mounted 'straight ahead'. If you specify three angles
-y, p and r, then an orientation of the virtual camera with the same Euler
-angles will cancel the orientation precisely. It's intended to allow several
-fcets, but this isn't implemented yet.
+If you use multi-facet input with simple interpolation (--itp 1), you'll
+notice ungainly staircase artifacts where facets collide, and also where
+the facets border on 'empty space'. This is due to the way facets are
+prioritized: only one facet can 'win the contest', and there is currently
+no implementation of feathering. If you use twining, the effect is mitigated,
+the facets are blended to a certain degree, and the edges are faded into
+black. The larger the twining kernel is, the better the effect.
 
 # Additional Technical Notes
 

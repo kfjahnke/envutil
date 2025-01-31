@@ -389,7 +389,7 @@ void arguments::init ( int argc , const char ** argv )
   ap.separator("  mandatory options:");
 
   ap.arg("--input INPUT")
-    .help("input file name (mandatory if no 'mount' is given)")
+    .help("input file name (mandatory if no 'facet' is given)")
     .metavar("INPUT");
 
   ap.arg("--output OUTPUT")
@@ -572,25 +572,16 @@ void arguments::init ( int argc , const char ** argv )
     .help("OIIO conservative_filter Texture Option - pass 0 or 1")
     .metavar("YESNO");
 
-  ap.separator("  parameters for mounted image input:");
+  ap.separator("  parameters for mounted (facet) image input:");
   
-  // std::string mount_image , mount_prj ;
-  // float mount_hfov ;
-  ap.add_argument("--mount %s:IMAGE %s:PROJECTION %f:HFOV",
-                  &mount_image , &mount_prj_str, &mount_hfov)
-    .help("load non-environment source image") ;
-
-  // ap.add_argument("--facet %s:IMAGE %s:PROJECTION %f:HFOV %f:YAW %f:PITCH %f:ROLL",
-  //                 &mount_image , &mount_prj_str, &mount_hfov, &mount_yaw, &mount_pitch, &mount_roll)
-  //   .help("load oriented non-environment source image") ;
-
   ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL",
                   &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v)
     .help("load oriented non-environment source image") ;
 
-  ap.arg("--fct_file FCT_FILE")
-    .help("read multi-facet environment from FCT_FILE")
-    .metavar("FCT_FILE");
+  // TODO:
+  // ap.arg("--fct_file FCT_FILE")
+  //   .help("read multi-facet environment from FCT_FILE")
+  //   .metavar("FCT_FILE");
 
   if (ap.parse(argc, argv) < 0 ) {
       std::cerr << ap.geterror() << std::endl;
@@ -609,7 +600,7 @@ void arguments::init ( int argc , const char ** argv )
   output = ap["output"].as_string ( "" ) ;
   seqfile = ap["seqfile"].as_string ( "" ) ;
   twf_file = ap["twf_file"].as_string ( "" ) ;
-  fct_file = ap["fct_file"].as_string ( "" ) ;
+  // fct_file = ap["fct_file"].as_string ( "" ) ;
   codec = ap["codec"].as_string ( "libx265" ) ; 
   mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
   fps = ap["fps"].get<int>(60);
@@ -678,34 +669,17 @@ void arguments::init ( int argc , const char ** argv )
     std::cout << "cbm_prj = " << projection_name [ cbm_prj ]
               << std::endl ;
 
-  if ( mount_image != std::string() )
-  {
-    // determine projection of mounted image input
-
-    prj = 0 ;
-    for ( const auto & p : projection_name )
-    {
-      if ( p == mount_prj_str )
-        break ;
-      ++ prj ;
-    }
-    mount_prj = projection_t ( prj ) ;
-
-    // we set 'input' to the name of the mounted image; we use
-    // 'input' as id for the environment 'asset', so we can't
-    // just leave it blank.
-
-    input = mount_image ;
-  }
-  else if ( fct_file != std::string() )
-  {
-    // we set 'input' to the name of the mounted image; we use
-    // 'input' as id for the environment 'asset', so we can't
-    // just leave it blank.
-
-    input = fct_file ;
-  }
-  else if ( args.facet_name_v.size() == 0 )
+  // TODO:
+  // if ( fct_file != std::string() )
+  // {
+  //   // we set 'input' to the name of the mounted image; we use
+  //   // 'input' as id for the environment 'asset', so we can't
+  //   // just leave it blank.
+  // 
+  //   input = fct_file ;
+  // }
+  // else
+  if ( args.facet_name_v.size() == 0 )
   {
     assert ( input != std::string() ) ;
   }
@@ -728,43 +702,44 @@ void arguments::init ( int argc , const char ** argv )
 
   cbmfov *= M_PI / 180.0 ;
 
-  if ( mount_image != std::string() )
-  {
-    mount_inp = ImageInput::open ( mount_image ) ;
-    assert ( mount_inp ) ;
-
-    const ImageSpec &spec = mount_inp->spec() ;
-
-    mount_width = spec.width ;
-    mount_height = spec.height ;
-    nchannels = spec.nchannels ;
-    mount_hfov *= M_PI / 180.0 ;
-    switch ( mount_prj )
-    {
-      case SPHERICAL:
-      case FISHEYE:
-      case CYLINDRICAL:
-        env_step = mount_hfov / mount_width ;
-        break ;
-      case RECTILINEAR:
-        env_step = 2.0 * tan ( mount_hfov / 2.0 ) / mount_width ;
-        break ;
-      case STEREOGRAPHIC:
-        env_step = 4.0 * tan ( mount_hfov / 4.0 ) / mount_width ;
-        break ;
-      default:
-        break ;
-    }
-    mount_yaw *= M_PI / 180.0 ;
-    mount_pitch *= M_PI / 180.0 ;
-    mount_roll *= M_PI / 180.0 ;
-  }
-  else if ( fct_file != std::string() )
-  {
-    std::cerr << "not implemented: input is a multi-facet file "
-                << fct_file << std::endl ;
-  }
-  else if ( args.facet_name_v.size() == 0 )
+  // if ( mount_image != std::string() )
+  // {
+  //   mount_inp = ImageInput::open ( mount_image ) ;
+  //   assert ( mount_inp ) ;
+  // 
+  //   const ImageSpec &spec = mount_inp->spec() ;
+  // 
+  //   mount_width = spec.width ;
+  //   mount_height = spec.height ;
+  //   nchannels = spec.nchannels ;
+  //   mount_hfov *= M_PI / 180.0 ;
+  //   switch ( mount_prj )
+  //   {
+  //     case SPHERICAL:
+  //     case FISHEYE:
+  //     case CYLINDRICAL:
+  //       env_step = mount_hfov / mount_width ;
+  //       break ;
+  //     case RECTILINEAR:
+  //       env_step = 2.0 * tan ( mount_hfov / 2.0 ) / mount_width ;
+  //       break ;
+  //     case STEREOGRAPHIC:
+  //       env_step = 4.0 * tan ( mount_hfov / 4.0 ) / mount_width ;
+  //       break ;
+  //     default:
+  //       break ;
+  //   }
+  //   mount_yaw *= M_PI / 180.0 ;
+  //   mount_pitch *= M_PI / 180.0 ;
+  //   mount_roll *= M_PI / 180.0 ;
+  // }
+  // else if ( fct_file != std::string() )
+  // {
+  //   std::cerr << "not implemented: input is a multi-facet file "
+  //               << fct_file << std::endl ;
+  // }
+  // else
+  if ( args.facet_name_v.size() == 0 )
   {
     // some member variables in the args object are gleaned from
     // the input image.
@@ -1026,19 +1001,6 @@ void arguments::init ( int argc , const char ** argv )
                   << std::endl ;
       }
     }
-
-    // with the given twining parameters, we can now set up a 'spread':
-    // the generalized equivalent of a filter kernel. While a 'standard'
-    // convolution kernel has pre-determined geometry (it's a matrix of
-    // coefficients meant to be applied to an equally-shaped matrix of
-    // data) - here we have three values for each coefficient: the
-    // first two define the position of the look-up relative to the
-    // 'central' position, and the third is the weight and corresponds
-    // to a 'normal' convolution coefficient.
-
-    make_spread ( twine_spread , twine , twine ,
-                  twine_width , twine_sigma ,
-                  twine_threshold ) ;
   }
 }
 
@@ -1161,6 +1123,21 @@ int main ( int argc , const char ** argv )
       args.step = ( args.x1 - args.x0 ) / args.width ;
       args.twine = 0 ;
     }
+
+    // only now we calculate a twining 'spread' - if we run a sequence
+    // file, the twining parameters need to be recalculated for every
+    // output image to adapt to changes of the output hfov. A spread is
+    // the generalized equivalent of a filter kernel. While a 'standard'
+    // convolution kernel has pre-determined geometry (it's a matrix of
+    // coefficients meant to be applied to an equally-shaped matrix of
+    // data) - here we have three values for each coefficient: the
+    // first two define the position of the look-up relative to the
+    // 'central' position, and the third is the weight and corresponds
+    // to a 'normal' convolution coefficient.
+
+    make_spread ( args.twine_spread , args.twine , args.twine ,
+                  args.twine_width , args.twine_sigma ,
+                  args.twine_threshold ) ;
 
     // find the parameters which are type-relevant to route to
     // the specialized code above. There are several stages of

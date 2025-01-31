@@ -342,23 +342,22 @@ struct arguments
   bool verbose ;
   std::string input ;
   std::string output ;
-  std::string mount_image ;
-  std::string fct_file ;
+  // std::string fct_file ;
   double hfov ;
-  float mount_hfov ;
+  // float mount_hfov ;
   std::size_t width ;
   std::size_t height ;
-  std::size_t mount_width ;
-  std::size_t mount_height ;
+  // std::size_t mount_width ;
+  // std::size_t mount_height ;
   std::string prj_str ;
-  std::string mount_prj_str ;
+  // std::string mount_prj_str ;
   std::string cbm_prj_str ;
   projection_t projection ;
-  projection_t mount_prj;
+  // projection_t mount_prj;
   projection_t cbm_prj;
-  float mount_yaw ;
-  float mount_pitch ;
-  float mount_roll ;
+  // float mount_yaw ;
+  // float mount_pitch ;
+  // float mount_roll ;
 
   double cbmfov ;
   std::size_t support_min ;
@@ -395,7 +394,7 @@ struct arguments
   std::size_t env_width , env_height ;
   std::size_t nchannels ;
   std::unique_ptr<ImageInput> inp ;
-  std::unique_ptr<ImageInput> mount_inp ;
+  // std::unique_ptr<ImageInput> mount_inp ;
 
   // technical variables for the argument parser
 

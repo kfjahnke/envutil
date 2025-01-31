@@ -1620,6 +1620,8 @@ struct source_t
 
   source_t ( std::size_t facet_no = 0 )
   {
+    assert ( args.nfacets > 0 ) ;
+
     // itp == -1 means 'use OIIO's 'texture' function
 
     assert ( args.itp == -1 ) ;
@@ -1667,12 +1669,12 @@ struct source_t
       ts->attribute ( "options" , args.tsoptions ) ;
     }
 
-    if ( args.nfacets == 0 )
-    {
-      OIIO::ustring uenvironment ( args.mount_image , 0 ) ;
-      th = ts->get_texture_handle ( uenvironment ) ;
-    }
-    else
+    // if ( args.nfacets == 0 )
+    // {
+    //   OIIO::ustring uenvironment ( args.mount_image , 0 ) ;
+    //   th = ts->get_texture_handle ( uenvironment ) ;
+    // }
+    // else
     {
       OIIO::ustring uenvironment
         ( args.facet_spec_v [ facet_no ] . filename , 0 ) ;
@@ -1688,10 +1690,71 @@ struct source_t
 
     if constexpr ( ncrd == 2 )
     {
-      crd[0] *= width ;
-      crd[1] *= height ;
-      crd -= .5f ;
-      bsp_ev.eval ( crd , px ) ;
+      if ( args.itp == -1 )
+      {
+        // for now, we can't use OIIO's better interpolators for facets,
+        // we pass zero for the derivatives. It works, but it's not
+        // optimal.
+
+        crd_v dx_tx ( 0.0f ) ;
+        crd_v dy_tx ( 0.0f ) ;
+
+        // OIIO's 'texture' functions requires a non-const batch_options
+        // object, the compiler should take care of that with copy elision
+
+        OIIO::TextureOptBatch _batch_options ( batch_options ) ;
+
+        #if defined USE_VC or defined USE_STDSIMD
+
+        // to interface with zimt's Vc and std::simd backends, we need to
+        // extract the data from the SIMDized objects and re-package the
+        // ouptut as a SIMDized object. The compiler will likely optimize
+        // this away and work the entire operation in registers, so let's
+        // call this a 'semantic manoevre'.
+
+        float scratch [ 6 * LANES + nchannels * LANES ] ;
+
+        crd[0].store ( scratch ) ;
+        crd[1].store ( scratch + LANES ) ;
+        dx_tx[0].store ( scratch + 2 * LANES ) ;
+        dx_tx[1].store ( scratch + 3 * LANES ) ;
+        dy_tx[0].store ( scratch + 4 * LANES ) ;
+        dy_tx[1].store ( scratch + 5 * LANES ) ;
+
+        bool result =
+        ts->texture ( th , nullptr , _batch_options , OIIO::Tex::RunMaskOn ,
+                      scratch , scratch + LANES ,
+                      scratch + 2 * LANES , scratch + 3 * LANES ,
+                      scratch + 4 * LANES , scratch + 5 * LANES ,
+                      nchannels , scratch + 6 * LANES ) ;
+
+        assert ( result ) ;
+        px.load ( scratch + 6 * LANES ) ;
+
+        #else
+
+        // zimt's own and the highway backend have a representation as
+        // a C vector of fundamentals and provide a 'data' function
+        // to yield it's address. This simplifies matters, we can pass
+        // these pointers to OIIO directly.
+
+        bool result =
+        ts->texture ( th , nullptr , _batch_options , OIIO::Tex::RunMaskOn ,
+                      crd[0].data() , crd[1].data() ,
+                      dx_tx[0].data() , dx_tx[1].data() ,
+                      dy_tx[0].data() , dy_tx[1].data() ,
+                      nchannels , (float*) ( px[0].data() ) ) ;
+
+        assert ( result ) ;
+        #endif
+      }
+      else
+      {
+        crd[0] *= width ;
+        crd[1] *= height ;
+        crd -= .5f ;
+        bsp_ev.eval ( crd , px ) ;
+      }
     }
     else // to ( ncrd == 2 )
     {
@@ -1776,7 +1839,7 @@ struct source_t
 // pixel data in a given projection which do not cover the entire
 // 360X180 degree environment. Typical candidates would be rectilinear
 // patches or cropped images. This class handles channel counts up to
-// four and paints pixels outside the covered range black. Four RGBA
+// four and paints pixels outside the covered range black. For RGBA
 // pixels, 'outside' pixels are painted 0000, assuming associated alpha.
 // The 'ncrd' template argument is either three for lookups without
 // or nine for lookups with two next neighbour's coordinates which
@@ -2271,6 +2334,8 @@ struct environment
   typedef zimt::xel_t < std::size_t , 2 > shape_type ;
   typedef zimt::xel_t < float , C > in_px_t ;
 
+  zimt::grok_type < ray_t , px_t , L > env ;
+
   // we'll hold on to image data via a std::shared_ptr to a zimt::bspline.
 
   typedef zimt::bspline < in_px_t , 2 > spl_t ;
@@ -2280,9 +2345,75 @@ struct environment
   // the various code paths we handle with this object. The 'eval'
   // member function simply calls this functor.
 
-  zimt::grok_type < ray_t , px_t , L > env ;
   typedef std::function < mask_t ( const in_v & ) > mask_f ;
   mask_f get_mask ;
+
+  // this c'tor routes to OIIO code
+
+  environment ( const std::size_t facet_no )
+  {
+    source_t < C , 2 , 16 > src ( facet_no ) ;
+
+    // for now, we mount images to the center; other types of cropping
+    // might be added by providing suitable parameterization.
+
+    auto const & fct ( args.facet_spec_v [ facet_no ] ) ;
+    auto extent = get_extent ( fct.projection , fct.width ,
+                               fct.height , fct.hfov  ) ;
+
+    // we fix the projection as a template argument to class mount_t.
+
+    switch ( fct.projection )
+    {
+      case RECTILINEAR:
+      {
+        mount_t < C , 3 , RECTILINEAR , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
+        break ;
+      }
+      case SPHERICAL:
+      {
+        mount_t < C , 3 , SPHERICAL , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
+        break ;
+      }
+      case CYLINDRICAL:
+      {
+        mount_t < C , 3 , CYLINDRICAL , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
+        break ;
+      }
+      case STEREOGRAPHIC:
+      {
+        mount_t < C , 3 , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
+        break ;
+      }
+      case FISHEYE:
+      {
+        mount_t < C , 3 , FISHEYE , 16 > mnt ( extent , src ) ;
+        env = mnt ;
+        get_mask = [=] ( const in_v & crd3 )
+          { return mnt.get_mask ( crd3 ) ; } ;
+        break ;
+      }
+      default:
+      {
+        std::cerr << "unknown projection: "
+                  << fct.projection_str << std::endl ;
+        assert ( false ) ;
+        break ;
+      }
+    }
+  }
 
   environment ( const facet_spec & fct )
   {
@@ -2395,110 +2526,110 @@ struct environment
     // specific code to deal with the projection and mask out pixels
     // which aren't covered by the source image data.
 
-    if ( args.mount_image != std::string() )
-    {
-      shape_type shape { args.mount_width , args.mount_height } ;
-
-      if ( args.verbose )
-        std::cout << "processing mounted image " << args.mount_image
-                  << " shape " << shape << std::endl ;
-
-      zimt::bc_code bc0 = zimt::REFLECT ;
-      if ( args.mount_prj == SPHERICAL || args.mount_prj == CYLINDRICAL )
-      {
-        if ( fabs ( args.mount_hfov - 2.0 * M_PI ) < .000001 )
-          bc0 = PERIODIC ;
-      }
-      p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
-                                  { bc0 , zimt::REFLECT } ) ) ;
-
-      bool success = args.mount_inp->read_image (
-        0 , 0 , 0 , C ,
-        TypeDesc::FLOAT ,
-        p_bspl->core.data() ,
-        sizeof ( in_px_t ) ,
-        p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
-      assert ( success ) ;
-
-      if (    args.mount_prj == SPHERICAL
-           && fabs ( args.mount_hfov - 2.0 * M_PI ) < .000001
-           && args.mount_width == 2 * args.mount_height )
-      {
-        // assume the mounted image is a full spherical
-        p_bspl->spline_degree = args.prefilter_degree ;
-        spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
-        p_bspl->spline_degree = args.spline_degree ;
-      }
-      else
-      {
-        // assume it's a partial spherical, use ordinary prefilter
-        p_bspl->spline_degree = args.prefilter_degree ;
-        p_bspl->prefilter() ;
-        p_bspl->spline_degree = args.spline_degree ;
-      }
-
-      source_t < C , 2 , 16 > src ( p_bspl ) ;
-
-      // for now, we mount images to the center; other types of cropping
-      // might be added by providing suitable parameterization.
-  
-      auto extent = get_extent ( args.mount_prj , args.mount_width ,
-                                 args.mount_height , args.mount_hfov  ) ;
-
-      // we fix the projection as a template argument to class mount_t.
-
-      switch ( args.mount_prj )
-      {
-        case RECTILINEAR:
-        {
-          mount_t < C , 3 , RECTILINEAR , 16 > mnt ( extent , src ) ;
-          env = mnt ;
-          get_mask = [=] ( const in_v & crd3 )
-            { return mnt.get_mask ( crd3 ) ; } ;
-          break ;
-        }
-        case SPHERICAL:
-        {
-          mount_t < C , 3 , SPHERICAL , 16 > mnt ( extent , src ) ;
-          env = mnt ;
-          get_mask = [=] ( const in_v & crd3 )
-            { return mnt.get_mask ( crd3 ) ; } ;
-          break ;
-        }
-        case CYLINDRICAL:
-        {
-          mount_t < C , 3 , CYLINDRICAL , 16 > mnt ( extent , src ) ;
-          env = mnt ;
-          get_mask = [=] ( const in_v & crd3 )
-            { return mnt.get_mask ( crd3 ) ; } ;
-          break ;
-        }
-        case STEREOGRAPHIC:
-        {
-          mount_t < C , 3 , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
-          env = mnt ;
-          get_mask = [=] ( const in_v & crd3 )
-            { return mnt.get_mask ( crd3 ) ; } ;
-          break ;
-        }
-        case FISHEYE:
-        {
-          mount_t < C , 3 , FISHEYE , 16 > mnt ( extent , src ) ;
-          env = mnt ;
-          get_mask = [=] ( const in_v & crd3 )
-            { return mnt.get_mask ( crd3 ) ; } ;
-          break ;
-        }
-        default:
-        {
-          std::cerr << "unknown projection: "
-                    << args.mount_prj_str << std::endl ;
-          assert ( false ) ;
-          break ;
-        }
-      }
-    }
-    else
+//     if ( args.mount_image != std::string() )
+//     {
+//       shape_type shape { args.mount_width , args.mount_height } ;
+// 
+//       if ( args.verbose )
+//         std::cout << "processing mounted image " << args.mount_image
+//                   << " shape " << shape << std::endl ;
+// 
+//       zimt::bc_code bc0 = zimt::REFLECT ;
+//       if ( args.mount_prj == SPHERICAL || args.mount_prj == CYLINDRICAL )
+//       {
+//         if ( fabs ( args.mount_hfov - 2.0 * M_PI ) < .000001 )
+//           bc0 = PERIODIC ;
+//       }
+//       p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+//                                   { bc0 , zimt::REFLECT } ) ) ;
+// 
+//       bool success = args.mount_inp->read_image (
+//         0 , 0 , 0 , C ,
+//         TypeDesc::FLOAT ,
+//         p_bspl->core.data() ,
+//         sizeof ( in_px_t ) ,
+//         p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
+//       assert ( success ) ;
+// 
+//       if (    args.mount_prj == SPHERICAL
+//            && fabs ( args.mount_hfov - 2.0 * M_PI ) < .000001
+//            && args.mount_width == 2 * args.mount_height )
+//       {
+//         // assume the mounted image is a full spherical
+//         p_bspl->spline_degree = args.prefilter_degree ;
+//         spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
+//         p_bspl->spline_degree = args.spline_degree ;
+//       }
+//       else
+//       {
+//         // assume it's a partial spherical, use ordinary prefilter
+//         p_bspl->spline_degree = args.prefilter_degree ;
+//         p_bspl->prefilter() ;
+//         p_bspl->spline_degree = args.spline_degree ;
+//       }
+// 
+//       source_t < C , 2 , 16 > src ( p_bspl ) ;
+// 
+//       // for now, we mount images to the center; other types of cropping
+//       // might be added by providing suitable parameterization.
+//   
+//       auto extent = get_extent ( args.mount_prj , args.mount_width ,
+//                                  args.mount_height , args.mount_hfov  ) ;
+// 
+//       // we fix the projection as a template argument to class mount_t.
+// 
+//       switch ( args.mount_prj )
+//       {
+//         case RECTILINEAR:
+//         {
+//           mount_t < C , 3 , RECTILINEAR , 16 > mnt ( extent , src ) ;
+//           env = mnt ;
+//           get_mask = [=] ( const in_v & crd3 )
+//             { return mnt.get_mask ( crd3 ) ; } ;
+//           break ;
+//         }
+//         case SPHERICAL:
+//         {
+//           mount_t < C , 3 , SPHERICAL , 16 > mnt ( extent , src ) ;
+//           env = mnt ;
+//           get_mask = [=] ( const in_v & crd3 )
+//             { return mnt.get_mask ( crd3 ) ; } ;
+//           break ;
+//         }
+//         case CYLINDRICAL:
+//         {
+//           mount_t < C , 3 , CYLINDRICAL , 16 > mnt ( extent , src ) ;
+//           env = mnt ;
+//           get_mask = [=] ( const in_v & crd3 )
+//             { return mnt.get_mask ( crd3 ) ; } ;
+//           break ;
+//         }
+//         case STEREOGRAPHIC:
+//         {
+//           mount_t < C , 3 , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
+//           env = mnt ;
+//           get_mask = [=] ( const in_v & crd3 )
+//             { return mnt.get_mask ( crd3 ) ; } ;
+//           break ;
+//         }
+//         case FISHEYE:
+//         {
+//           mount_t < C , 3 , FISHEYE , 16 > mnt ( extent , src ) ;
+//           env = mnt ;
+//           get_mask = [=] ( const in_v & crd3 )
+//             { return mnt.get_mask ( crd3 ) ; } ;
+//           break ;
+//         }
+//         default:
+//         {
+//           std::cerr << "unknown projection: "
+//                     << args.mount_prj_str << std::endl ;
+//           assert ( false ) ;
+//           break ;
+//         }
+//       }
+//     }
+//     else
     {
       // this code path is for 'true' environments which provide pixel
       // data for the entire 360X180 degrees. For now, we accept either
@@ -2768,68 +2899,69 @@ struct environment9
       // set up the source_t object, then create the projection-
       // -specific mount_t object.
 
-      if ( args.mount_image != std::string() )
-      {
-        // note how we create a source_t with no arguments to the c'tor.
-        // this routes to the code using OIIO. The parameters to set up
-        // the source_t object are taken from 'args'.
-
-        source_t < nchannels , 6 , 16 > src ;
-
-        auto extent = get_extent ( args.mount_prj , args.mount_width ,
-                                   args.mount_height , args.mount_hfov  ) ;
-
-        // same case switch as for the single-coordinate code path;
-        // might be factored out - for now we just copy and paste.
-        // note the second template argument, '9'. This produces
-        // an object evaluating 'ninepacks' - three sets of 3D
-        // coordinates.
-
-        switch ( args.mount_prj )
-        {
-          case RECTILINEAR:
-          {
-            mount_t < nchannels , 9 , RECTILINEAR , 16 >
-              mnt ( extent , src ) ;
-            act = mnt ;
-            break ;
-          }
-          case SPHERICAL:
-          {
-            mount_t < nchannels , 9 , SPHERICAL , 16 >
-              mnt ( extent , src ) ;
-            act = mnt ;
-            break ;
-          }
-          case CYLINDRICAL:
-          {
-            mount_t < nchannels , 9 , CYLINDRICAL , 16 >
-              mnt ( extent , src ) ;
-            act = mnt ;
-            break ;
-          }
-          case STEREOGRAPHIC:
-          {
-            mount_t < nchannels , 9 , STEREOGRAPHIC , 16 >
-              mnt ( extent , src ) ;
-            act = mnt ;
-            break ;
-          }
-          case FISHEYE:
-          {
-            mount_t < nchannels , 9 , FISHEYE , 16 >
-              mnt ( extent , src ) ;
-            act = mnt ;
-            break ;
-          }
-          default:
-          {
-            assert ( false ) ;
-            break ;
-          }
-        }
-      }
-      else if ( args.env_width == args.env_height * 2 )
+      // if ( args.mount_image != std::string() )
+      // {
+      //   // note how we create a source_t with no arguments to the c'tor.
+      //   // this routes to the code using OIIO. The parameters to set up
+      //   // the source_t object are taken from 'args'.
+      // 
+      //   source_t < nchannels , 6 , 16 > src ;
+      // 
+      //   auto extent = get_extent ( args.mount_prj , args.mount_width ,
+      //                              args.mount_height , args.mount_hfov  ) ;
+      // 
+      //   // same case switch as for the single-coordinate code path;
+      //   // might be factored out - for now we just copy and paste.
+      //   // note the second template argument, '9'. This produces
+      //   // an object evaluating 'ninepacks' - three sets of 3D
+      //   // coordinates.
+      // 
+      //   switch ( args.mount_prj )
+      //   {
+      //     case RECTILINEAR:
+      //     {
+      //       mount_t < nchannels , 9 , RECTILINEAR , 16 >
+      //         mnt ( extent , src ) ;
+      //       act = mnt ;
+      //       break ;
+      //     }
+      //     case SPHERICAL:
+      //     {
+      //       mount_t < nchannels , 9 , SPHERICAL , 16 >
+      //         mnt ( extent , src ) ;
+      //       act = mnt ;
+      //       break ;
+      //     }
+      //     case CYLINDRICAL:
+      //     {
+      //       mount_t < nchannels , 9 , CYLINDRICAL , 16 >
+      //         mnt ( extent , src ) ;
+      //       act = mnt ;
+      //       break ;
+      //     }
+      //     case STEREOGRAPHIC:
+      //     {
+      //       mount_t < nchannels , 9 , STEREOGRAPHIC , 16 >
+      //         mnt ( extent , src ) ;
+      //       act = mnt ;
+      //       break ;
+      //     }
+      //     case FISHEYE:
+      //     {
+      //       mount_t < nchannels , 9 , FISHEYE , 16 >
+      //         mnt ( extent , src ) ;
+      //       act = mnt ;
+      //       break ;
+      //     }
+      //     default:
+      //     {
+      //       assert ( false ) ;
+      //       break ;
+      //     }
+      //   }
+      // }
+      // else
+      if ( args.env_width == args.env_height * 2 )
       {
         // set up an environment object picking up pixel values from
         // a lat/lon image using OIIO's 'environment' function.

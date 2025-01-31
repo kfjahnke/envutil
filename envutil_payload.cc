@@ -851,6 +851,13 @@ struct voronoi_syn_plus
         for ( int ch = 0 ; ch < nch ; ch++ )
           trg[ch] ( mask ) += ( 1.0f - trg[nch-1] ) * help[ch] ;
       }
+
+      // // if the result so far is already completely opaque, we
+      // // can ignore the layers we haven't yet processed - they
+      // // could not possibly contribute anything. (detrimental)
+      // 
+      // if ( all_of ( trg[nch-1] >= 1.0f ) )
+      //   break ;
     }
 
     // for unassociated alpha, we'd now de-associate
@@ -973,13 +980,21 @@ void fuse ( int ninputs )
 
   for ( int i = 0 ; i < args.nfacets ; i++ )
   {
+    auto const & fct ( args.facet_spec_v [ i ] ) ; // shorthand
+
     // both code paths - processing single rays and 'ninepacks' -
     // need 'environment' objects. So we create one of these for
     // each facet. Note how we pass 'fct' to the env_t's c'tor,
     // whereas the single-environment code passes no argument.
 
-    auto const & fct ( args.facet_spec_v [ i ] ) ;
-    env_v.push_back ( env_t ( fct ) ) ;
+    if ( args.itp == -1 )
+    {
+      env_v.push_back ( env_t ( i ) ) ;
+    }
+    else
+    {
+      env_v.push_back ( env_t ( fct ) ) ;
+    }
 
     // we also need the combined rotations stemming from the
     // orientation of the virtual camera and the orientation
@@ -1149,25 +1164,25 @@ void roll_out ( int ninputs )
   yy = r3 ( yy ) ;
   zz = r3 ( zz ) ;
 
-  // if we have a 'facet' - a mounted image with non-standard
-  // orientation - we add a second rotation, now with the inverse
-  // of the quaternion formed from the orientation Euler angles.
-  // Why inverse? If the facet is oriented precisely like the
-  // virtual camera, both rotations should cancel each other out
-  // precisely.
-
-  if (   args.mount_yaw != 0.0f
-      || args.mount_pitch != 0.0f
-      || args.mount_roll != 0.0f )
-  {
-    rotate_3d < double , 16 > rr3 ( args.mount_roll ,
-                                    args.mount_pitch ,
-                                    args.mount_yaw ,
-                                    true ) ;
-    xx = rr3 ( xx ) ;
-    yy = rr3 ( yy ) ;
-    zz = rr3 ( zz ) ;
-  }
+  // // if we have a 'facet' - a mounted image with non-standard
+  // // orientation - we add a second rotation, now with the inverse
+  // // of the quaternion formed from the orientation Euler angles.
+  // // Why inverse? If the facet is oriented precisely like the
+  // // virtual camera, both rotations should cancel each other out
+  // // precisely.
+  // 
+  // if (   args.mount_yaw != 0.0f
+  //     || args.mount_pitch != 0.0f
+  //     || args.mount_roll != 0.0f )
+  // {
+  //   rotate_3d < double , 16 > rr3 ( args.mount_roll ,
+  //                                   args.mount_pitch ,
+  //                                   args.mount_yaw ,
+  //                                   true ) ;
+  //   xx = rr3 ( xx ) ;
+  //   yy = rr3 ( yy ) ;
+  //   zz = rr3 ( zz ) ;
+  // }
 
   if ( args.itp == 1 || args.itp == -2 )
   {
@@ -1236,7 +1251,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-// #define NARROW_SCOPE
+#define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate
