@@ -529,6 +529,7 @@ struct voronoi_syn
         simdized_type < px_t , 16 > & trg ,
         const std::size_t & cap = 16 ) const
   {
+    typedef simdized_type < float , 16 > f_v ;
     typedef simdized_type < zimt::xel_t < float , 3 > , 16 > ray_v ;
     typedef simdized_type < zimt::xel_t < float , 9 > , 16 > ray9_v;
 
@@ -547,22 +548,86 @@ struct voronoi_syn
 
     for ( const auto & cf : args.twine_spread )
     {
-      // calculate the ray resulting from applying the deltas
-      // du and dv, wich are formed by subtracting the first
-      // set of three coordinate from the second, and third,
-      // respectively. Store the 'deflected' ray in 'scratch'
+      // TODO: refactor. the ninepack variant is the same
+      // one class down.
 
-      for ( std::size_t i = 0 ; i < sz ; i++ )
+      for ( std::size_t facet = 0 ; facet < sz ; facet++ )
       {
-        const ray9_v & c ( pv[i] ) ; // shorthand
+        const ray9_v & in ( pv[facet] ) ; // shorthand
 
-        ray_v p0 { c[0] , c[1] , c[2] } ;
-        ray_v du { c[3] - c[0] , c[4] - c[1] , c[5] - c[2] } ;
-        ray_v dv { c[6] - c[0] , c[7] - c[1] , c[8] - c[2] } ;
+        ray_v pickup { in[0] , in[1] , in[2] } ;
+        ray_v du , dv ;
 
-        scratch[i] = p0 + cf[0] * du + cf[1] * dv ;
+        // TODO:       VVVV use template arg
+        if constexpr ( true )
+
+        // TODO: I think it's better to project the basis vectors
+        // du, dv to 'pickup''s tangent plane - incoming rays may
+        // not be normalized, and not doing the projection may
+        // produce basis vectors which are too much 'askew'.
+        {  
+          // the second and third point in the ninepack represent
+          // rays - they have unit distance from the origin, but
+          // they aren't on 'pickup's' tangent plane, which is where
+          // we'd want two vectors as a basis (du, dv) to produce
+          // the additional pick-up points (the in_k below).
+          // we start out by manifesting these two points:
+
+          ray_v p10 { in[3] , in[4] , in[5] } ;
+          ray_v p01 { in[6] , in[7] , in[8] } ;
+
+          // we use two lines parallel to the 'pickup' ray and passing
+          // through p10 and p01, respectively. Imath comes to play:
+
+          Imath::Line3 < f_v > lp10 , lp01 ;
+
+          lp10.pos = p10 ;
+          lp10.dir = pickup ;
+
+          lp01.pos = p01 ;
+          lp01.dir = pickup ;
+
+          // now we calculate the closest points on these lines to
+          // 'pickup': these points are on the tangential plane.
+          // they are, to put it differently, the orthogonal projection
+          // of p01 and p10 to the tangential plane, and we'll use them
+          // to form our basis.
+
+          // zimt and Imath are compatible, but Imath doesn't know that,
+          // so we reinterpret_cast. Note how we can form an Imath::Vec3
+          // of 'f_v' - a SIMD vector of floats - and use Imath on
+          // this data type: the SIMD data type (provided by zimt) has all
+          // necessary operators and functions defined to be used by Imath,
+          // and the code involved to calculate 'closestPointTo' does not
+          // use conditionals, so we're go, and we'll received SIMD results
+          // in du and dv without further ado.
+
+          auto const & pi
+            = reinterpret_cast < Imath::Vec3 < f_v > const & > ( pickup ) ; 
+          auto & dxi = reinterpret_cast < Imath::Vec3 < f_v > & > ( du ) ; 
+          auto & dyi = reinterpret_cast < Imath::Vec3 < f_v > & > ( dv ) ; 
+
+          dxi = lp10.closestPointTo ( pi ) ;
+          dyi = lp01.closestPointTo ( pi ) ;
+
+          // subtracting 'pickup' yields the desired vectors coplanar to
+          // the tangential plane
+
+          du -= pickup ;
+          dv -= pickup ;
+        }
+        else
+        {
+          // this is the alternative code using simple differencing, which
+          // is fine for the 'normal' scenario: close neighbours and
+          // rays roughly equal length.
+        
+          du = ray_v ( { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ) ;
+          dv = ray_v ( { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ) ;
+        }
+
+        scratch[facet] = pickup + cf[0] * du + cf[1] * dv ;
       }
-
       // now we have sz entries in scratch, and we can call
       // the three-component form above to produce a synopsis
       // for the contributors reacting with the current coefficient
@@ -987,11 +1052,11 @@ void fuse ( int ninputs )
     // each facet. Note how we pass 'fct' to the env_t's c'tor,
     // whereas the single-environment code passes no argument.
 
-    if ( args.itp == -1 )
-    {
-      env_v.push_back ( env_t ( i ) ) ;
-    }
-    else
+    // if ( args.itp == -1 )
+    // {
+    //   env_v.push_back ( env_t ( i ) ) ;
+    // }
+    // else
     {
       env_v.push_back ( env_t ( fct ) ) ;
     }
@@ -1251,7 +1316,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-#define NARROW_SCOPE
+// #define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate

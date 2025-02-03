@@ -61,11 +61,7 @@
 // cammand line argument. The default is --itp 1, which uses bilinear
 // interpolation. This is fast and often good enough, especially if there
 // are no great scale changes involved - so, if the output's resolution is
-// similar to the input's. --itp -1 employs OpenImageIO (OIIO for short)
-// for interpolation. Without further parameters, OIIO's default mode is
-// used, which uses sophisticated, but slow methods to produce the output.
-// All of OIIO's interpolation, mip-mapping and wrapping modes can be
-// selected by using the relevant additional parameters. Finally, --itp -2
+// similar to the input's. --itp -2
 // uses 'twining' - inlined oversampling with subsequent weighted pixel
 // binning. The default with this method is to use a simple box filter
 // whose specific parameterization is set up automatically. Additional
@@ -493,7 +489,7 @@ void arguments::init ( int argc , const char ** argv )
   ap.separator("  interpolation options:");
 
   ap.arg("--itp ITP")
-    .help("interpolator: 1 for b-spline, -1 for OIIO, -2 b-spline+twining")
+    .help("interpolator: 1 for b-spline, -2 b-spline+twining")
     .metavar("ITP");
 
   ap.arg("--prefilter DEG")
@@ -537,41 +533,6 @@ void arguments::init ( int argc , const char ** argv )
     .help("discard twining filter taps below this threshold")
     .metavar("THR");
 
-  // parameters for lookup with OpenImageIO (with --itp -1)
-  ap.separator("  parameters for lookup with OpenImageIO (with --itp -1):");
-
-  ap.arg("--tsoptions KVLIST")
-    .help("OIIO TextureSystem Options: coma-separated key=value pairs")
-    .metavar("KVLIST");
-
-  ap.arg("--swrap WRAP")
-    .help("OIIO Texture System swrap mode")
-    .metavar("WRAP");
-
-  ap.arg("--twrap WRAP")
-    .help("OIIO Texture System twrap mode")
-    .metavar("WRAP");
-
-  ap.arg("--mip MIP")
-    .help("OIIO Texture System mip mode")
-    .metavar("MIP");
-
-  ap.arg("--interp INTERP")
-    .help("OIIO Texture System interp mode")
-    .metavar("INTERP");
-
-  ap.arg("--stwidth EXTENT")
-    .help("swidth and twidth OIIO Texture Options")
-    .metavar("EXTENT");
-
-  ap.arg("--stblur EXTENT")
-    .help("sblur and tblur OIIO Texture Options")
-    .metavar("EXTENT");
-
-  ap.arg("--conservative YESNO")
-    .help("OIIO conservative_filter Texture Option - pass 0 or 1")
-    .metavar("YESNO");
-
   ap.separator("  parameters for mounted (facet) image input:");
   
   ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL",
@@ -612,19 +573,11 @@ void arguments::init ( int argc , const char ** argv )
   twine_density = ap["twine_density"].get<float>(1.0);
   twine_sigma = ap["twine_sigma"].get<float>(0.0);
   twine_threshold = ap["twine_threshold"].get<float>(0.0);
-  swrap = ap["swrap"].as_string ( "WrapDefault" ) ;
-  twrap = ap["twrap"].as_string ( "WrapDefault" ) ;
-  mip = ap["mip"].as_string ( "MipModeDefault" ) ;
-  interp = ap["interp"].as_string ( "InterpSmartBicubic" ) ;
-  tsoptions = ap["tsoptions"].as_string ( "automip=1" ) ;
-  conservative_filter = ap["conservative"].get<int>(1) ;
   x0 = ap["x0"].get<float> ( 0.0 ) ;
   x1 = ap["x1"].get<float> ( 0.0 ) ;
   y0 = ap["y0"].get<float> ( 0.0 ) ;
   y1 = ap["y1"].get<float> ( 0.0 ) ;
   width = ap["width"].get<int> ( 0 ) ;
-  stwidth = ap["stwidth"].get<float> ( 1 ) ;
-  stblur = ap["stblur"].get<float> ( 0 ) ;
   height = ap["height"].get<int> ( 0 ) ;
   hfov = ap["hfov"].get<float>(90.0);
   cbmfov = ap["cbmfov"].get<float>(90.0);
@@ -773,6 +726,12 @@ void arguments::init ( int argc , const char ** argv )
         env_width = spec.width ;
         env_height = spec.height * 6 ;
         nchannels = spec.nchannels ;
+
+        // we close the inp for the first image - a new one will
+        // be opened when all six cube faces are actually read.
+
+        inp->close() ;
+
         env_projection = cbm_prj ;
         if ( ctc )
         {
