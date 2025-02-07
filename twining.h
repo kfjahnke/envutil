@@ -238,7 +238,7 @@ void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
 
 template < std::size_t nchannels ,
            std::size_t L ,
-           bool deriv_tangential >
+           bool deriv_tangential = false >
 struct twine_t
 : public zimt::unary_functor < zimt::xel_t < float , 9 > ,
                                zimt::xel_t < float , nchannels > ,
@@ -319,6 +319,13 @@ struct twine_t
 
     if constexpr ( deriv_tangential )
     {  
+      // alternative approach: draw a line through origin and
+      // pickup, then, on this line, find the closest point to
+      // lp10 or lp01 respectively, and use the diferences as
+      // basis vectors. This should compute faster, but have
+      // slightly less magnitude than projecting to the
+      // tangential plane.
+
       // the second and third point in the ninepack represent
       // rays - they have unit distance from the origin, but
       // they aren't on 'pickup's' tangent plane, which is where

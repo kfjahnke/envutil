@@ -119,11 +119,11 @@ double get_step ( projection_t projection ,
   {
     case RECTILINEAR:
     case CUBEMAP:
-    case BIATAN6:
     {
       step = atan ( 2.0 * tan ( hfov / 2.0 ) / width ) ;
       break ;
     }
+    case BIATAN6:
     case SPHERICAL:
     case CYLINDRICAL:
     case FISHEYE:

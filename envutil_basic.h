@@ -320,6 +320,33 @@ struct cubeface_series
   }
 } ;
 
+// calculate the cross or dot product of two vectors
+
+template < typename U >
+U cross ( const U & x , const U & y )
+{
+  U result ;
+  result[0] = x[1] * y[2] - x[2] * y[1] ;
+  result[1] = x[2] * y[0] - x[0] * y[2] ;
+  result[2] = x[0] * y[1] - x[1] * y[0] ;
+  return result ;
+}
+
+template < typename U >
+typename U::value_type dot ( const U & x , const U & y )
+{
+  return ( x * y ) . sum() ;
+}
+
+// general calculation of the angles between rays:
+
+template < typename U >
+typename U::value_type angle ( const U & a , const U & b )
+{
+  auto costheta = dot ( a , b ) / ( norm ( a ) * norm ( b ) ) ;
+  return acos ( costheta ) ;
+}
+
 #include "zimt/array.h"
 
 struct facet_spec
@@ -381,7 +408,6 @@ struct arguments
   double step , env_step ;
   std::size_t env_width , env_height ;
   std::size_t nchannels ;
-  std::unique_ptr<ImageInput> inp ;
 
   // technical variables for the argument parser
 

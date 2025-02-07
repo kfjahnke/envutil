@@ -717,7 +717,7 @@ void arguments::init ( int argc , const char ** argv )
         // the cubemap's 'load' routine will check all images in
         // turn, so we needn't do that here.
 
-        inp = ImageInput::open ( cfs[0] ) ;
+        auto inp = ImageInput::open ( cfs[0] ) ;
         assert ( inp ) ;
 
         const ImageSpec &spec = inp->spec() ;
@@ -750,7 +750,7 @@ void arguments::init ( int argc , const char ** argv )
     {
       // we have a single image as input.
 
-      inp = ImageInput::open ( input ) ;
+      auto inp = ImageInput::open ( input ) ;
       assert ( inp ) ;
 
       const ImageSpec &spec = inp->spec() ;
@@ -759,8 +759,10 @@ void arguments::init ( int argc , const char ** argv )
       env_height = spec.height ;
       nchannels = spec.nchannels ;
 
+      inp->close() ;
+
       assert (    env_width == env_height * 2
-              || env_height == env_width * 6 ) ;
+               || env_height == env_width * 6 ) ;
 
       if ( env_width == env_height * 2 )
       {
@@ -780,7 +782,11 @@ void arguments::init ( int argc , const char ** argv )
         }
         env_projection = cbm_prj ;
         // TODO: might be slightly different for biatan6, check!
-        env_step = cbmfov / env_width ;
+        // env_step = cbmfov / env_width ;
+        env_step = get_step ( cbm_prj ,
+                              env_width ,
+                              env_height ,
+                              cbmfov ) ;
       }
       else
       {
@@ -1092,11 +1098,15 @@ int main ( int argc , const char ** argv )
     // data) - here we have three values for each coefficient: the
     // first two define the position of the look-up relative to the
     // 'central' position, and the third is the weight and corresponds
-    // to a 'normal' convolution coefficient.
+    // to a 'normal' convolution coefficient. We only calculate a spread
+    // if no twf-file was given - a twf file takes precedence, and the
+    // spread is then already present - it is created during argument
+    // processing.
 
-    make_spread ( args.twine_spread , args.twine , args.twine ,
-                  args.twine_width , args.twine_sigma ,
-                  args.twine_threshold ) ;
+    if ( args.twf_file == std::string() )
+      make_spread ( args.twine_spread , args.twine , args.twine ,
+                    args.twine_width , args.twine_sigma ,
+                    args.twine_threshold ) ;
 
     // find the parameters which are type-relevant to route to
     // the specialized code above. There are several stages of

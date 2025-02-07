@@ -346,9 +346,16 @@ struct voronoi_syn
 
   std::vector < ENV > & env_v ;
 
+  // 'scratch' will hold all ray packets which will react with
+  // a given twining coefficient 'cf'
+  
+  std::vector < ray_v > scratch ;
+
+
   voronoi_syn ( std::vector < ENV > & _env_v )
   : env_v ( _env_v ) ,
-    sz ( _env_v.size() )
+    sz ( _env_v.size() ) ,
+    scratch ( _env_v.size() )
   { }
 
   // general calculation of the angles between rays:
@@ -482,7 +489,7 @@ struct voronoi_syn
       // evaluate every in-play facet and compose the result.
       // some rays may not have hit any facet, so we clear trg
       // first. We refrain from testing for occupants with value
-      // -1, because foming a mask and performing a masked assignment
+      // -1, because forming a mask and performing a masked assignment
       // is more costly then clearing trg. this is also the 'worst
       // case' - preformance-wise - where the rays hit several facets. 
 
@@ -507,36 +514,30 @@ struct voronoi_syn
     }
   }
 
-  // operator() for 'ninepacks'. This implements 'twining' - evaluation
+  // operator() for 'ninepacks'. This implements 'twining': evaluation
   // at several rays in the vicinity of the central ray and formation
   // of a weighted sum of these evaluations. The incoming 'ninepack'
   // holds three concatenated vectorized rays: the 'central' rays,
   // the rays which result from a discrete target coordinate set off
   // by one to the right, and the rays which result from a discrete
-  // target coordinate set off one down. By differencing, we can
-  // approximate the derivatives (we don't care to do this absolutely
-  // precisely here and consider the approximation as 'good enough')
-  // which in turn form the basis for application of the twining
-  // kernel coefficients. The code here is quite general and might be
-  // factored out - there is already similar code in 'environment9'
-  // in environment.h, which also has a variant using absolutely
-  // precise basis values by projecting the differences to the
-  // tangent plane.
+  // target coordinate set off one down. By differencing, we obtain
+  // two vectors representing 'canonical' steps in the target image's
+  // horizontal and vertical. We use these two vectors as a basis for
+  // the 'twining' operation: each twining coefficient has two factors
+  // describing it's spatial aspect, and multiplying them with the
+  // corresponding basis vectors and summing up produces the offset
+  // we need to add to the 'central' or 'pickup' ray to obtian a
+  // 'deflected' ray. The substrate is evaluated at each deflected
+  // ray, and the results are combined in a weighted sum, where the
+  // weight comes from the third factor in the twining coefficient.
 
-  void operator() (
-        const std::vector
-          < simdized_type < zimt::xel_t < float , 9 > , 16 > > & pv ,
-        simdized_type < px_t , 16 > & trg ,
-        const std::size_t & cap = 16 ) const
+  void operator() ( const std::vector < ninepack_v > & pv ,
+                    px_v & trg ,
+                    const std::size_t & cap = 16 )
   {
     typedef simdized_type < float , 16 > f_v ;
     typedef simdized_type < zimt::xel_t < float , 3 > , 16 > ray_v ;
     typedef simdized_type < zimt::xel_t < float , 9 > , 16 > ray9_v;
-
-    // 'scratch' will hold all ray packets which will react with
-    // a given twining coefficient 'cf'
-  
-    std::vector < ray_v > scratch ( sz ) ;
 
     // trg is built up as a weighted sum of contributing values
     // resulting from the reaction with a given coefficient, so we
@@ -548,86 +549,17 @@ struct voronoi_syn
 
     for ( const auto & cf : args.twine_spread )
     {
-      // TODO: refactor. the ninepack variant is the same
-      // one class down.
-
       for ( std::size_t facet = 0 ; facet < sz ; facet++ )
       {
         const ray9_v & in ( pv[facet] ) ; // shorthand
 
-        ray_v pickup { in[0] , in[1] , in[2] } ;
-        ray_v du , dv ;
+        ray_v p0 { in[0] ,         in[1] ,         in[2] } ;
+        ray_v du { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
+        ray_v dv { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
 
-        // TODO:       VVVV use template arg
-        if constexpr ( true )
-
-        // TODO: I think it's better to project the basis vectors
-        // du, dv to 'pickup''s tangent plane - incoming rays may
-        // not be normalized, and not doing the projection may
-        // produce basis vectors which are too much 'askew'.
-        {  
-          // the second and third point in the ninepack represent
-          // rays - they have unit distance from the origin, but
-          // they aren't on 'pickup's' tangent plane, which is where
-          // we'd want two vectors as a basis (du, dv) to produce
-          // the additional pick-up points (the in_k below).
-          // we start out by manifesting these two points:
-
-          ray_v p10 { in[3] , in[4] , in[5] } ;
-          ray_v p01 { in[6] , in[7] , in[8] } ;
-
-          // we use two lines parallel to the 'pickup' ray and passing
-          // through p10 and p01, respectively. Imath comes to play:
-
-          Imath::Line3 < f_v > lp10 , lp01 ;
-
-          lp10.pos = p10 ;
-          lp10.dir = pickup ;
-
-          lp01.pos = p01 ;
-          lp01.dir = pickup ;
-
-          // now we calculate the closest points on these lines to
-          // 'pickup': these points are on the tangential plane.
-          // they are, to put it differently, the orthogonal projection
-          // of p01 and p10 to the tangential plane, and we'll use them
-          // to form our basis.
-
-          // zimt and Imath are compatible, but Imath doesn't know that,
-          // so we reinterpret_cast. Note how we can form an Imath::Vec3
-          // of 'f_v' - a SIMD vector of floats - and use Imath on
-          // this data type: the SIMD data type (provided by zimt) has all
-          // necessary operators and functions defined to be used by Imath,
-          // and the code involved to calculate 'closestPointTo' does not
-          // use conditionals, so we're go, and we'll received SIMD results
-          // in du and dv without further ado.
-
-          auto const & pi
-            = reinterpret_cast < Imath::Vec3 < f_v > const & > ( pickup ) ; 
-          auto & dxi = reinterpret_cast < Imath::Vec3 < f_v > & > ( du ) ; 
-          auto & dyi = reinterpret_cast < Imath::Vec3 < f_v > & > ( dv ) ; 
-
-          dxi = lp10.closestPointTo ( pi ) ;
-          dyi = lp01.closestPointTo ( pi ) ;
-
-          // subtracting 'pickup' yields the desired vectors coplanar to
-          // the tangential plane
-
-          du -= pickup ;
-          dv -= pickup ;
-        }
-        else
-        {
-          // this is the alternative code using simple differencing, which
-          // is fine for the 'normal' scenario: close neighbours and
-          // rays roughly equal length.
-        
-          du = ray_v ( { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ) ;
-          dv = ray_v ( { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ) ;
-        }
-
-        scratch[facet] = pickup + cf[0] * du + cf[1] * dv ;
+        scratch [ facet ] = p0 + cf[0] * du + cf[1] * dv ;
       }
+
       // now we have sz entries in scratch, and we can call
       // the three-component form above to produce a synopsis
       // for the contributors reacting with the current coefficient
@@ -647,7 +579,7 @@ struct voronoi_syn
 
 // variant with z-buffering for facets with alpha channel:
 
-template < typename ENV >
+template < typename ENV , bool fix_duv = true >
 struct voronoi_syn_plus
 {
   typedef typename ENV::px_t px_t ;
@@ -662,20 +594,13 @@ struct voronoi_syn_plus
   typedef simdized_type < int , 16 > index_v ;
 
   std::vector < ENV > & env_v ;
+  std::vector < ray_v > scratch ;
 
   voronoi_syn_plus ( std::vector < ENV > & _env_v )
   : env_v ( _env_v ) ,
-    sz ( _env_v.size() )
+    sz ( _env_v.size() ) ,
+    scratch ( _env_v.size() )
   { }
-
-  // general calculation of the angles between rays:
-  //
-  // f_v angle ( const ray_v & a , const ray_v & b ) const
-  // {
-  //   auto dot = ( a * b ) . sum() ;
-  //   auto costheta = dot / ( norm ( a ) * norm ( b ) ) ;
-  //   return acos ( costheta ) ;
-  // }
 
   // this helper function calculates the vector of angles between
   // a vector of rays and (0,0,1) - unit forward in our CS.
@@ -934,76 +859,32 @@ struct voronoi_syn_plus
     // }
   }
     
-  // operator() for 'ninepacks'. This implements 'twining' - evaluation
-  // at several rays in the vicinity of the central ray and formation
-  // of a weighted sum of these evaluations. The incoming 'ninepack'
-  // holds three concatenated vectorized rays: the 'central' rays,
-  // the rays which result from a discrete target coordinate set off
-  // by one to the right, and the rays which result from a discrete
-  // target coordinate set off one down. By differencing, we can
-  // approximate the derivatives (we don't care to do this absolutely
-  // precisely here and consider the approximation as 'good enough')
-  // which in turn form the basis for application of the twining
-  // kernel coefficients. The code here is quite general and might be
-  // factored out - there is already similar code in 'environment9'
-  // in environment.h, which also has a variant using absolutely
-  // precise basis values by projecting the differences to the
-  // tangent plane.
+  // operator() for 'ninepacks'. This is the same as in voronoi_syn,
+  // see there for a commented version.
 
-  void operator() (
-        const std::vector
-          < simdized_type < zimt::xel_t < float , 9 > , 16 > > & pv ,
-        simdized_type < px_t , 16 > & trg ,
-        const std::size_t & cap = 16 ) const
+  void operator() ( const std::vector < ninepack_v > & pv ,
+                    px_v & trg ,
+                    const std::size_t & cap = 16 )
   {
-    typedef simdized_type < zimt::xel_t < float , 3 > , 16 > ray_v ;
-    typedef simdized_type < zimt::xel_t < float , 9 > , 16 > ray9_v;
-
-    // 'scratch' will hold all ray packets which will react with
-    // a given twining coefficient 'cf'
-  
-    std::vector < ray_v > scratch ( sz ) ;
-
-    // trg is built up as a weighted sum of contributing values
-    // resulting from the reaction with a given coefficient, so we
-    // clear it befor we begin.
-  
     trg = 0.0f ;
-
-    // for each coefficient in the twining 'spread'
 
     for ( const auto & cf : args.twine_spread )
     {
-      // calculate the ray resulting from applying the deltas
-      // du and dv, wich are formed by subtracting the first
-      // set of three coordinate from the second, and third,
-      // respectively. Store the 'deflected' ray in 'scratch'
-
-      for ( std::size_t i = 0 ; i < sz ; i++ )
+      for ( std::size_t facet = 0 ; facet < sz ; facet++ )
       {
-        const ray9_v & c ( pv[i] ) ; // shorthand
+        const auto & in ( pv[facet] ) ; // shorthand
 
-        ray_v p0 { c[0] , c[1] , c[2] } ;
-        ray_v du { c[3] - c[0] , c[4] - c[1] , c[5] - c[2] } ;
-        ray_v dv { c[6] - c[0] , c[7] - c[1] , c[8] - c[2] } ;
+        ray_v p0 { in[0] ,         in[1] ,         in[2] } ;
+        ray_v du { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
+        ray_v dv { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
 
-        scratch[i] = p0 + cf[0] * du + cf[1] * dv ;
+        scratch [ facet ] = p0 + cf[0] * du + cf[1] * dv ;
       }
-
-      // now we have sz entries in scratch, and we can call
-      // the three-component form above to produce a synopsis
-      // for the contributors reacting with the current coefficient
 
       px_v help ;
       operator() ( scratch , help , cap ) ;
-
-      // 'help' is the pixel value, which is weighted with the
-      // weighting value in the twining kernel and added to what's
-      // in trg already.
-
       trg += cf[2] * help ;
     }  
-    // and that's it - trg has the result.
   }
 } ;
 
@@ -1118,21 +999,35 @@ void fuse ( int ninputs )
       get_v.push_back ( get_ray ) ;
     }
 
-    // for now, we use a hard-coded synopsis-forming object
+    if ( args.nfacets == 1 )
+    {
+      // special case: there is only one facet. Using the
+      // multi-facet code would work, but would produce
+      // futile overhead.
 
-    synopsis_t vs ( env_v ) ;
+      if ( args.verbose )
+        std::cout << "using single-facet rendering" << std::endl ;
 
-    // now we can create the fusion_t object
+      work ( get_v[0] , env_v[0] ) ;
+    }
+    else
+    {
+      // for now, we use a hard-coded synopsis-forming object
 
-    fs_t fs ( get_v , vs ) ;
+      synopsis_t vs ( env_v ) ;
 
-    // now we call the final 'work' template which uses the fusion_t
-    // which directly produces a pixel value, so we use a pass_through
-    // act functor, rather than having the interpolator step in the
-    // act functor.
+      // now we can create the fusion_t object
 
-    zimt::pass_through < float , NCH , 16 > act ;
-    work ( fs , act ) ;
+      fs_t fs ( get_v , vs ) ;
+
+      // now we call the final 'work' template which uses the fusion_t
+      // which directly produces a pixel value, so we use a pass_through
+      // act functor, rather than having the interpolator step in the
+      // act functor.
+
+      zimt::pass_through < float , NCH , 16 > act ;
+      work ( fs , act ) ;
+    }
   }
   else // ninputs == 9
   {
@@ -1156,20 +1051,36 @@ void fuse ( int ninputs )
       get_v.push_back ( get_ray ) ;
     }
 
-    // now we set up the synopsis-forming object and introduce it to
-    // the fusion_t object - which is now used via it's ninepack-
-    // processing member function.
+    if ( args.nfacets == 1 )
+    {
+      // special case: there is only one facet. We have to wrap the
+      // single evaluator in a twine_t object to process the 'ninepacks'
+      // which the deriv_stepper in get_v[0] will produce. Using the
+      // multi-facet code would work, but would produce futile overhead.
 
-    synopsis_t vs ( env_v ) ;
+      if ( args.verbose )
+        std::cout << "using single-facet rendering" << std::endl ;
 
-    fs9_t fs ( get_v , vs ) ;
+      twine_t < NCH , 16 > twenv ( env_v[0] , args.twine_spread ) ;
+      work ( get_v[0] , twenv ) ;
+    }
+    else
+    {
+      // we set up the synopsis-forming object and introduce it to
+      // the fusion_t object - which is now used via it's ninepack-
+      // processing member function.
 
-    // now we call the final 'work' template which uses the fusion_t
-    // which directly produces a pixel value, so we use a pass_through
-    // act functor.
+      synopsis_t vs ( env_v ) ;
 
-    zimt::pass_through < float , NCH , 16 > act ;
-    work ( fs , act ) ;
+      fs9_t fs ( get_v , vs ) ;
+
+      // now we call the final 'work' template which uses the fusion_t
+      // which directly produces a pixel value, so we use a pass_through
+      // act functor.
+
+      zimt::pass_through < float , NCH , 16 > act ;
+      work ( fs , act ) ;
+    }
   }
 }
 
@@ -1197,13 +1108,11 @@ void roll_out ( int ninputs )
     // are with alpha channel.
 
     if constexpr ( NCH == 1 || NCH == 3 )
-      fuse < NCH , STP , voronoi_syn<env_t> > ( ninputs ) ;
+      fuse < NCH , STP , voronoi_syn < env_t > > ( ninputs ) ;
     else
-      fuse < NCH , STP , voronoi_syn_plus<env_t> > ( ninputs ) ;
+      fuse < NCH , STP , voronoi_syn_plus < env_t > > ( ninputs ) ;
     return ;
   }
-
-  env_t * p_env = nullptr ;
 
   // set up an orthonormal system of basis vectors for the view
 
@@ -1229,46 +1138,23 @@ void roll_out ( int ninputs )
   yy = r3 ( yy ) ;
   zz = r3 ( zz ) ;
 
-  // // if we have a 'facet' - a mounted image with non-standard
-  // // orientation - we add a second rotation, now with the inverse
-  // // of the quaternion formed from the orientation Euler angles.
-  // // Why inverse? If the facet is oriented precisely like the
-  // // virtual camera, both rotations should cancel each other out
-  // // precisely.
-  // 
-  // if (   args.mount_yaw != 0.0f
-  //     || args.mount_pitch != 0.0f
-  //     || args.mount_roll != 0.0f )
-  // {
-  //   rotate_3d < double , 16 > rr3 ( args.mount_roll ,
-  //                                   args.mount_pitch ,
-  //                                   args.mount_yaw ,
-  //                                   true ) ;
-  //   xx = rr3 ( xx ) ;
-  //   yy = rr3 ( yy ) ;
-  //   zz = rr3 ( zz ) ;
-  // }
+  // both direct spline interpolation and twining need an
+  // 'environment' object.
 
-  if ( args.itp == 1 || args.itp == -2 )
+  // create an 'environment' object. This will persist while the
+  // input image remains the same, so if we're creating an image
+  // sequence, it will be reused for each individual image.
+  // we 'hold' the environment object in current_env, an 'asset'
+  // object, which destructs and dealocates it's client object
+  // only when itself destructs or is 'cleared'.
+
+  env_t * p_env = (env_t*) current_env.has ( args.input ) ;
+
+  if ( ! p_env )
   {
-    // both direct spline interpolation and twining need an
-    // 'environment' object.
-
-    // create an 'environment' object. This will persist while the
-    // input image remains the same, so if we're creating an image
-    // sequence, it will be reused for each individual image.
-    // we 'hold' the environment object in current_env, an 'asset'
-    // object, which destructs and dealocates it's client object
-    // only when itself destructs or is 'cleared'.
-
-    p_env = (env_t*) current_env.has ( args.input ) ;
-
-    if ( ! p_env )
-    {
-      current_env.clear() ;
-      p_env = new env_t() ;
-      current_env.reset ( args.input , p_env ) ;
-    }
+    current_env.clear() ;
+    p_env = new env_t() ;
+    current_env.reset ( args.input , p_env ) ;
   }
 
   // There are two code paths: one taking the getters yielding
@@ -1316,12 +1202,15 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-// #define NARROW_SCOPE
+#define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate
 // the next roll_out level with a stepper type which fits the
-// projection.
+// projection. Note that a stepper steps through the *target* image;
+// it's output are ray coordinates in the source image's coordinate
+// system. Also note that roll_out delegates to 'fuse' if the input
+// consists of facets.
 
 template < int NCH >
 void roll_out ( int ninputs ,
