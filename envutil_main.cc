@@ -622,16 +622,6 @@ void arguments::init ( int argc , const char ** argv )
     std::cout << "cbm_prj = " << projection_name [ cbm_prj ]
               << std::endl ;
 
-  // TODO:
-  // if ( fct_file != std::string() )
-  // {
-  //   // we set 'input' to the name of the mounted image; we use
-  //   // 'input' as id for the environment 'asset', so we can't
-  //   // just leave it blank.
-  // 
-  //   input = fct_file ;
-  // }
-  // else
   if ( args.facet_name_v.size() == 0 )
   {
     assert ( input != std::string() ) ;
@@ -655,43 +645,6 @@ void arguments::init ( int argc , const char ** argv )
 
   cbmfov *= M_PI / 180.0 ;
 
-  // if ( mount_image != std::string() )
-  // {
-  //   mount_inp = ImageInput::open ( mount_image ) ;
-  //   assert ( mount_inp ) ;
-  // 
-  //   const ImageSpec &spec = mount_inp->spec() ;
-  // 
-  //   mount_width = spec.width ;
-  //   mount_height = spec.height ;
-  //   nchannels = spec.nchannels ;
-  //   mount_hfov *= M_PI / 180.0 ;
-  //   switch ( mount_prj )
-  //   {
-  //     case SPHERICAL:
-  //     case FISHEYE:
-  //     case CYLINDRICAL:
-  //       env_step = mount_hfov / mount_width ;
-  //       break ;
-  //     case RECTILINEAR:
-  //       env_step = 2.0 * tan ( mount_hfov / 2.0 ) / mount_width ;
-  //       break ;
-  //     case STEREOGRAPHIC:
-  //       env_step = 4.0 * tan ( mount_hfov / 4.0 ) / mount_width ;
-  //       break ;
-  //     default:
-  //       break ;
-  //   }
-  //   mount_yaw *= M_PI / 180.0 ;
-  //   mount_pitch *= M_PI / 180.0 ;
-  //   mount_roll *= M_PI / 180.0 ;
-  // }
-  // else if ( fct_file != std::string() )
-  // {
-  //   std::cerr << "not implemented: input is a multi-facet file "
-  //               << fct_file << std::endl ;
-  // }
-  // else
   if ( args.facet_name_v.size() == 0 )
   {
     // some member variables in the args object are gleaned from
@@ -781,8 +734,6 @@ void arguments::init ( int argc , const char ** argv )
                       << ( cbmfov * 180.0 / M_PI ) << std::endl ;
         }
         env_projection = cbm_prj ;
-        // TODO: might be slightly different for biatan6, check!
-        // env_step = cbmfov / env_width ;
         env_step = get_step ( cbm_prj ,
                               env_width ,
                               env_height ,
