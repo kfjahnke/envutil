@@ -742,73 +742,73 @@ struct environment
     }
   }
 
-  environment()
-  {
-    // this code path is for 'true' environments which provide pixel
-    // data for the entire 360X180 degrees. For now, we accept either
-    // a 2:1 full equirect or a 1:6 vertically stacked cubemap.
-    // Here, we process args.input etc. - as opposed to a facet_spec
-    // object, which is used in the previous c'tor overload.
-
-    auto & w ( args.env_width ) ;
-    auto & h ( args.env_height ) ;
-
-    shape_type shape { w , h } ;
-
-    if ( w == 2 * h )
-    {
-      if ( args.verbose )
-        std::cout << "environment has 2:1 aspect ratio, assuming latlon"
-                  << std::endl ;
-
-      p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
-                                  { zimt::PERIODIC , zimt::REFLECT } ) ) ;
-      auto inp = ImageInput::open ( args.input ) ;
-      bool success = inp->read_image (
-        0 , 0 , 0 , C ,
-        TypeDesc::FLOAT ,
-        p_bspl->core.data() ,
-        sizeof ( in_px_t ) ,
-        p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
-      assert ( success ) ;
-      inp->close() ;
-
-      p_bspl->spline_degree = args.prefilter_degree ;
-      spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
-      p_bspl->spline_degree = args.spline_degree ;
-      auto bsp_ev = zimt::make_evaluator < spl_t , float , LANES > ( *p_bspl ) ;
-
-      env = ray_to_ll_t() + ll_to_px_t ( h ) + bsp_ev ;
-    }
-    else if ( h == 6 * w )
-    {
-      if ( args.verbose )
-      {
-        std::cout << "environment has 1:6 aspect ratio, assuming cubemap"
-                  << std::endl ;
-      }
-      if ( args.cbm_prj == CUBEMAP )
-      {
-        env = cubemap_t < C , CUBEMAP > () ;
-      }
-      else
-      {
-        env = cubemap_t < C , BIATAN6 > () ;
-      }
-    }
-    else
-    {
-      std::cerr << "environment doesn't have 2:1 or 1:6 aspect ratio"
-                << std::endl ;
-
-      assert ( false ) ;
-    }
-
-    // for full sphericals and cubemaps, get_mask always returns
-    // an all-true mask - if it's called at all.
-
-    get_mask = [] ( const in_v & crd3 ) { return mask_t ( true ) ; } ;
-  }
+  // environment()
+  // {
+  //   // this code path is for 'true' environments which provide pixel
+  //   // data for the entire 360X180 degrees. For now, we accept either
+  //   // a 2:1 full equirect or a 1:6 vertically stacked cubemap.
+  //   // Here, we process args.input etc. - as opposed to a facet_spec
+  //   // object, which is used in the previous c'tor overload.
+  // 
+  //   auto & w ( args.env_width ) ;
+  //   auto & h ( args.env_height ) ;
+  // 
+  //   shape_type shape { w , h } ;
+  // 
+  //   if ( w == 2 * h )
+  //   {
+  //     if ( args.verbose )
+  //       std::cout << "environment has 2:1 aspect ratio, assuming latlon"
+  //                 << std::endl ;
+  // 
+  //     p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+  //                                 { zimt::PERIODIC , zimt::REFLECT } ) ) ;
+  //     auto inp = ImageInput::open ( args.input ) ;
+  //     bool success = inp->read_image (
+  //       0 , 0 , 0 , C ,
+  //       TypeDesc::FLOAT ,
+  //       p_bspl->core.data() ,
+  //       sizeof ( in_px_t ) ,
+  //       p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
+  //     assert ( success ) ;
+  //     inp->close() ;
+  // 
+  //     p_bspl->spline_degree = args.prefilter_degree ;
+  //     spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
+  //     p_bspl->spline_degree = args.spline_degree ;
+  //     auto bsp_ev = zimt::make_evaluator < spl_t , float , LANES > ( *p_bspl ) ;
+  // 
+  //     env = ray_to_ll_t() + ll_to_px_t ( h ) + bsp_ev ;
+  //   }
+  //   else if ( h == 6 * w )
+  //   {
+  //     if ( args.verbose )
+  //     {
+  //       std::cout << "environment has 1:6 aspect ratio, assuming cubemap"
+  //                 << std::endl ;
+  //     }
+  //     if ( args.cbm_prj == CUBEMAP )
+  //     {
+  //       env = cubemap_t < C , CUBEMAP > () ;
+  //     }
+  //     else
+  //     {
+  //       env = cubemap_t < C , BIATAN6 > () ;
+  //     }
+  //   }
+  //   else
+  //   {
+  //     std::cerr << "environment doesn't have 2:1 or 1:6 aspect ratio"
+  //               << std::endl ;
+  // 
+  //     assert ( false ) ;
+  //   }
+  // 
+  //   // for full sphericals and cubemaps, get_mask always returns
+  //   // an all-true mask - if it's called at all.
+  // 
+  //   get_mask = [] ( const in_v & crd3 ) { return mask_t ( true ) ; } ;
+  // }
 
   // eval simply delegates to 'env'
 

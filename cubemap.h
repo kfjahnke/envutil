@@ -1161,26 +1161,37 @@ public:
   // the c'tor without arguments obtains the parameterization from
   // the global 'args' object
 
-  cubemap_t()
-  : cubemap_t ( args.env_width , args.cbmfov ,
-                args.support_min , args.tile_size )
-  {
-    if ( args.multiple_input )
-    {
-      load ( args.cfs.get_filenames() ) ;
-    }
-    else
-    {
-      load ( args.input ) ;
-    }
-  }
+  // cubemap_t()
+  // : cubemap_t ( args.env_width , args.cbmfov ,
+  //               args.support_min , args.tile_size )
+  // {
+  //   if ( args.multiple_input )
+  //   {
+  //     load ( args.cfs.get_filenames() ) ;
+  //   }
+  //   else
+  //   {
+  //     load ( args.input ) ;
+  //   }
+  // }
 
   cubemap_t ( const facet_spec & fct )
   : cubemap_t ( fct.width , fct.hfov ,
                 args.support_min , args.tile_size )
   {
-    // TODO: handle multi-image input
+    auto has_percent = fct.filename.find_first_of ( "%" ) ;
+    if ( has_percent != std::string::npos )
+    {
+      // input must be a set of six cubeface images, that's the
+      // only way how we accept a format string.
 
+      cubeface_series cfs ( fct.filename ) ;
+      if ( cfs.valid() )
+      {
+        load ( cfs.get_filenames() ) ;
+        return ;
+      }
+    }
     load ( fct.filename ) ;
   }
 

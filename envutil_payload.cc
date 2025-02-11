@@ -1119,37 +1119,37 @@ void roll_out ( int ninputs )
 {
   typedef environment < float , float , NCH , 16 > env_t ;
 
-  // if there are no facets, the user must have supplied a full
-  // 360X180 environment via an 'input' parameter, which the
-  // argument-processing code has already looked into, to find
-  // the correct parameterization. Such environment images don't
-  // have an orientation, but some additional parameters (like ctc)
-  // apply. Still, the parameter set of a facet should suffice to
-  // communicate the image's characteristics, and we now produce a
-  // facet_spec object and proceed with the single facet - the code
-  // in fuse special-cases single-facet operation and avoids synopsis
-  // code, which would be futile for single facets.
-
-  if ( ! args.nfacets )
-  {
-    assert ( args.input != std::string() ) ;
-
-    facet_spec fspec ;
-    fspec.facet_no = 0 ;
-    fspec.filename = args.input ;
-    fspec.projection = args.env_projection ;
-    if ( fspec.projection == SPHERICAL )
-      fspec.hfov = 2.0 * M_PI ;
-    else
-      fspec.hfov = M_PI_2 ;
-    fspec.yaw = fspec.pitch = fspec.roll = 0.0 ;
-    fspec.width = args.env_width ;
-    fspec.height = args.env_height ;
-    fspec.nchannels = NCH ;
-    
-    args.facet_spec_v.push_back ( fspec ) ;
-    args.nfacets = 1 ;
-  }
+//   // if there are no facets, the user must have supplied a full
+//   // 360X180 environment via an 'input' parameter, which the
+//   // argument-processing code has already looked into, to find
+//   // the correct parameterization. Such environment images don't
+//   // have an orientation, but some additional parameters (like ctc)
+//   // apply. Still, the parameter set of a facet should suffice to
+//   // communicate the image's characteristics, and we now produce a
+//   // facet_spec object and proceed with the single facet - the code
+//   // in fuse special-cases single-facet operation and avoids synopsis
+//   // code, which would be futile for single facets.
+// 
+//   if ( ! args.nfacets )
+//   {
+//     assert ( args.input != std::string() ) ;
+// 
+//     facet_spec fspec ;
+//     fspec.facet_no = 0 ;
+//     fspec.filename = args.input ;
+//     fspec.projection = args.env_projection ;
+//     if ( fspec.projection == SPHERICAL )
+//       fspec.hfov = 2.0 * M_PI ;
+//     else
+//       fspec.hfov = M_PI_2 ;
+//     fspec.yaw = fspec.pitch = fspec.roll = 0.0 ;
+//     fspec.width = args.env_width ;
+//     fspec.height = args.env_height ;
+//     fspec.nchannels = NCH ;
+//     
+//     args.facet_spec_v.push_back ( fspec ) ;
+//     args.nfacets = 1 ;
+//   }
 
   // quick shot: assume one- and three-channel images are
   // without alpha channel, two- and four-channel images
@@ -1250,7 +1250,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-#define NARROW_SCOPE
+// #define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate

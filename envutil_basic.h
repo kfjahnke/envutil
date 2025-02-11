@@ -356,6 +356,7 @@ struct facet_spec
   std::string projection_str ;
   projection_t projection ;
   double hfov ;
+  double step ;
   double yaw , pitch , roll ;
   std::size_t width ;
   std::size_t height ;
@@ -367,20 +368,15 @@ struct facet_spec
 struct arguments
 {
   bool verbose ;
-  std::string input ;
   std::string output ;
   double hfov ;
   std::size_t width ;
   std::size_t height ;
   std::string prj_str ;
-  std::string cbm_prj_str ;
   projection_t projection ;
-  projection_t cbm_prj;
 
-  double cbmfov ;
   std::size_t support_min ;
   std::size_t tile_size ;
-  bool ctc ;
 
   double yaw , pitch , roll ;
   double x0 , x1 , y0 , y1 ;
@@ -402,11 +398,7 @@ struct arguments
 
   // gleaned from other parameters or input images
 
-  bool multiple_input ;
-  cubeface_series cfs ;
-  projection_t env_projection ;
-  double step , env_step ;
-  std::size_t env_width , env_height ;
+  double step ;
   std::size_t nchannels ;
 
   // technical variables for the argument parser

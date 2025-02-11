@@ -1050,13 +1050,20 @@ transparency let other facets shine through oven if they don't 'win the
 contest'. You can't currently mix facets with and without transparency;
 all facets have to have the same channel count and transparency quality.
 
-If you use multi-facet input with simple interpolation (--itp 1), you'll
+If you use multi-facet input with simple interpolation (--itp 1), you may
 notice ungainly staircase artifacts where facets collide, and also where
 the facets border on 'empty space'. This is due to the way facets are
 prioritized: only one facet can 'win the contest', and there is currently
 no implementation of feathering. If you use twining, the effect is mitigated,
 the facets are blended to a certain degree, and the edges are faded into
-black. The larger the twining kernel is, the better the effect.
+black. The larger the twining kernel is, the better the effect. When
+automatic twining is used, the twining kernel is calculated to suit all
+facets - if some facets have very high resolution, this may result in a
+large twining kernel to avoid aliasing even for the parts of the target
+image which show the high-res content, bringing computation load up even if
+most of the target image may come from lower resolution content. So the
+choice of the automatic twining kernel is conservative but may be slow to
+compute.
 
 # Additional Technical Notes
 

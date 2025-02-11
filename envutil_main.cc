@@ -384,9 +384,9 @@ void arguments::init ( int argc , const char ** argv )
 
   ap.separator("  mandatory options:");
 
-  ap.arg("--input INPUT")
-    .help("input file name (mandatory if no 'facet' is given)")
-    .metavar("INPUT");
+  // ap.arg("--input INPUT")
+  //   .help("input file name (mandatory if no 'facet' is given)")
+  //   .metavar("INPUT");
 
   ap.arg("--output OUTPUT")
     .help("output file name (mandatory)")
@@ -412,16 +412,16 @@ void arguments::init ( int argc , const char ** argv )
     .help("height of the output (default: same as width)")
     .metavar("EXTENT");
 
-  // additional input parameters for cubemap input
-  ap.separator("  additional input parameters for cubemap input:");
-
-  ap.arg("--cbmfov ANGLE")
-    .help("horiziontal field of view of cubemap input (default: 90)")
-    .metavar("ANGLE");
-
-  ap.arg("--cbm_prj PRJ")
-    .help("projection for cubemaps (default: cubemap - alt. biatan6)")
-    .metavar("PRJ");
+  // // additional input parameters for cubemap input
+  // ap.separator("  additional input parameters for cubemap input:");
+  // 
+  // ap.arg("--cbmfov ANGLE")
+  //   .help("horiziontal field of view of cubemap input (default: 90)")
+  //   .metavar("ANGLE");
+  // 
+  // ap.arg("--cbm_prj PRJ")
+  //   .help("projection for cubemaps (default: cubemap - alt. biatan6)")
+  //   .metavar("PRJ");
 
   ap.arg("--support_min EXTENT")
     .help("minimal additional support around the cube face proper")
@@ -431,9 +431,9 @@ void arguments::init ( int argc , const char ** argv )
     .help("tile size for the internal representation image")
     .metavar("EXTENT");
 
-  ap.arg("--ctc CTC")
-    .help("pass '1' to interpret cbmfov as center-to-center (default 0)")
-    .metavar("CTC");
+  // ap.arg("--ctc CTC")
+  //   .help("pass '1' to interpret cbmfov as center-to-center (default 0)")
+  //   .metavar("CTC");
 
   // parameters for single-image output
   ap.separator("  additional parameters for single-image output:");
@@ -557,7 +557,6 @@ void arguments::init ( int argc , const char ** argv )
 
   // extract the arguments from the argparser, parse the projection
 
-  input = ap["input"].as_string ( "" ) ;
   output = ap["output"].as_string ( "" ) ;
   seqfile = ap["seqfile"].as_string ( "" ) ;
   twf_file = ap["twf_file"].as_string ( "" ) ;
@@ -580,8 +579,6 @@ void arguments::init ( int argc , const char ** argv )
   width = ap["width"].get<int> ( 0 ) ;
   height = ap["height"].get<int> ( 0 ) ;
   hfov = ap["hfov"].get<float>(90.0);
-  cbmfov = ap["cbmfov"].get<float>(90.0);
-  ctc = ap["ctc"].get<int>(0);
   tile_size = ap["tile_size"].get<int> ( 64 ) ;
   support_min = ap["support_min"].get<int> ( 8 ) ;
   if ( hfov != 0.0 )
@@ -590,7 +587,6 @@ void arguments::init ( int argc , const char ** argv )
   pitch = ap["pitch"].get<float>(0.0);
   roll = ap["roll"].get<float>(0.0);
   prj_str = ap["projection"].as_string ( "rectilinear" ) ;
-  cbm_prj_str = ap["cbm_prj"].as_string ( "cubemap" ) ;
 
   if ( prefilter_degree < 0 )
     prefilter_degree = spline_degree ;
@@ -605,28 +601,9 @@ void arguments::init ( int argc , const char ** argv )
   }
   projection = projection_t ( prj ) ;
 
-  // optionally, determine cubeface projection: cubemap = rectilinear,
-  // biatan6 = biatan6
-
-  prj = 0 ;
-  for ( const auto & p : projection_name )
-  {
-    if ( p == cbm_prj_str )
-      break ;
-    ++ prj ;
-  }
-  cbm_prj = projection_t ( prj ) ;
-  assert ( cbm_prj == CUBEMAP || cbm_prj == BIATAN6 ) ;
-
-  if ( verbose )
-    std::cout << "cbm_prj = " << projection_name [ cbm_prj ]
-              << std::endl ;
-
-  if ( args.facet_name_v.size() == 0 )
-  {
-    assert ( input != std::string() ) ;
-  }
+  assert ( args.facet_name_v.size() > 0 ) ;
   assert ( output != std::string() ) ;
+
   if ( width == 0 )
     width = 1024 ;
   if ( projection == CUBEMAP || projection == BIATAN6 )
@@ -642,131 +619,6 @@ void arguments::init ( int argc , const char ** argv )
   }
   if ( height == 0 )
     height = width ;
-
-  cbmfov *= M_PI / 180.0 ;
-
-  if ( args.facet_name_v.size() == 0 )
-  {
-    // some member variables in the args object are gleaned from
-    // the input image.
-
-    // first we check for percent signs in the input filename. If
-    // we find one, we assume that the input is a cubemap consisting
-    // of six separate images following a naming scheme described by
-    // the string in 'input' which is treated as a format string.
-
-    multiple_input = false ;
-    auto has_percent = input.find_first_of ( "%" ) ;
-    if ( has_percent != std::string::npos )
-    {
-      // input must be a set of six cubeface images, that's the
-      // only way how we accept a format string.
-
-      cfs = cubeface_series ( input ) ;
-      multiple_input = cfs.valid() ;
-      if ( multiple_input )
-      {
-        // let's open the first cube face to extract the metrics.
-        // the cubemap's 'load' routine will check all images in
-        // turn, so we needn't do that here.
-
-        auto inp = ImageInput::open ( cfs[0] ) ;
-        assert ( inp ) ;
-
-        const ImageSpec &spec = inp->spec() ;
-
-        assert ( spec.width == spec.height ) ;
-        env_width = spec.width ;
-        env_height = spec.height * 6 ;
-        nchannels = spec.nchannels ;
-
-        // we close the inp for the first image - a new one will
-        // be opened when all six cube faces are actually read.
-
-        inp->close() ;
-
-        env_projection = cbm_prj ;
-        if ( ctc )
-        {
-          double half_md = tan ( cbmfov / 2.0 ) ;
-          half_md *= ( ( env_width + 1.0 ) / env_width ) ;
-          cbmfov = atan ( half_md ) * 2.0 ;
-          if ( verbose )
-            std::cout << "ctc is set, adjusted cbmfov to "
-                      << ( cbmfov * 180.0 / M_PI ) << std::endl ;
-        }
-        env_step = cbmfov / env_width ;
-      }
-    }
-
-    if ( ! multiple_input )
-    {
-      // we have a single image as input.
-
-      auto inp = ImageInput::open ( input ) ;
-      assert ( inp ) ;
-
-      const ImageSpec &spec = inp->spec() ;
-
-      env_width = spec.width ;
-      env_height = spec.height ;
-      nchannels = spec.nchannels ;
-
-      inp->close() ;
-
-      assert (    env_width == env_height * 2
-               || env_height == env_width * 6 ) ;
-
-      if ( env_width == env_height * 2 )
-      {
-        env_projection = SPHERICAL ;
-        env_step = 2.0 * M_PI / env_width ;
-      }
-      else if ( env_width * 6 == env_height )
-      {
-        if ( ctc )
-        {
-          double half_md = tan ( cbmfov / 2.0 ) ;
-          half_md *= ( ( env_width + 1.0 ) / env_width ) ;
-          cbmfov = atan ( half_md ) * 2.0 ;
-          if ( verbose )
-            std::cout << "ctc is set, adjusted cbmfov to "
-                      << ( cbmfov * 180.0 / M_PI ) << std::endl ;
-        }
-        env_projection = cbm_prj ;
-        env_step = get_step ( cbm_prj ,
-                              env_width ,
-                              env_height ,
-                              cbmfov ) ;
-      }
-      else
-      {
-        std::cerr << "input image must have 2:1 or 1:6 aspect ratio"
-                  << std::endl ;
-        exit ( -1 ) ;
-      }
-    }
-
-    if ( verbose )
-    {
-      std::cout << "input: " << input << std::endl ;
-      std::cout << "input width: " << env_width << std::endl ;
-      std::cout << "input height: " << env_height << std::endl ;
-      std::cout << "input has " << nchannels << " channels" << std::endl ;
-      std::cout << "env_step: " << env_step << std::endl ;
-      if ( itp == 1 )
-        std::cout << "using direct bilinear interpolation"
-        << std::endl ;
-      else if ( itp == -1 )
-        std::cout << "using OIIO for interpolation"
-        << std::endl ;
-      else 
-        std::cout << "using twining over bilinear interpolation"
-        << std::endl ;
-      std::cout << "output width: " << width
-                << " height: " << height << std::endl ;
-    }
-  }
 
   if ( seqfile == std::string() )
   {
@@ -794,16 +646,6 @@ void arguments::init ( int argc , const char ** argv )
     yaw *= M_PI / 180.0 ;
     pitch *= M_PI / 180.0 ;
     roll *= M_PI / 180.0 ;
-
-    if ( ( projection == CUBEMAP || projection == BIATAN6 ) && ctc )
-    {
-      double half_md = tan ( hfov / 2.0 ) ;
-      half_md *= ( ( width + 1.0 ) / width ) ;
-      hfov = atan ( half_md ) * 2.0 ;
-      if ( verbose )
-        std::cout << "cubemap output: ctc is set, adjusted hfov to "
-                  << ( hfov * 180.0 / M_PI ) << std::endl ;
-    }
 
     // calculate extent - a non-zero hfov overrides x0, x1, y0, and y1
 
@@ -839,6 +681,54 @@ void arguments::init ( int argc , const char ** argv )
     }
   }
 
+  nfacets = facet_name_v.size() ;
+  assert ( nfacets ) ;
+  facet_spec fspec ;
+  for ( int i = 0 ; i < nfacets ; i++ )
+  {
+    const char * spec[8] ;
+    spec [ 0 ] = "facet_spec" ;
+    spec [ 1 ] = "--facet" ;
+    spec [ 2 ] = facet_name_v[i].c_str() ;
+    spec [ 3 ] = facet_projection_v[i].c_str() ;
+    spec [ 4 ] = facet_hfov_v[i].c_str() ;
+    spec [ 5 ] = facet_yaw_v[i].c_str() ;
+    spec [ 6 ] = facet_pitch_v[i].c_str() ;
+    spec [ 7 ] = facet_roll_v[i].c_str() ;
+    bool success = fspec.init ( 8 , spec ) ;
+    if ( ! success )
+    {
+      std::cerr << "parse of facet argument with index " << i
+                << " failed" << std::endl ;
+      exit ( -1 ) ;
+    }
+    fspec.facet_no = i ;
+    fspec.hfov *= M_PI / 180.0 ;
+    fspec.yaw *= M_PI / 180.0 ;
+    fspec.pitch *= M_PI / 180.0 ;
+    fspec.roll *= M_PI / 180.0 ;
+    fspec.step = get_step ( fspec.projection , fspec.width ,
+                            fspec.height , fspec.hfov ) ;
+
+    facet_spec_v.push_back ( fspec ) ;
+  }
+  std::size_t nch = facet_spec_v[0].nchannels ;
+  for ( auto & m : facet_spec_v )
+  {
+    assert ( m.nchannels == nch ) ;
+    if ( verbose )
+      std::cout << "facet " << m.facet_no
+                << " '" << m.filename << "' "
+                << projection_name[m.projection]
+                << " " << m.width << "*" << m.height << "#" << m.nchannels
+                << " hfov: " << m.hfov * 180.0 / M_PI
+                << " step: " << m.step
+                << " y:" << m.yaw * 180.0 / M_PI 
+                << " p:" << m.pitch * 180.0 / M_PI
+                << " r:" << m.roll * 180.0 / M_PI << std::endl ;
+  }
+  nchannels = nch ;
+
   if ( twf_file != std::string() )
   {
     // if user passes a twf-file, it's used to set up the twining
@@ -857,9 +747,23 @@ void arguments::init ( int argc , const char ** argv )
       // parameters.
 
       // figure out the magnification in the image center as a
-      // guideline
+      // guideline. For single facet operation, this is fine.
+      // To make sure that the twine value is sufficiently large
+      // for all contributing facets, we look for the smallest
+      // 'step' value in the facet population and calculate
+      // 'twine' accordingly. A single hi-res facet can therefore
+      // result in a high twining factor which is overkill for
+      // most of the result, so this detection and method is
+      // conservative but potentially computationally expensive.
 
-      double mag = env_step / step ;
+      double smallest_step = args.facet_spec_v[0].step ;
+
+      for ( const auto & fspec : args.facet_spec_v )
+      {
+        smallest_step = std::min ( fspec.step , smallest_step ) ;
+      }
+
+      double mag = smallest_step / step ;
 
       if ( mag > 1.0 )
       {
@@ -873,8 +777,25 @@ void arguments::init ( int argc , const char ** argv )
         // the twine value at five, but lower it when approaching
         // mag 1, down to two - where the next case down starts.
 
-        twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
-        twine_width = mag ;
+        if ( args.spline_degree > 1 )
+        {
+          // if the substrate is a spline with a degree greater than
+          // one, we only use moderate twining if there are several
+          // facets, to soften potential collisions. For single-facet
+          // operation, a b-spline is already smooth, so we don't twine.
+          // TODO: consider tapering - the abrupt change to twine 1 if
+          // mag > 1.0 may be problematic.
+
+          if ( args.nfacets > 1 )
+            twine = 3 ;
+          else
+            twine = 1 ;
+        }
+        else
+        {
+          twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
+          twine_width = mag ;
+        }
       }
       else
       {
@@ -895,8 +816,7 @@ void arguments::init ( int argc , const char ** argv )
         // twine_density will be larger than one, so we'll get
         // more filter taps.
 
-        double twine = twine * twine_density ;
-        twine = std::round ( twine ) ;
+        twine = std::round ( twine * twine_density ) ;
       }
 
       if ( verbose )
@@ -930,59 +850,6 @@ int main ( int argc , const char ** argv )
   // of member variables in the global 'args' object
 
   args.init ( argc , argv ) ;
-
-  // do we have facets?
-
-  // TODO: this is a bit rough-and-ready - correct arguments will be
-  // parsed correctly, but if the numeric parameters aren't receiving
-  // a string representing a number, there is no error - the field
-  // will contain zero.
-
-  args.nfacets = args.facet_name_v.size() ;
-  if ( args.nfacets )
-  {
-    facet_spec fspec ;
-    for ( int i = 0 ; i < args.nfacets ; i++ )
-    {
-      const char * spec[8] ;
-      spec [ 0 ] = "facet_spec" ;
-      spec [ 1 ] = "--facet" ;
-      spec [ 2 ] = args.facet_name_v[i].c_str() ;
-      spec [ 3 ] = args.facet_projection_v[i].c_str() ;
-      spec [ 4 ] = args.facet_hfov_v[i].c_str() ;
-      spec [ 5 ] = args.facet_yaw_v[i].c_str() ;
-      spec [ 6 ] = args.facet_pitch_v[i].c_str() ;
-      spec [ 7 ] = args.facet_roll_v[i].c_str() ;
-      bool success = fspec.init ( 8 , spec ) ;
-      if ( ! success )
-      {
-        std::cerr << "parse of facet argument with index " << i
-                  << " failed" << std::endl ;
-        exit ( -1 ) ;
-      }
-      fspec.facet_no = i ;
-      fspec.hfov *= M_PI / 180.0 ;
-      fspec.yaw *= M_PI / 180.0 ;
-      fspec.pitch *= M_PI / 180.0 ;
-      fspec.roll *= M_PI / 180.0 ;
-      args.facet_spec_v.push_back ( fspec ) ;
-    }
-    std::size_t nch = args.facet_spec_v[0].nchannels ;
-    for ( auto & m : args.facet_spec_v )
-    {
-      assert ( m.nchannels == nch ) ;
-      if ( args.verbose )
-        std::cout << "facet " << m.facet_no
-                  << " '" << m.filename << "' "
-                  << projection_name[m.projection]
-                  << " " << m.width << "*" << m.height << "#" << m.nchannels
-                  << " hfov: " << m.hfov * 180.0 / M_PI
-                  << " y:" << m.yaw * 180.0 / M_PI 
-                  << " p:" << m.pitch * 180.0 / M_PI
-                  << " r:" << m.roll * 180.0 / M_PI << std::endl ;
-    }
-    args.nchannels = nch ;
-  }
 
   // are we to process a sequence file? If so, open the file
 
