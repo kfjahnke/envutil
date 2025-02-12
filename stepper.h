@@ -343,7 +343,8 @@ struct stepper_base
 // method can be extended to other target projections.
 
 template < typename T ,     // fundamental type
-           std::size_t L >  // lane count
+           std::size_t L ,  // lane count
+           bool normalize = true >
 struct spherical_stepper
 : public stepper_base < T , L >
 {
@@ -511,9 +512,23 @@ public:
 // difference is the different treatment of the vertical, and that
 // the x and z components aren't scaled with the radius, because
 // it's always 1.0
+// TODO: all rays along a horizontal line have the same length, so
+// if we calculate this length in 'init' and form it's reciprocal
+// value, we obtain a factor which will normalize the result in
+// 'target' without needing the costly division by the norm. The
+// factor can be applied to the y component in 'init' because it
+// remains static throughout the segment, x and z would need to be
+// scaled after the 'sincos', but an alternative would be to scale
+// xx and zz, which should produce the same result, so that we might
+// obtain a normalized result without any additional operations in
+// the course of processing a segment.
+// another alternative: use spherical_stepper, but not with planar[1]
+// but with it's atan. Since planar[1] is also only used in 'init',
+// the cost would only by due once per segment.
 
 template < typename T ,     // fundamental type
-           std::size_t L >  // lane count
+           std::size_t L ,  // lane count
+           bool normalize = true >
 struct cylindrical_stepper
 : public stepper_base < T , L >
 {
@@ -539,7 +554,8 @@ struct cylindrical_stepper
   // some helper variables, used for efficiency.
 
   f_v x , r , y , z ;
-  crd3_v yyy ; 
+  crd3_v yyy ;
+  f_v rcp_length ;
 
 public:
 
@@ -585,6 +601,12 @@ public:
     // now we can initialize the target value
 
     trg = xx * x + zz * z + yyy ;
+
+    if constexpr ( normalize )
+    {
+      rcp_length = 1.0f / norm ( trg ) ;
+      trg *= rcp_length ;
+    }
   }
 
   // increase modifies it's argument to contain the next value
@@ -602,6 +624,11 @@ public:
     // and calculate the new target value
 
     trg = xx * x + zz * z + yyy ;
+
+    if constexpr ( normalize )
+    {
+      trg *= rcp_length ;
+    }
   }
 
   void init ( crd3_v & trg ,
@@ -626,9 +653,16 @@ public:
 // rectilinear_stepper is the simplest of the family, because
 // the planar coordinate can be mapped more or less directly
 // to the output.
+// To create normalized output, it's probably most efficient to
+// divide by the norm - an alternative would be to form the atan
+// of the progressing x coordinate to obtain an angle, which
+// might be processed as in spherical_stepper (sincos, multiply
+// with basis vectors) - but that requires two transcendental
+// functions, vs. the srqt, which should be faster (test!)
 
 template < typename T ,     // fundamental type
-           std::size_t L >  // lane count
+           std::size_t L ,  // lane count
+           bool normalize = true >
 struct rectilinear_stepper
 : public stepper_base < T , L >
 {
@@ -692,6 +726,11 @@ public:
     // now we can initialize the target value
 
     trg = xx * planar[0] + ddd ;
+
+    if constexpr ( normalize )
+    {
+      trg /= norm ( trg ) ;
+    }
   }
 
   // increase modifies it's argument to contain the next value
@@ -705,6 +744,11 @@ public:
     // calculate the new target value
 
     trg = xx * planar[0] + ddd ;
+
+    if constexpr ( normalize )
+    {
+      trg /= norm ( trg ) ;
+    }
   }
 
   // the capped variants:
@@ -728,6 +772,13 @@ public:
   }
 } ;
 
+template < typename T >
+bool near_normal ( const T & x )
+{
+  auto n = abs ( norm ( x ) - 1.0f ) ;
+  return ( all_of ( n < .000001f ) ) ;
+}
+
 // fisheye_stepper is a bit more involved mathematically, and
 // there are no handy invariances, because the fisheye projection
 // is a radial function, whereas the traversal of the 2D manifold
@@ -736,7 +787,8 @@ public:
 // has to be calculated 'all the way' from the planar coordinate.
 
 template < typename T ,     // fundamental type
-           std::size_t L >  // lane count
+           std::size_t L ,  // lane count
+           bool normalize = true >
 struct fisheye_stepper
 : public stepper_base < T , L >
 {
@@ -860,7 +912,8 @@ struct fisheye_stepper
 // sphere to get the ray.
 
 template < typename T ,     // fundamental type
-           std::size_t L >  // lane count
+           std::size_t L ,  // lane count
+           bool normalize = true >
 struct stereographic_stepper
 : public stepper_base < T , L >
 {
@@ -977,7 +1030,8 @@ struct stereographic_stepper
 // fov - larger extent poduces images with larger fov.
 
 template < typename T ,     // fundamental type
-           std::size_t L >  // lane count
+           std::size_t L ,  // lane count
+           bool normalize = true >
 struct cubemap_stepper
 : public stepper_base < T , L >
 {
@@ -1106,6 +1160,11 @@ public:
     // multiplications and three additions:
 
     trg = ccc + ( planar[0] ) * vvv ;
+
+    if constexpr ( normalize )
+    {
+      trg /= norm ( trg ) ;
+    }
   }
 
   // increase modifies it's argument to contain the next value
@@ -1117,6 +1176,11 @@ public:
     increase() ;
 
     trg = ccc + ( planar[0] ) * vvv ;
+
+    if constexpr ( normalize )
+    {
+      trg /= norm ( trg ) ;
+    }
   }
 
   // the capped variants:
@@ -1147,9 +1211,12 @@ public:
 // along equal angular steps in the horizontal and vertical,
 // resulting in steps which become larger towards the edges in the
 // plane (due to the tangens growing faster than the angle).
+// Since this stepper uses angular steps, there should be efficient
+// ways to produce a normalized output.
 
 template < typename T ,     // fundamental type
-           std::size_t L >  // lane count
+           std::size_t L ,  // lane count
+           bool normalize = true >
 struct biatan6_stepper
 : public stepper_base < T , L >
 {
@@ -1302,6 +1369,11 @@ public:
     // multiplications and three additions:
 
     trg = ccc + p0 * vvv ;
+
+    if constexpr ( normalize )
+    {
+      trg /= norm ( trg ) ;
+    }
   }
 
   // increase modifies it's argument to contain the next value
@@ -1313,6 +1385,11 @@ public:
     increase() ;
 
     trg = ccc + ( tan ( planar[0] * float ( M_PI / 4.0 ) ) ) * vvv ;
+
+    if constexpr ( normalize )
+    {
+      trg /= norm ( trg ) ;
+    }
   }
 
   // the capped variants:
@@ -1349,7 +1426,8 @@ public:
 
 template < typename T ,     // fundamental type
            std::size_t L ,  // lane count
-           template < typename , size_t > class S >
+           template < typename , size_t , bool > class S ,
+           bool normalize = true >
 struct deriv_stepper
 {
   typedef T value_t ;
@@ -1365,9 +1443,9 @@ struct deriv_stepper
   typedef zimt::simdized_type < crd_t , L > crd_v ;
   typedef typename crd_v::value_type crd_ele_v ;
 
-  S < T , L > r00 ; // yields current ray coordinate
-  S < T , L > r10 ; // yields ray coordinates with x += 1
-  S < T , L > r01 ; // yields ray coordinates with y -= 1
+  S < T , L , normalize > r00 ; // yields current ray coordinate
+  S < T , L , normalize > r10 ; // yields ray coordinates with x += 1
+  S < T , L , normalize > r01 ; // yields ray coordinates with y -= 1
 
   deriv_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
                   int _width ,

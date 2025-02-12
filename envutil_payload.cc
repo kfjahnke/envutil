@@ -370,10 +370,20 @@ struct voronoi_syn
   // this helper function calculates the vector of angles between
   // a vector of rays and (0,0,1) - unit forward in our CS.
 
-  f_v angle_against_001 ( const ray_v & a ) const
-  {
-    return acos ( a[2] / norm ( a ) ) ;
-  }
+  // TODO: many steppers can be modified to produce normalized rays
+  // without additional computational cost, and even if there is some
+  // cost, it should not amount to more than the division by the norm
+  // which we use here to obtain the angle. With incoming normalized
+  // rays, it would be sufficient to look at the z component of the
+  // incoming ray - due to the pre-rotation, z will fall from +1 with
+  // true forward rays to -1 to rays pointing straigt back. So the
+  // facet where the ray has the largest z coordinate is the winner.
+  // ----> done.
+
+  // f_v angle_against_001 ( const ray_v & a ) const
+  // {
+  //   return acos ( a[2] / norm ( a ) ) ;
+  // }
 
   // this is the operator() overload for incoming ray data. The next
   // one down is for 'ninepacks'.
@@ -388,11 +398,11 @@ struct voronoi_syn
 
     simdized_type < int , 16 > champion_v ( -1 ) ;
 
-    // we initialize 'min-angle' to a very large value - no
-    // 'real' angle can ever be this large.
+    // we initialize 'max_z' to a very small value - no
+    // 'real' z value can ever be this small.
 
     simdized_type < float , 16 >
-      min_angle ( std::numeric_limits<float>::max() ) ;
+      max_z ( std::numeric_limits<float>::min() ) ;
 
     // next_best starts out with an invalid facet index, and if this
     // isn't updated during processing, it serves as an indicator
@@ -407,15 +417,15 @@ struct voronoi_syn
 
     // do any of the rays hit the facet? then update 'next_best',
     // which, at this point, is still -1, indicating 'all misses'.
-    // This can't be the case any more. Also update min_angle:
-    // overwrite the initial 'impossible' value with a true angle
-    // where the rays hit the facet.
+    // This can't be the case any more. Also update max_z:
+    // overwrite the initial 'impossible' value with a real z
+    // value where the rays hit the facet.
 
     if ( any_of ( valid ) )
     {
       next_best = 0 ;
       champion_v = 0 ;
-      min_angle ( valid ) = angle_against_001 ( pv[0] ) ;
+      max_z ( valid ) = pv[0][2] ;
     }
 
     // now go through the facets in turn and replace the current
@@ -430,32 +440,32 @@ struct voronoi_syn
       if ( none_of ( valid ) )
         continue ;
 
-      // we initialize 'current_angle' with an impossibly large
-      // value and 'patch in' angle values where rays hit the facet.
-      // 'angle_against_001' encodes our 'quality' criterion: the
-      // smallest angle we find is the best.
+      // we initialize 'max_z' with an impossibly small value
+      // and 'patch in' z values where rays hit the facet.
+      // 'max_z' encodes our 'quality' criterion: the largest z
+      // we find is the best.
 
       simdized_type < float , 16 >
-        current_angle ( std::numeric_limits<float>::max() ) ;
+        current_z ( std::numeric_limits<float>::min() ) ;
 
-      current_angle ( valid ) = angle_against_001 ( pv[i] ) ;
+      current_z ( valid ) = pv[i][2] ;
 
-      // now we test whether current angles are smaller than the
-      // smallest we've seen so far
+      // now we test whether current z values are larger than the
+      // largest we've seen so far
 
-      auto mask = ( current_angle < min_angle ) ;
+      auto mask = ( current_z > max_z ) ;
 
-      // are any current angles smaller? then update 'next_best',
+      // are any current z larger? then update 'next_best',
       // which, at this point, may still be -1, or already a value
-      // set by a previous loop iteration. Also update min_angle,
+      // set by a previous loop iteration. Also update max_z,
       // and, finally, update the vector of champions where new
-      // minimal angles were found to the index of the facet we're
+      // maximal z values were found to the index of the facet we're
       // looking at now.
 
       if ( any_of ( mask ) )
       {
         next_best = i ;
-        min_angle ( mask ) = current_angle ;
+        max_z ( mask ) = current_z ;
         champion_v ( mask ) = i ;
       }
     }
@@ -602,13 +612,13 @@ struct voronoi_syn_plus
     scratch ( _env_v.size() )
   { }
 
-  // this helper function calculates the vector of angles between
-  // a vector of rays and (0,0,1) - unit forward in our CS.
-
-  f_v angle_against_001 ( const ray_v & a ) const
-  {
-    return acos ( a[2] / norm ( a ) ) ;
-  }
+  // // this helper function calculates the vector of angles between
+  // // a vector of rays and (0,0,1) - unit forward in our CS.
+  // 
+  // f_v angle_against_001 ( const ray_v & a ) const
+  // {
+  //   return acos ( a[2] / norm ( a ) ) ;
+  // }
 
   // helper function to swap occupants in two vectorized objects
   // where a mask is true.
@@ -634,12 +644,12 @@ struct voronoi_syn_plus
     // we're done, the first index vector should hold just the
     // same 'champions' as the single champion vector in class
     // voronoi_syn. The next one will hold next-best indices
-    // where the angle_to_001 criterion came out larger, and
+    // where the 'maximal z' criterion came out smaller, and
     // so forth down to the 'worst' indices. We also need to
-    // keep track of the angles.
+    // keep track of the z values: that's in max_z.
 
     std::vector < index_v > champion_v ( sz ) ;
-    std::vector < f_v > angle_v ( sz ) ;
+    std::vector < f_v > max_z ( sz ) ;
     
     // next_best starts out with an invalid facet index, and if this
     // isn't updated during processing, it serves as an indicator
@@ -651,12 +661,12 @@ struct voronoi_syn_plus
     int next_best = -1 ;
     int layers = 0 ;
 
-    // we initialize angle_v[0] to a very large value - no
-    // 'real' angle can ever be this large. This is that when
-    // this angle is compared to a 'real' angle, it will always
-    // come out larger.
+    // we initialize max_z[0] to a very small value - no real
+    // z value can ever be this small. This is so that when
+    // this z value is compared to a real z, it will always
+    // come out smaller.
 
-    angle_v[0] = std::numeric_limits<float>::max() ;
+    max_z[0] = std::numeric_limits<float>::min() ;
 
     // Initailly, we have no valid 'champions'
 
@@ -669,15 +679,15 @@ struct voronoi_syn_plus
     // do any of the rays hit the facet? then update 'next_best',
     // which, at this point, is still -1, indicating 'all misses'.
     // This can't be the case any more. We now have a first layer.
-    // Also update angle_v[0]: overwrite the initial 'impossible'
-    // value with a true angle wherever the rays hit the facet.
+    // Also update max_z[0]: overwrite the initial 'impossible'
+    // value with a true z value wherever the rays hit the facet.
 
     if ( any_of ( valid ) )
     {
       next_best = 0 ;
       layers = 1 ;
       champion_v[0] ( valid ) = 0 ;
-      angle_v[0] ( valid ) = angle_against_001 ( pv[0] ) ;
+      max_z[0] ( valid ) = pv[0][2] ;
     }
 
     // now go through the other facets in turn and perform the
@@ -698,20 +708,20 @@ struct voronoi_syn_plus
       if ( none_of ( valid ) )
         continue ;
 
-      // we let 'next_bast' 'tag along.
+      // we let 'next_best' 'tag along.
 
       next_best = i ;
 
-      // we initialize 'current_angle' with an impossibly large
-      // value and 'patch in' angle values where rays hit the facet.
-      // 'angle_against_001' encodes our 'quality' criterion: the
-      // smallest angle we find is the best.
+      // we initialize 'current_z' with an impossibly small value
+      // and 'patch in' z values where rays hit the facet.
+      // the z value encodes our 'quality' criterion: the
+      // largest z we find is the best.
 
-      auto & current_angle ( angle_v [ layers ] ) ;
+      auto & current_z ( max_z [ layers ] ) ;
       auto & current_champion ( champion_v [ layers ] ) ;
 
-      current_angle = std::numeric_limits<float>::max() ;
-      current_angle ( valid ) = angle_against_001 ( pv[i] ) ;
+      current_z = std::numeric_limits<float>::min() ;
+      current_z ( valid ) = pv[i][2] ;
 
       current_champion = -1 ;
       current_champion ( valid ) = i ;
@@ -720,9 +730,9 @@ struct voronoi_syn_plus
 
       for ( std::size_t l = layers ; l > 0 ; --l )
       {
-        // are any angles in layer l smaller than in layer l-1?
+        // are any z values in layer l larger than in layer l-1?
 
-        auto mask = ( angle_v [ l ] < angle_v [ l - 1 ] ) ;
+        auto mask = ( max_z [ l ] > max_z [ l - 1 ] ) ;
 
         // if not, everything is in sorted order, we can leave
         // the loop prematurely, because all layers with lower
@@ -731,14 +741,14 @@ struct voronoi_syn_plus
         if ( none_of ( mask ) )
           break ;
 
-        // if yes, swap these smaller angles so that they move
+        // if yes, swap these larger z values so that they move
         // to level l - 1, and do the same for the indices. This
-        // is the 'trickle-up' - if a very small angle came in
+        // is the 'trickle-up' - if a very large z came in
         // in some lane, the trickle-up might take it 'through'
         // all layers which were processed already, until it
         // 'hits the ceiling'.
 
-        masked_swap ( angle_v [ l ] , angle_v [ l - 1 ] , mask ) ;
+        masked_swap ( max_z [ l ] , max_z [ l - 1 ] , mask ) ;
         masked_swap ( champion_v [ l ] , champion_v [ l - 1 ] , mask ) ;
       }
 
@@ -784,7 +794,7 @@ struct voronoi_syn_plus
     for ( std::size_t i = 0 ; i < sz ; i++ )
     {
       env_v [ i ] . eval ( pv [ i ] , lv [ i ] ) ;
-      assert ( all_of ( lv [ i ] [ nch - 1 ] <= 1.0f ) ) ;
+      // assert ( all_of ( lv [ i ] [ nch - 1 ] <= 1.0f ) ) ;
       // if we had unassociated alpha incoming:
       // for ( int ch = 0 ; ch < ( nch - 1 ) ; ch++ )
       //   lv [ i ] [ ch ] *= lv [ i ] [ nch - 1 ] ;
@@ -889,7 +899,7 @@ struct voronoi_syn_plus
 } ;
 
 template < int NCH ,
-           template < typename , std::size_t > class STP ,
+           template < typename , std::size_t , bool > class STP ,
            typename synopsis_t >
 void fuse ( int ninputs )
 {
@@ -1002,34 +1012,48 @@ void fuse ( int ninputs )
 
   if ( ninputs == 3 )
   {
-    std::vector < gg_t > get_v ;
-    for ( int i = 0 ; i < args.nfacets ; i++ )
-    {
-      // set up a simple single-coordinate stepper of the type
-      // fixed by 'STP'. This route is taken with direct b-spline
-      // interpolation (itp 1)
-
-      STP < float , 16 > get_ray
-        ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
-          args.width , args.height ,
-          args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-      get_v.push_back ( get_ray ) ;
-    }
-
     if ( args.nfacets == 1 )
     {
       // special case: there is only one facet. Using the
       // multi-facet code would work, but would produce
       // futile overhead.
+      // Note how we use a stepper which does not normalize it's result:
+      // Since we don't compare the z component of the ray as quality
+      // criterion (which we'd do for multiple facets) we can do without
+      // the normalization.
 
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
 
-      work ( get_v[0] , env_v[0] ) ;
+      // note this setting VVV - we needn't normalize the ray here.
+
+      STP < float , 16 , false > get_ray
+        ( basis_v[0][0] , basis_v[0][1] , basis_v[0][2] ,
+          args.width , args.height ,
+          args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+      work ( get_ray , env_v[0] ) ;
     }
     else
     {
+      std::vector < gg_t > get_v ;
+
+      for ( int i = 0 ; i < args.nfacets ; i++ )
+      {
+        // set up a simple single-coordinate stepper of the type
+        // fixed by 'STP'. This route is taken with direct b-spline
+        // interpolation (itp 1)
+
+        // note this setting VV - we need to normalize the ray here.
+
+        STP < float , 16 , true > get_ray
+          ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
+            args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+        get_v.push_back ( get_ray ) ;
+      }
+
       // for now, we use a hard-coded synopsis-forming object
 
       synopsis_t vs ( env_v ) ;
@@ -1044,46 +1068,59 @@ void fuse ( int ninputs )
       // act functor.
 
       zimt::pass_through < float , NCH , 16 > act ;
+
       work ( fs , act ) ;
     }
   }
   else // ninputs == 9
   {
-    // again we set up a vector of grok_get_t, but this time they
-    // are getters yielding 'ninepack' values
-
-    std::vector < gg9_t > get_v ;
-
-    for ( int i = 0 ; i < args.nfacets ; i++ )
-    {
-      // we set up a deriv_stepper (specialized with the stepper
-      // type given in template argument STP) which produces ninepacks
-
-      deriv_stepper < float , 16 , STP > get_ray
-          ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
-            args.width , args.height ,
-            args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-      // and push it to the get_v vector
-
-      get_v.push_back ( get_ray ) ;
-    }
-
     if ( args.nfacets == 1 )
     {
       // special case: there is only one facet. We have to wrap the
       // single evaluator in a twine_t object to process the 'ninepacks'
-      // which the deriv_stepper in get_v[0] will produce. Using the
+      // which the deriv_stepper in get_ray will produce. Using the
       // multi-facet code would work, but would produce futile overhead.
+      // Note how we use a stepper which does not normalize it's result:
+      // Since we don't compare the z component of the ray as quality
+      // criterion (which we'd do for multiple facets) we can do without
+      // the normalization.
 
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
 
+      deriv_stepper < float , 16 , STP , false > get_ray
+          ( basis_v[0][0] , basis_v[0][1] , basis_v[0][2] ,
+            args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
       twine_t < NCH , 16 > twenv ( env_v[0] , args.twine_spread ) ;
-      work ( get_v[0] , twenv ) ;
+
+      work ( get_ray , twenv ) ;
     }
     else
     {
+      // again we set up a vector of grok_get_t, but this time they
+      // are getters yielding 'ninepack' values
+
+      std::vector < gg9_t > get_v ;
+
+      for ( int i = 0 ; i < args.nfacets ; i++ )
+      {
+        // we set up a deriv_stepper (specialized with the stepper
+        // type given in template argument STP) which produces ninepacks
+
+        // note this setting               VVV - we need normalized rays.
+
+        deriv_stepper < float , 16 , STP , true > get_ray
+            ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
+              args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+        // and push it to the get_v vector
+
+        get_v.push_back ( get_ray ) ;
+      }
+
       // we set up the synopsis-forming object and introduce it to
       // the fusion_t object - which is now used via it's ninepack-
       // processing member function.
@@ -1097,6 +1134,7 @@ void fuse ( int ninputs )
       // act functor.
 
       zimt::pass_through < float , NCH , 16 > act ;
+
       work ( fs , act ) ;
     }
   }
