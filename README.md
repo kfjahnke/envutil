@@ -194,20 +194,19 @@ envutil --help gives a summary of command line options:
 
     --help                         Print help message
     -v                             Verbose output
+
     mandatory options:
-      --input INPUT                  input file name (mandatory if no facets are used)
       --output OUTPUT                output file name (mandatory)
+
+    parameters for image input (one or several):
+      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+                                    load oriented source image
     important options which have defaults:
       --projection PRJ               projection used for the output image(s) (default: rectilinear)
       --hfov ANGLE                   horiziontal field of view of the output (default: 90)
       --width EXTENT                 width of the output (default: 1024)
       --height EXTENT                height of the output (default: same as width)
-    additional input parameters for cubemap input:
-      --cbmfov ANGLE                 horiziontal field of view of cubemap input (default: 90)
-      --cbm_prj PRJ                  in-plane transformation for cube faces (default: "cubemap")
-      --support_min EXTENT           minimal additional support around the cube face proper
-      --tile_size EXTENT             tile size for the internal representation image
-      --ctc CTC                      pass '1' to interpret cbmfov as center-to-center (default 0)
+
     additional parameters for single-image output:
       --yaw ANGLE                    yaw of the virtual camera
       --pitch ANGLE                  pitch of the virtual camera
@@ -216,15 +215,18 @@ envutil --help gives a summary of command line options:
       --x1 EXTENT                    high end of the horizontal range
       --y0 EXTENT                    low end of the vertical range
       --y1 EXTENT                    high end of the vertical range
+
     additional parameters for multi-image and video output:
       --seqfile SEQFILE              image sequence file name (optional)
       --codec CODEC                  video codec for video sequence output (default: libx265)
       --mbps MBPS                    output video with MBPS Mbit/sec (default: 8)
       --fps FPS                      output video FPS frames/sec (default: 60)
+
     interpolation options:
-      --itp ITP                      interpolator: 1 for spline, -1 for OIIO, -2 spline+twining
-      --prefilter DEG                prefilter degree (>= 0) for the spline used with --ipt 1
-      --degree DEG                   degree of the spline (>= 0) used with --ipt 1
+      --itp ITP            interpolator: 1 for spline, -2 for b-spline+twining
+      --prefilter DEG      prefilter degree for the b-spline (>= 0)
+      --degree DEG         degree of the b-spline (>= 0)
+
     parameters for twining (with --itp -2):
       --twine TWINE                  use twine*twine oversampling - default: automatic settings
       --twf_file TWF_FILE            read twining filter kernel from TWF_FILE
@@ -234,32 +236,20 @@ envutil --help gives a summary of command line options:
       --twine_density DENSITY        increase tap count of an 'automatic' twining filter
       --twine_sigma SIGMA            use a truncated gaussian for the twining filter (default: don't)
       --twine_threshold THR          discard twining filter taps below this threshold
-    parameters for lookup with OpenImageIO (with --itp -1):
-      --tsoptions KVLIST             OIIO TextureSystem Options: coma-separated key=value pairs
-      --swrap WRAP                   OIIO Texture System swrap mode
-      --twrap WRAP                   OIIO Texture System twrap mode
-      --mip MIP                      OIIO Texture System mip mode
-      --interp INTERP                OIIO Texture System interp mode
-      --stwidth EXTENT               swidth and twidth OIIO Texture Options
-      --stblur EXTENT                sblur and tblur OIIO Texture Options
-      --conservative YESNO           OIIO conservative_filter Texture Option - pass 0 or 1
-    parameters for mounted (or facet) image input (one or several):
-      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
-                                    load oriented non-environment source image
     
-The input can be either a lat/lon environment image (a.k.a. 'full spherical'
-or 'full equirect' or '360X180 degree panorama') - or a 'cubemap' - a set of 
+Input images can be lat/lon environment images (a.k.a. 'full spherical'
+or 'full equirect' or '360X180 degree panorama'), 'cubemaps' - a set of 
 six square images in rectilinear projection showing the view to the six cardinal
-directions (left, right, up, down, front, back). The cubemap can be provided as
-a single image with the images concatenated vertically, or as six separate images 
+directions (left, right, up, down, front, back), or single images in one of
+five geometrical projections. Cubemaps can be provided as a single image
+with the images concatenated vertically, or as six separate images 
 with 'left', 'right' etc. in their - otherwise identical - filenames, which are
 introduced via a format string. I've recently added the 'biatan6' projection
 for cubemaps, which uses an additional in-plane reprojection on the cube faces
 to make the sampling less distorted - rectilinear images with 90 degrees fov
 have noticeable 'stretching' towards the edges, which is avoided with biatan6
 projection, where there's only slight stretching. To process cubemaps stored
-in this fromat, pass --cbm_prj biatan6, and to store cubemaps in this format,
-pass --projection biatan6.
+in this format, pass biatan6 as projection.
 
 envutil only processes sRGB and linear RGB data, the output will be in the same
 colour space as the input. If you use the same format for input and output, this
@@ -275,33 +265,15 @@ This is not mathematically correct for sRGB data. Future versions of envutil
 may add a stage of processing to deal with non-linear-RGB input. Linear RGBA
 is fine; the import with OIIO should provide associated alpha which can be
 processed correctly by envutil as four-channel data, producing correct output
-for images with alpha channel. Single-channel data are also fine, and even
-two-channel data should work, though it's hard to find them 'out there' -
-maybe anaglyphs? Channels beyond four are ignored.
+for images with alpha channel. Single-channel data are also fine; the idea is
+to use them for greyscal images with thransparency. Channels beyond four are
+ignored.
 
 # envutil Command Line Options
 
 The options are given with a headline made from the argument parser's help
 text. The capitalized word following the parameter is a placeholder for the
 actual value you pass.
-
-## --input INPUT         input file name (mandatory if no facets are used)
-
-Any image file which has 2:1 aspect ratio will be accepted as lat/lon environment
-map, and any image file with 1:6 aspect ratio will be accepted as a cubemap.
-If you pass a string containing a percent sign, envutil will consider this as
-a format string which can be used to specify six separate cube face images.
-The string will be used like a 'normal' C format string to generate six filenames,
-passing the strings "left", "right", "top", "bottom", "front" and "back", in turn,
-to replace the format sequence in the string - you'd typically just use '%s' here.
-Only one percent sign is allowed, and the images are all treated alike. And they
-must, of course, all exist and have 1:1 aspect ratio. Once they've been loaded
-into the internal representation, processing continues as if the input had been
-a single cubemap image. When invoked with an input containing a percent sign,
-envutil first tries to find the left cube face image. If that fails, the attempt
-to load six images is aborted and instead envutil will assume you have actually
-passed a filename containing a verbatim percent sign and proceed accordingly -
-and likely fail.
 
 ## --output OUTPUT       output file name (mandatory)
 
@@ -318,60 +290,72 @@ e.g. %d which does not produce leading zeroes. If you are generating image
 sequences and your output parameter is *not* a format string, envutil will
 produce video output to the given filename.
 
+# Parameters for (facet) image input
+
+envutil now only uses the 'facet' option to introduce one or more source
+images. So this option can occur more than once, but it has to be present
+at least once:
+
+## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+##     load oriented non-environment source image
+
+envutil will 'mount' images in various projections and hfov which may only
+cover a part of the full 360X180 degree environment. All projections are
+supported. hfov is in degrees - for cubemaps pass 90. The three values must
+be followed by the facet's orientation, given as three 'Euler angles' (yaw,
+pich, roll). If you want the facet to be mounted 'straight ahead', just pass
+0 0 0. All six values (image filename, projection, hfov, yaw, pitch, roll)
+must be passed after --facet, separated by space.
+
+You may pass more than one facet. Currently, where several facets provide
+visible content for a given viewing ray, envutil gives preference to one
+of them, following this scheme: For every candidate, the normalized 
+viewing ray's z (forward) component is isolated. The facet where it
+comes out largest 'wins' the contest - it's content is assigned to the
+viewing ray. The overall result resembles a voronoi diagram - facets with
+transparency let other facets shine through oven if they don't 'win the
+contest'. You can't currently mix facets with and without transparency;
+all facets have to have the same channel count and transparency quality.
+If a facet has transparency and is situated in front of other facets,
+the facet(s) behind it will shine through.
+
+Why can the viewing ray's z component be used as 'quality' criterion?
+Because the 'steppers' which feed rays into the pixel pipeline produce
+rays in each facet's 'native' coordinate system - so any rotations due
+to the facet's own orientation and the virtual camera's orientation are
+handled by the stepper. This facilitates handling at the receiving end,
+and for multi-facet operation, the rays are also normalized. With normalized
+rays as input, comparing their z component is enough to figure out the
+voronoi criterion: The maximum z value is 1.0, a normalized ray straight
+ahead, which corresponds with the facet image's center. the smaller the
+z value, the farther away the ray is from the center, down to -1, which
+is a ray 'straight back'.
+
+If you use multi-facet input with simple interpolation (--itp 1), you may
+notice ungainly staircase artifacts where facets collide, and also where
+the facets border on 'empty space'. This is due to the way facets are
+prioritized: only one facet can 'win the contest', and there is currently
+no implementation of feathering. If you use twining, the effect is mitigated,
+the facets are blended to a certain degree, and the edges are faded into
+black. The larger the twining kernel is, the better the effect. When
+automatic twining is used, the twining kernel is calculated to suit all
+facets - if some facets have very high resolution, this may result in a
+large twining kernel to avoid aliasing even for the parts of the target
+image which show the high-res content, bringing computation load up even if
+most of the target image may come from lower resolution content. So the
+choice of the automatic twining kernel is conservative but may be slow to
+compute. With a twining kernel of standard size, horizontal and vertical
+collision lines will be hard discontinuities. This is correct - the blending
+due to twining only affects tilted collision lines, unless the twining kernel
+is widened, which introduces overall blur as well.
+
 ## --projection PRJ  target projection
 
 Pass one of the supported output projections: "spherical", "cylindrical",
 "rectilinear", "stereographic", "fisheye", "cubemap" or "biatan6". The
 default is "rectilinear". "biatan6" is a recent addition: it's a cubemap
 with an additional in-plane transformation to sample the sphere more
-evenly than can be done with rectilinear cube faces. See the remarks on
-biatan6 in the "--cbm_prj PRJ" chapter.
-
-## --hfov ANGLE      horiziontal field of view of the output (in degrees)
-
-The default here is ninety degrees, which all projections can handle.
-Spherical, cylindrical and fisheye output will automatically periodize
-the image if the hfov exceeds 360 degrees. Rectilinear images can't handle
-more than 180 degrees hfov, and at this hfov, they won't produce usable
-output. Stereographic images can theoretically accomodate 360 degrees fov,
-but just as rectilinear images aren't usable near their limit of 180 degrees,
-they aren't usable when their limit is approached: most of the content
-becomes concentrated in the center and around that a lot of space is wasted
-on a bit of content which is stretched extremely in radial direction. For
-cubemaps, you should specify ninety degrees hfov, but you can produce
-cubemaps with different hfov - they just won't conform to any standards
-and won't be usable with other software unless that software offers
-suitable options. envutil supports wider-angle cubemaps, see --cbmfov
-
-## --width EXTENT    width of the output
-
-in pixel units. For lat/lon environment images, this should be precisely
-twice the height, so this value should be an even number. I recommend that
-you pick a multiple of a small-ish power of two (e.g. 64) to make it easier
-for software wanting to mip-map the data. When producing cubemaps from
-full sphericals, I recommend using a width which is ca. 1/pi times the width
-of the input. For the reverse operation, just use four times the cubemap's
-width. These factors preserve the resolution.
-
-## --height EXTENT   height of the output
-
-in pixel units. For cubemaps, this is automatically set to six times the width.
-For spherical output, if height is not passed, it is set to half the width,
-increasing 'width' to the next even value. For other projections, if you don't
-pass 'height', the default is to use the same as the width, so to render a
-square image.
-
-# Additional Parameters for Cubemap Input
-
-## --cbmfov ANGLE         horiziontal field of view of cubemap input (default: 90)
-
-If the environment given as input is a cubemap, you can specify the horizontal
-field of view of the cube face images with this parameter. The default is
-precisely ninety degrees, but values greater than ninety are allowed as well.
-You can create such wider-angle cubemaps by passing --hfov greater than ninety
-when creating a cubemap with envutil.
-
-## --cbm_prj PRJ          in-plane transformation for cube faces (default: "cubemap")
+evenly than can be done with rectilinear cube faces.
 
 On top of the default, "cubemap", which does not use an in-plane transformation
 (the cube faces are in rectilinear transformation and used just so), envutil
@@ -414,9 +398,64 @@ would be to introduce the in-plane transformation as a functional paramter,
 so that user code can 'slot in' such a transformation.
 The advantage of the 'biatan6' transformation is that it transforms each
 2X2 square to another 2X2 square - if one were to use e.g. spherical
-transformation, there would be redundant parts in several images. So
-with biatan transformation, each point in the cubemap has precisely one
+projection, there would be redundant parts in several images. So
+with biatan6 transformation, each point in the cubemap has precisely one
 correspondence on the sphere, just as with rectilinear projection. 
+
+## --hfov ANGLE      horiziontal field of view of the output (in degrees)
+
+The default here is ninety degrees, which all projections can handle.
+Spherical, cylindrical and fisheye output will automatically periodize
+the image if the hfov exceeds 360 degrees. Rectilinear images can't handle
+more than 180 degrees hfov, and at this hfov, they won't produce usable
+output. Stereographic images can theoretically accomodate 360 degrees fov,
+but just as rectilinear images aren't usable near their limit of 180 degrees,
+they aren't usable when their limit is approached: most of the content
+becomes concentrated in the center and around that a lot of space is wasted
+on a bit of content which is stretched extremely in radial direction. For
+cubemaps, you should specify ninety degrees hfov, but you can produce
+cubemaps with different hfov - they just won't conform to any standards
+and won't be usable with other software unless that software offers
+suitable options. envutil supports wider-angle cubemaps - just pass the
+correct hfov to facets with cubemaps. Note that some cubemaps you may
+get hold of use a slightly different notion of a square image: envutil
+measures field of view 'edge-to-edge', meaning that each pixel is taken
+to be a small square, and the fov is measured from the leftmost pixel's
+left margin to the rightmost pixel's right margin. Some cubemaps measure
+the field of view from the center of the leftmost pixel to the center of
+the rightmodst one, which I call 'center-to-center or 'ctc' for short.
+Such cubemaps have margins which repeat on other facets, so they waste
+some space, but they are easier to handle mathematically. envutil does it
+'the hard way' and uses edge-to-edge semantics. If you encounter a cubemap
+with center-to-center semantics and want to process it with envutil, you
+need to modify the hfov value like this:
+
+    fov' = 2 * atan ( tan ( fov / 2 ) * ( width + 1 ) / width )
+
+The resulting value, fov', is what you pass to envutil - it's slightly
+larger than the 'ctc' value, because it's now measured edge-to-edge.
+
+## --width EXTENT    width of the output
+
+in pixel units. For lat/lon environment images, this should be precisely
+twice the height, so this value should be an even number. I recommend that
+you pick a multiple of a small-ish power of two (e.g. 64) to make it easier
+for software wanting to mip-map the data. When producing cubemaps from
+full sphericals, I recommend using a width which is ca. 1/pi times the width
+of the input. For the reverse operation, just use four times the cubemap's
+width. These factors preserve the resolution. cubemaps in biatan6 projection
+should preserve resolution with slightly smaller width - try and use 1/4 of
+the full spherical's width.
+
+## --height EXTENT   height of the output
+
+in pixel units. For cubemaps, this is automatically set to six times the width.
+For spherical output, if height is not passed, it is set to half the width,
+increasing 'width' to the next even value. For other projections, if you don't
+pass 'height', the default is to use the same as the width, so to render a
+square image.
+
+# Additional Parameters for Cubemaps
 
 ## --support_min EXTENT  minimal additional support around the cube face proper
 
@@ -438,30 +477,10 @@ mip-map the texture generated from the internal representation - OIIO can't
 natively process cubemap environments, so envutil generates a texture file
 and feeds that to OIIO's texture system for the look-up.
 
-## --ctc  flag indicating cube face fov is measured between marginal pixel centers
-
-The standard way of measuring the field of view of cube face images in envutil is
-to consider pixels as small square areas of constant colour with an extent of one
-pixel unit. If an image is W pixels wide, a field of view of D degrees is taken to
-coincide with the angle between rays to the left margin of the leftmost pixel and
-the right margin of the rightmost pixel (same for top and botttom). If you pass
---ctc 1, D will instead coincide with the angle between rays to the centers of the
-marginal pixels.
-So usually (--ctc 0), we have D = atan ( f * W / 2 ), but with --ctc 1, we have
-D = atan ( f * ( W - 1 ) / 2 ) This is hard to see, but some cubemaps seem to use
-this convention, and using them without --ctc will lead to subtle errors.
-Internally, envutil uses the first notion, and simply recalculates the field of
-view to be used internally to the slightly larger value which results form the
-edge-to-edge notion; you could do the same 'manually' and pass a slightly higer
-value for cbmfov - using --ctc is merely a convenience saving you the calculation. 
-
 ### A Side Note on lat/lon Images
 
-Note that --ctc does not affect the processing of lat/lon environment maps - I may
-add a separate option for that. lat/lon environment maps are always processed with
-edge-to-edge semantics, assuming the image is periodic in the horizontal - the first
-column follows again after the last. The other assumption about lat/lon images is
-that they also follow edge-to-edge semantics for the vertical: the image lines at
+envutil's assumption about lat/lon images is that they follow edge-to-edge
+semantics for the horizontal and the vertical: the image lines at
 the very top and bottom of the image represent a (very small) circle around the
 pole with half a pixel width radius, opposed to some lat/lon formats which use
 'center-to-center' semantics and repeat a single value (namely that for the pole)
@@ -576,7 +595,7 @@ when it's displayed.
 ## --itp ITP
 
 This is an integer value determining the interpolation method. There are
-currently three modes of interpolation:
+currently two modes of interpolation:
 
     1 - use b-spline interpolation directly on the source image(s). This
         is the fastest option, and unless there is a significant scale
@@ -598,25 +617,25 @@ currently three modes of interpolation:
         signal is magnified a lot.
 
     -2 - use 'twining' - this is a method which first super-samples and then
-         combines several pixels to one output pixel ('binning'). This is my
-         own invention. It's quite fast and produces good quality output.
-         This method should see community review to compare it with other
-         methods. If you only pass --itp -2 and not --twine, envutil will
-         set up twining parameters calculated to fit well with the
-         transformation at hand, and that's also done for image sequence
-         output, where the parameters have to adapt to the changing geometry.
-         The 'twining' interpolator is 'grafted' onto the 'substrate'
-         interpolator - that is the b-spline from the source image, which
-         you parameterize just as for --itp 1. So if you pass --degree 3,
-         the 'substrate' of the twining operator will be a cubic b-spline,
-         rather than a degree-1 b-spline (a.k.a bilinear interpolation).
+        combines several pixels to one output pixel ('binning'). This is my
+        own invention. It's quite fast and produces good quality output.
+        This method should see community review to compare it with other
+        methods. If you only pass --itp -2 and not --twine, envutil will
+        set up twining parameters calculated to fit well with the
+        transformation at hand, and that's also done for image sequence
+        output, where the parameters have to adapt to the changing geometry.
+        The 'twining' interpolator is 'grafted' onto the 'substrate'
+        interpolator - that is the b-spline from the source image, which
+        you parameterize just as for --itp 1. So if you pass --degree 3,
+        the 'substrate' of the twining operator will be a cubic b-spline,
+        rather than a degree-1 b-spline (a.k.a bilinear interpolation).
 
 In general, producing visible output is often a two-step process. The first
 step is to provide some sort of 'ground truth' - an internal representation
 of the image data which will provide a specific value for a specific pick-up
 location. This step tends to aim for speed and precision, without taking
 into account considerations like aliasing or artifacts introduced by the
-interpolation. The signal which is provided by the first step is also
+interpolation. The signal which is provided by the first step is usually
 continuous due to interpolation. Sometimes, the first stage will not use
 true interpolation, meaning that the value of the first-stage signal is
 not necessarily equal to the image data at discrete coordinates. If so,
@@ -662,7 +681,7 @@ and rendering must be as fast as possible). This would also be the case
 in envutil when multiple-image or video output is made, but I don't exploit
 this scheme in envutil.
 
-Why use negative values for ITP for the second and third mode? This is similar
+Why use a negative value for the second interpolation mode? This is similar
 to the values used in lux for 'decimators' - in lux, positive values are
 reserved for degrees of a b-spline reconstruction filter used as low-pass
 filter. bilinear interpolation is the same as a degree-1 b-spline, hence the
@@ -682,11 +701,12 @@ the source image, and the star-shaped artifacts of the bilinear interpolation
 become visible. If you only pass 'degree', the spline will be set up as an
 interpolating spline, meaning it will yield precisely the same pixel values
 as the input when evaluated at discrete coordinates. This requires prefiltering
-of the spline coefficients with a prefilter of the same degree as the spline.
+of the spline coefficients with a prefilter of the same degree as the spline,
+which is done by default.
 If you pass a different prefilter degree, the coefficients are prefiltered
 *as if* the spline degree were so, whereas the evaluation is done with the
 given degree. You can use this to produce smoother output (lower prefilter
-degree than spline degree) or to sharpen them (higher prefilter degree than
+degree than spline degree) or to sharpen it (higher prefilter degree than
 spline degree). A disadvantage of interpolating splines is that they will
 produce ringing artifacts if the input signal isn't band-limited to half the
 Nyquist frequency. With raw images straight from the camera this is usually
@@ -1020,51 +1040,6 @@ and twine_density does that: if your twining kernel is generated
 automatically, it multiplies the 'twine' value with this factor, rounds,
 and assigns the result to 'twine'.
 
-# Parameters for mounted (facet) image input
-
-When --facet is given, this overrides any --input parameter you may have
-passed - you wouldn't, usually, but leave 'input' unset if you use a mounted
-image as input.
-
-## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
-##     load oriented non-environment source image
-
-envutil can 'mount' images in various projections and hfov which may only cover
-a part of the full 360X180 degree environment. This routes to different code,
-because the parts of the output which don't receive input have to be masked
-out, and because projections apart from spherical (which is present for
-lat/lon environments anyway) have to be dealt with. All projections are
-supported. hfov is in degrees - for cubemaps pass 90. The three values must
-be followed by the facet's orinetation, given as three 'Euler angles' (yaw,
-pich, roll). If you want the facet to be mounted 'straight ahead', just pass
-0 0 0. All six values (image filename, projection, hfov, ywa, pict, roll)
-must be passed after --facet, separated by space.
-
-You may pass more than one facet. Currently, where several facets provide
-visible content for a given viewing ray, envutil gives preference to one of
-them, following this scheme: For every candidate, the angle between the
-viewing ray and the facet's center is calculated. The facet where the angle
-comes out smallest 'wins' the contest - it's content is assigned to the
-viewing ray. The overall result resembles a voronoi diagram - facets with
-transparency let other facets shine through oven if they don't 'win the
-contest'. You can't currently mix facets with and without transparency;
-all facets have to have the same channel count and transparency quality.
-
-If you use multi-facet input with simple interpolation (--itp 1), you may
-notice ungainly staircase artifacts where facets collide, and also where
-the facets border on 'empty space'. This is due to the way facets are
-prioritized: only one facet can 'win the contest', and there is currently
-no implementation of feathering. If you use twining, the effect is mitigated,
-the facets are blended to a certain degree, and the edges are faded into
-black. The larger the twining kernel is, the better the effect. When
-automatic twining is used, the twining kernel is calculated to suit all
-facets - if some facets have very high resolution, this may result in a
-large twining kernel to avoid aliasing even for the parts of the target
-image which show the high-res content, bringing computation load up even if
-most of the target image may come from lower resolution content. So the
-choice of the automatic twining kernel is conservative but may be slow to
-compute.
-
 # Additional Technical Notes
 
 One problem with cubemaps is that they are normally stored as concatenations of
@@ -1094,6 +1069,12 @@ system code does so), so this is merely a technical hint. If you use b-spline
 interpolation with full-spherical source images, a specialized prefilter function
 is used which is correctly set up to handle both dimensions as periodic signals,
 producing artifact-free evaluation near the poles.
+
+The initial implementation of envutil offered use of OIIO's 'environment' and
+'texture' functions (passing --itp -1) - but the code ended up convoluted and
+performance wasn't very good. So this branch ('streamline') is now coded to
+use direct interpolation and twining only, and I think I'll merge that to main
+and not use OIIO's interpolation facilities - at least for the time being. 
 
 As an alternative to the antialiasing and interpolation provided by OIIO, envutil
 offers processing with b-spline interpolation and it's own antialiasing filter, using
