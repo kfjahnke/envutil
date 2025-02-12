@@ -1140,54 +1140,23 @@ void fuse ( int ninputs )
   }
 }
 
-// to call the appropriate instantiation of 'work' (above)
+// to call the appropriate instantiation of 'fuse' (above)
 // we need to do some dispatching: picking types depending
 // on run-time variables. We achieve this with a staged 'roll_out'
 // routine: every stage processes one argument and routes to
 // specialized code. The least specialized roll_out variant is
 // the lowest one down, this here is the final stage where we have
 // the number of channels and the stepper as template arguments.
-// Here we proceed to set up more state which is common to all
-// code paths, set up the 'act' functor which yields pixels, and
-// finally call 'work' to run the pixel pipeline.
+// Finally, we dispatch to fuse, with the synopsis-forming
+// object's type depending on whether we have data with alpha
+// channel or not. 'fuse' special-cases if there is only a
+// single facet in play.
 
 template < int NCH ,
            template < typename , std::size_t > class STP >
 void roll_out ( int ninputs )
 {
   typedef environment < float , float , NCH , 16 > env_t ;
-
-//   // if there are no facets, the user must have supplied a full
-//   // 360X180 environment via an 'input' parameter, which the
-//   // argument-processing code has already looked into, to find
-//   // the correct parameterization. Such environment images don't
-//   // have an orientation, but some additional parameters (like ctc)
-//   // apply. Still, the parameter set of a facet should suffice to
-//   // communicate the image's characteristics, and we now produce a
-//   // facet_spec object and proceed with the single facet - the code
-//   // in fuse special-cases single-facet operation and avoids synopsis
-//   // code, which would be futile for single facets.
-// 
-//   if ( ! args.nfacets )
-//   {
-//     assert ( args.input != std::string() ) ;
-// 
-//     facet_spec fspec ;
-//     fspec.facet_no = 0 ;
-//     fspec.filename = args.input ;
-//     fspec.projection = args.env_projection ;
-//     if ( fspec.projection == SPHERICAL )
-//       fspec.hfov = 2.0 * M_PI ;
-//     else
-//       fspec.hfov = M_PI_2 ;
-//     fspec.yaw = fspec.pitch = fspec.roll = 0.0 ;
-//     fspec.width = args.env_width ;
-//     fspec.height = args.env_height ;
-//     fspec.nchannels = NCH ;
-//     
-//     args.facet_spec_v.push_back ( fspec ) ;
-//     args.nfacets = 1 ;
-//   }
 
   // quick shot: assume one- and three-channel images are
   // without alpha channel, two- and four-channel images
@@ -1197,91 +1166,6 @@ void roll_out ( int ninputs )
     fuse < NCH , STP , voronoi_syn < env_t > > ( ninputs ) ;
   else
     fuse < NCH , STP , voronoi_syn_plus < env_t > > ( ninputs ) ;
-
-  // fuse now handles all rendering, this code is now obsolete:
-
-  // // set up an orthonormal system of basis vectors for the view
-  // 
-  // zimt::xel_t < double , 3 > xx { 1.0 , 0.0 , 0.0 } ;
-  // zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
-  // zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
-  // 
-  // // the three vectors are rotated with the given yaw, pitch and
-  // // roll, and later passed on to the to 'steppers', the objects
-  // // which provide 3D 'ray' coordinates. They incorporate the
-  // // rotated basis in their ray generation, resulting in
-  // // appropriately oriented ray coordinates which can be formed
-  // // more efficiently in the steppers - first calculating the
-  // // rays and then rotating the rays in a second step takes
-  // // (many) more CPU cycles.
-  // 
-  // rotate_3d < double , 16 > r3 ( args.roll ,
-  //                                 args.pitch ,
-  //                                 args.yaw ,
-  //                                 false ) ;
-  // 
-  // xx = r3 ( xx ) ;
-  // yy = r3 ( yy ) ;
-  // zz = r3 ( zz ) ;
-  // 
-  // // both direct spline interpolation and twining need an
-  // // 'environment' object.
-  // 
-  // // create an 'environment' object. This will persist while the
-  // // input image remains the same, so if we're creating an image
-  // // sequence, it will be reused for each individual image.
-  // // we 'hold' the environment object in current_env, an 'asset'
-  // // object, which destructs and dealocates it's client object
-  // // only when itself destructs or is 'cleared'.
-  // 
-  // env_t * p_env = (env_t*) current_env.has ( args.input ) ;
-  // 
-  // if ( ! p_env )
-  // {
-  //   current_env.clear() ;
-  //   p_env = new env_t() ;
-  //   current_env.reset ( args.input , p_env ) ;
-  // }
-  // 
-  // // There are two code paths: one taking the getters yielding
-  // // simple single-ray 3D coordinates, and one taking the three-ray
-  // // variant needed to compute the derivatives. They use specific
-  // // types of 'environment' objects. The code for the environment
-  // // objects is in environment.h
-  // 
-  // if ( ninputs == 3 )
-  // {
-  //   // set up a simple single-coordinate stepper of the type
-  //   // fixed by 'STP'. This route is taken with direct b-spline
-  //   // interpolation (itp 1)
-  // 
-  //   STP < float , 16 > get_ray
-  //     ( xx , yy , zz , args.width , args.height ,
-  //       args.x0 , args.x1 , args.y0 , args.y1 ) ;
-  // 
-  //   // now we call the final 'work' template which uses the get_t
-  //   // and act objects we've set up so far
-  // 
-  //   work ( get_ray , *p_env ) ;
-  // }
-  // else // ninputs == 9
-  // {
-  //   // do the same, but with a deriv_stepper and an 'environment9'
-  //   // object. This code path is taken for lookup with 'ninepacks'
-  //   // holding three rays - the additional two used to calculate
-  //   // the derivatives.
-  // 
-  //   deriv_stepper < float , 16 , STP > get_ray
-  //     ( xx , yy , zz , args.width , args.height ,
-  //       args.x0 , args.x1 , args.y0 , args.y1 ) ;
-  // 
-  //   // we pass p_env - a pointer to an environment object.
-  //   // if itp is set to -1 (use OIIO) this pointer is nullptr.
-  // 
-  //   environment9 < NCH , 16 > env ( p_env ) ;
-  // 
-  //   work ( get_ray , env ) ;
-  // }
 }
 
 // while evolving the code, I narrow the scope to three channels
