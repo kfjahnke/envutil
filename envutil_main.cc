@@ -153,8 +153,7 @@ bool facet_spec::init ( int argc , const char ** argv )
   convert_native_arguments(argc, (const char**)argv);
   ArgParse ap;
 
-  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL",
-                  &filename , &projection_str, &hfov, &yaw, &pitch, &roll)
+  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL %F:TRX %F:TRY %F:TRZ", &filename , &projection_str, &hfov, &yaw, &pitch, &roll, &tr_x, &tr_y, &tr_z)
     .help("load oriented non-environment source image") ;
 
   if (ap.parse(argc, argv) < 0 ) {
@@ -535,8 +534,9 @@ void arguments::init ( int argc , const char ** argv )
 
   ap.separator("  parameters for mounted (facet) image input:");
   
-  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL",
-                  &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v)
+  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL %L:TRX %L:TRY %L:TRZ",
+                  &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v,
+                  &facet_trx_v, &facet_try_v, &facet_trz_v )
     .help("load oriented non-environment source image") ;
 
   // TODO:
@@ -686,7 +686,7 @@ void arguments::init ( int argc , const char ** argv )
   facet_spec fspec ;
   for ( int i = 0 ; i < nfacets ; i++ )
   {
-    const char * spec[8] ;
+    const char * spec[11] ;
     spec [ 0 ] = "facet_spec" ;
     spec [ 1 ] = "--facet" ;
     spec [ 2 ] = facet_name_v[i].c_str() ;
@@ -695,7 +695,10 @@ void arguments::init ( int argc , const char ** argv )
     spec [ 5 ] = facet_yaw_v[i].c_str() ;
     spec [ 6 ] = facet_pitch_v[i].c_str() ;
     spec [ 7 ] = facet_roll_v[i].c_str() ;
-    bool success = fspec.init ( 8 , spec ) ;
+    spec [ 8 ] = facet_trx_v[i].c_str() ;
+    spec [ 9 ] = facet_try_v[i].c_str() ;
+    spec [ 10 ] = facet_trz_v[i].c_str() ;
+    bool success = fspec.init ( 11 , spec ) ;
     if ( ! success )
     {
       std::cerr << "parse of facet argument with index " << i

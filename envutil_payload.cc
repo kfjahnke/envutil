@@ -226,7 +226,7 @@ void work ( get_t & get , act_t & act )
   // a multithreaded pipeline which fills the target image.
   
   zimt::bill_t bill ;
-  // bill.njobs = 1 ;
+  bill.njobs = 1 ;
 
   std::chrono::system_clock::time_point start
     = std::chrono::system_clock::now() ;
@@ -379,6 +379,13 @@ struct voronoi_syn
   // true forward rays to -1 to rays pointing straigt back. So the
   // facet where the ray has the largest z coordinate is the winner.
   // ----> done.
+  // .. but: normalizing the rays destroys some information, which
+  // is needed e.g. when applying translation parameters (or so it
+  // seems). Most steppers do produce normalized rays, so for these
+  // the max_z or angle_against_001 criterion could be obtained
+  // without calculation from the z coordinate. Only steppers where
+  // the ray isn't automatically normalized would need a caclulation.
+  // Maybe the value can be produced by the stepper?
 
   // f_v angle_against_001 ( const ray_v & a ) const
   // {
@@ -898,6 +905,93 @@ struct voronoi_syn_plus
   }
 } ;
 
+// helper class 'reproject_t' is needed for facets with translation
+// parameters. It receives a ray in model space coordinates, produced
+// by a stepper. The ray is projected to the plane one-forward and
+// the translation parameters are subtracted, resulting in a ray
+// in model space coordinates. This ray is finally rotated into the
+// facet's coordinate system (by applying the basis, bs), and the
+// result - a ray in the facet's coordinate system - is written to
+// 'out'. The reproject_t object is concatenated with the stepper
+// using a 'suffixed_t' object, and the resulting get_t produces
+// the desired rays in the facet's coordinate system, which can be
+// used to pick up pixel values or serve as a quality criterion.
+
+typedef xel_t < float , 3 > ray_t ;
+
+struct reproject_t 
+: public unary_functor < ray_t , ray_t , 16 >
+{
+  typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
+
+  float tr_x , tr_y , tr_z ;
+  basis_t bs ;
+
+  reproject_t ( float _tr_x , float _tr_y , float _tr_z ,
+                const basis_t & _bs )
+  : tr_x ( _tr_x ) ,
+    tr_y ( _tr_y ) ,
+    tr_z ( _tr_z ) ,
+    bs ( _bs )
+  { }
+
+  template < typename I , typename O >
+  void eval ( const I & _in , O & out )
+  {
+    I in ;
+    in[0] = ( _in[0] / _in[2] ) - tr_x ;
+    in[1] = ( _in[1] / _in[2] ) - tr_y ;
+    in[2] = 1.0f - tr_z ;
+    out = in[0] * bs[0] + in[1] * bs[1] + in[2] * bs[2] ;
+  }
+} ;
+
+typedef xel_t < float , 9 > ninepack_t ;
+
+struct reproject9_t 
+: public unary_functor < ninepack_t , ninepack_t , 16 >
+{
+  typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
+
+  float tr_x , tr_y , tr_z ;
+  basis_t bs ;
+
+  reproject9_t ( float _tr_x , float _tr_y , float _tr_z ,
+                 const basis_t & _bs )
+  : tr_x ( _tr_x ) ,
+    tr_y ( _tr_y ) ,
+    tr_z ( _tr_z ) ,
+    bs ( _bs )
+  { }
+
+  template < typename I , typename O >
+  void eval ( const I & _in , O & out )
+  {
+    I in ;
+    in[0] = ( _in[0] / _in[2] ) - tr_x ;
+    in[1] = ( _in[1] / _in[2] ) - tr_y ;
+    in[2] = 1.0f - tr_z ;
+    in[3] = ( _in[3] / _in[5] ) - tr_x ;
+    in[4] = ( _in[4] / _in[5] ) - tr_y ;
+    in[5] = 1.0f - tr_z ;
+    in[6] = ( _in[6] / _in[8] ) - tr_x ;
+    in[7] = ( _in[7] / _in[8] ) - tr_y ;
+    in[8] = 1.0f - tr_z ;
+    auto help1 = in[0] * bs[0] + in[1] * bs[1] + in[2] * bs[2] ;
+    auto help2 = in[3] * bs[0] + in[4] * bs[1] + in[5] * bs[2] ;
+    auto help3 = in[6] * bs[0] + in[7] * bs[1] + in[8] * bs[2] ;
+    out[0] = help1[0] ;
+    out[1] = help1[1] ;
+    out[2] = help1[2] ;
+    out[3] = help2[0] ;
+    out[4] = help2[1] ;
+    out[5] = help2[2] ;
+    out[6] = help3[0] ;
+    out[7] = help3[1] ;
+    out[8] = help3[2] ;
+  }
+} ;
+
 template < int NCH ,
            template < typename , std::size_t , bool > class STP ,
            typename synopsis_t >
@@ -916,9 +1010,11 @@ void fuse ( int ninputs )
 
   typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
   std::vector < basis_t > basis_v ;
+  std::vector < basis_t > basis1_v ;
+  std::vector < basis_t > basis2_v ;
 
   // we have a set of facet specs in args.facet_spec_v, which already
-  // have the information about the facet image. Now we set up get_v,
+  // have the information about the facet images. Now we set up get_v,
   // a vector of grok_get_t containing pre-rotated steppers for the
   // facets. We also set up env_v, a vector of 'environment' objects
   // which provide access to the image data via 3D ray coordinates.
@@ -939,6 +1035,9 @@ void fuse ( int ninputs )
   // the program teminates, the the environment objects held via the
   // shared_ptrs are destructed. Holding the map static keeps the
   // environments alive for image sequences as well.
+  // Note that currently facets with the same filename but differing
+  // hfov or projection will be re-loaded and don't share the same
+  // environment object.
 
   static std::map < std::string , std::shared_ptr<env_t> > content_map ;
   std::vector < env_t > env_v ;
@@ -947,19 +1046,24 @@ void fuse ( int ninputs )
   {
     auto const & fct ( args.facet_spec_v [ i ] ) ; // shorthand
 
-    auto it = content_map.find ( fct.filename ) ;
+    auto key =   fct.filename 
+               + projection_name [ fct.projection ]
+               + std::to_string ( fct.hfov ) ;
+
+    auto it = content_map.find ( key ) ;
     if ( it == content_map.end() )
     {
       if ( args.verbose )
-        std::cout << fct.filename << " is now opened as environment"
-        << std::endl ;
-      content_map [ fct.filename ]
+        std::cout << fct.filename << " is registered as environment "
+        << key << std::endl ;
+      content_map [ key ]
         = std::make_shared < env_t > ( fct ) ;
     }
     else
     {
       if ( args.verbose )
-        std::cout << fct.filename << " already in use, reusing it"
+        std::cout << fct.filename << " already registered as "
+        << key << " - reusing it"
         << std::endl ;
     }
 
@@ -968,55 +1072,68 @@ void fuse ( int ninputs )
     // the actual data are also held via a shared_ptr to a bspline
     // object.
 
-    env_v.push_back ( * ( content_map [ fct.filename ] ) ) ;
+    env_v.push_back ( * ( content_map [ key ] ) ) ;
 
-    // we also need the combined rotations stemming from the
+    // we also need several rotations stemming from the
     // orientation of the virtual camera and the orientation
-    // of the facet. Again we create one such 'basis' for each
+    // of the facet. We create one such 'basis' for each
     // of the facets and store them in a vector 'basis_v'
 
     zimt::xel_t < double , 3 > xx { 1.0 , 0.0 , 0.0 } ;
     zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
     zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
 
-    // apply the camera rotation
+    // first capture the camera rotation as a basis_t (in basis1_v)
 
     rotate_3d < double , 16 > r3 ( args.roll ,
                                    args.pitch ,
                                    args.yaw ,
                                    false ) ;
 
-    xx = r3 ( xx ) ;
-    yy = r3 ( yy ) ;
-    zz = r3 ( zz ) ;
+    auto xx1 = r3 ( xx ) ;
+    auto yy1 = r3 ( yy ) ;
+    auto zz1 = r3 ( zz ) ;
 
-    // apply the facet's orientation
+    basis_t bs1 { xx1 , yy1 , zz1 } ;
+    basis1_v.push_back ( bs1 ) ;
 
-    if ( fct.yaw != 0.0 || fct.pitch != 0.0 || fct.roll != 0.0 )
-    {
-      rotate_3d < double , 16 > rr3 ( fct.roll ,
-                                      fct.pitch ,
-                                      fct.yaw ,
-                                      true ) ;
+    // capture the rotation due to the facet's orientation
+    // as a basis_t (in basis2_v)
 
-      xx = rr3 ( xx ) ;
-      yy = rr3 ( yy ) ;
-      zz = rr3 ( zz ) ;
-    }
+    rotate_3d < double , 16 > rr3 ( fct.roll ,
+                                    fct.pitch ,
+                                    fct.yaw ,
+                                    true ) ;
+
+    auto xx2 = rr3 ( xx ) ;
+    auto yy2 = rr3 ( yy ) ;
+    auto zz2 = rr3 ( zz ) ;
+
+    basis_t bs2 { xx2 , yy2 , zz2 } ;
+    basis2_v.push_back ( bs2 ) ;
+
+    // and also save the combined rotation, which is used
+    // most of the time - the separate steps are only needed
+    // for facets with translation parameters, this goes to
+    // plain basis_v
+
+    xx = rr3 ( xx1 ) ;
+    yy = rr3 ( yy1 ) ;
+    zz = rr3 ( zz1 ) ;
 
     basis_t bs { xx , yy , zz } ;
     basis_v.push_back ( bs ) ;
   }
 
-  // next step: produce the fusion stepper
-
   if ( ninputs == 3 )
   {
+    // ninputs == 3 means that we're not using twining, and the
+    // steppers produce 'ordinary' rays with three components.
+
     if ( args.nfacets == 1 )
     {
-      // special case: there is only one facet. Using the
-      // multi-facet code would work, but would produce
-      // futile overhead.
+      // special case: there is only one facet. Using the multi-facet
+      // code would work, but would produce futile overhead.
       // Note how we use a stepper which does not normalize it's result:
       // Since we don't compare the z component of the ray as quality
       // criterion (which we'd do for multiple facets) we can do without
@@ -1025,33 +1142,97 @@ void fuse ( int ninputs )
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
 
-      // note this setting VVV - we needn't normalize the ray here.
+      const auto & fct ( args.facet_spec_v[0] ) ; // shorthand
 
-      STP < float , 16 , false > get_ray
-        ( basis_v[0][0] , basis_v[0][1] , basis_v[0][2] ,
-          args.width , args.height ,
-          args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      if ( fct.tr_x != 0.0  || fct.tr_y != 0.0 || fct.tr_z != 0.0 )
+      {
+        // there are non-zero translation parameters for this facet,
+        // so we have to add code to handle the reprojection of the
+        // facet to the one-forward plane and the view of this plane
+        // from the translated camera position. First the stepper:
 
-      work ( get_ray , env_v[0] ) ;
+        // note this setting VVV - we needn't normalize the ray here.
+
+        STP < float , 16 , false > get_ray
+          ( basis1_v[0][0] , basis1_v[0][1] , basis1_v[0][2] ,
+            args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+        // the stepper, which only uses the rotation of the virtual
+        // camera (basis1) is suffixed with a functor handling the
+        // projection of the facet to the one-forward plane and the
+        // application of the camera translation.
+  
+        reproject_t rprj ( fct.tr_x , fct.tr_y , fct.tr_z ,
+                           basis2_v[0] ) ;
+
+        suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
+
+        // the resulting object is a get_t in it's own right, and
+        // all that's left to do now is to call work:
+
+        work ( sfg , env_v[0] ) ;
+      }
+      else
+      {
+        // all translation parameters are zero. this is easy:
+
+        STP < float , 16 , false > get_ray
+          ( basis_v[0][0] , basis_v[0][1] , basis_v[0][2] ,
+            args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+        work ( get_ray , env_v[0] ) ;
+      }
     }
     else
     {
+      // there are several facets.
+
+      // we'll have several get_t objects, one for each facet,
+      // producing rays. These get_t objects are 'grokked' to erase
+      // ther specific type (STP) and stored in this vector:
+
       std::vector < gg_t > get_v ;
 
       for ( int i = 0 ; i < args.nfacets ; i++ )
       {
-        // set up a simple single-coordinate stepper of the type
-        // fixed by 'STP'. This route is taken with direct b-spline
-        // interpolation (itp 1)
+        const auto & fct ( args.facet_spec_v[i] ) ; // shorthand
 
-        // note this setting VV - we need to normalize the ray here.
+        if ( fct.tr_x != 0.0  || fct.tr_y != 0.0 || fct.tr_z != 0.0 )
+        {
+          // if there are translation parameters for this facet,
+          // proceed as in the single-facet case: suffix the stepper
+          // with a reproject_t and then push the resulting object
+          // to get_v (it's 'grokked' in the process, because the
+          // get_v vector is a vector of grok_get_t)
 
-        STP < float , 16 , true > get_ray
-          ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
-            args.width , args.height ,
-            args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          STP < float , 16 , false > get_ray
+            ( basis1_v[i][0] , basis1_v[i][1] , basis1_v[i][2] ,
+              args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          reproject_t rprj ( fct.tr_x , fct.tr_y , fct.tr_z ,
+                             basis2_v[i] ) ;
+          suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
+          get_v.push_back ( sfg ) ;
+        }
+        else
+        {
+          // no translation parameters.
 
-        get_v.push_back ( get_ray ) ;
+          // set up a simple single-coordinate stepper of the type
+          // fixed by 'STP'. This route is taken with direct b-spline
+          // interpolation (itp 1)
+
+          // note this setting VV - we need to normalize the ray here.
+
+          STP < float , 16 , true > get_ray
+            ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
+              args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+          get_v.push_back ( get_ray ) ;
+        }
       }
 
       // for now, we use a hard-coded synopsis-forming object
@@ -1074,8 +1255,13 @@ void fuse ( int ninputs )
   }
   else // ninputs == 9
   {
+    // this is the code we use for twining. instead of processing
+    // simple 3D rays, we process 'ninepacks'.
+
     if ( args.nfacets == 1 )
     {
+      const auto & fct ( args.facet_spec_v[0] ) ;
+
       // special case: there is only one facet. We have to wrap the
       // single evaluator in a twine_t object to process the 'ninepacks'
       // which the deriv_stepper in get_ray will produce. Using the
@@ -1088,14 +1274,36 @@ void fuse ( int ninputs )
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
 
-      deriv_stepper < float , 16 , STP , false > get_ray
-          ( basis_v[0][0] , basis_v[0][1] , basis_v[0][2] ,
-            args.width , args.height ,
-            args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      if ( fct.tr_x != 0.0  || fct.tr_y != 0.0 || fct.tr_z != 0.0 )
+      {
+        deriv_stepper < float , 16 , STP , true > get_ray
+            ( basis1_v[0][0] , basis1_v[0][1] , basis1_v[0][2] ,
+              args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-      twine_t < NCH , 16 > twenv ( env_v[0] , args.twine_spread ) ;
+        twine_t < NCH , 16 > twenv ( env_v[0] , args.twine_spread ) ;
 
-      work ( get_ray , twenv ) ;
+        // work ( get_ray , twenv ) ;
+
+        reproject9_t rprj ( fct.tr_x , fct.tr_y , fct.tr_z ,
+                            basis2_v[0] ) ;
+        suffixed_t < float , 9 , 2 , 16 > sfg ( get_ray , rprj ) ;
+        work ( sfg , twenv ) ;
+      }
+      else
+      {
+        // for single-facet operation with twining, we also use steppers
+        // with normalized rays:           VVVV
+
+        deriv_stepper < float , 16 , STP , true > get_ray
+            ( basis_v[0][0] , basis_v[0][1] , basis_v[0][2] ,
+              args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+        twine_t < NCH , 16 > twenv ( env_v[0] , args.twine_spread ) ;
+
+        work ( get_ray , twenv ) ;
+      }
     }
     else
     {
@@ -1106,19 +1314,40 @@ void fuse ( int ninputs )
 
       for ( int i = 0 ; i < args.nfacets ; i++ )
       {
-        // we set up a deriv_stepper (specialized with the stepper
-        // type given in template argument STP) which produces ninepacks
+          const auto & fct ( args.facet_spec_v[i] ) ;
 
-        // note this setting               VVV - we need normalized rays.
+        if ( fct.tr_x != 0.0  || fct.tr_y != 0.0 || fct.tr_z != 0.0 )
+        {
+          // we set up a deriv_stepper (specialized with the stepper
+          // type given in template argument STP) which produces ninepacks
 
-        deriv_stepper < float , 16 , STP , true > get_ray
-            ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
-              args.width , args.height ,
-              args.x0 , args.x1 , args.y0 , args.y1 ) ;
+          // note this setting               VVV - we need normalized rays.
 
-        // and push it to the get_v vector
+          deriv_stepper < float , 16 , STP , true > get_ray
+              ( basis1_v[i][0] , basis1_v[i][1] , basis1_v[i][2] ,
+                args.width , args.height ,
+                args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-        get_v.push_back ( get_ray ) ;
+          // and push it to the get_v vector
+
+          reproject9_t rprj ( fct.tr_x , fct.tr_y , fct.tr_z ,
+                              basis2_v[i] ) ;
+
+          suffixed_t < float , 9 , 2 , 16 > sfg ( get_ray , rprj ) ;
+
+          get_v.push_back ( sfg ) ;
+        }
+        else
+        {
+          deriv_stepper < float , 16 , STP , true > get_ray
+              ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
+                args.width , args.height ,
+                args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
+          // and push it to the get_v vector
+
+          get_v.push_back ( get_ray ) ;
+        }
       }
 
       // we set up the synopsis-forming object and introduce it to
@@ -1172,7 +1401,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-// #define NARROW_SCOPE
+#define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate

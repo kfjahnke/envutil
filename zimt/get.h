@@ -1064,6 +1064,58 @@ grok_get_t < T , N , D , L > grok_get
   return grok_get_t < T , N , D , L > ( grokkee ) ;
 }
 
+// 'suffixed' is a composite of a get_t and an act-like functor
+// post-processing the output of the get_t. The resulting object
+// behaves as a get_t.
+
+template < typename T ,     // fundamental type
+           std::size_t N ,  // channel count
+           std::size_t D ,  // dimensions
+           std::size_t L >  // lane count
+struct suffixed_t
+{
+  typedef zimt::xel_t < long , D > crd_t ;
+  typedef zimt::xel_t < T , N > value_t ;
+  typedef simdized_type < value_t , L > value_v ;
+
+  grok_get_t < T , N , D , L > head ;
+  grok_type < value_t , value_t , L > tail ;
+
+  suffixed_t ( const grok_get_t < T , N , D , L > & _head ,
+               const grok_type < value_t , value_t , L > & _tail )
+  : head ( _head ) ,
+    tail ( _tail )
+  { }
+
+  void init ( value_v & trg , const crd_t & crd )
+  {
+    head.init ( trg , crd ) ;
+    tail.eval ( trg , trg ) ;
+  }
+
+  void init ( value_v & trg ,
+              const crd_t & crd ,
+              const std::size_t & cap )
+  {
+    head.init ( trg , crd , cap ) ;
+    tail.eval ( trg , trg ) ;
+  }
+
+  void increase ( value_v & trg )
+  {
+    head.increase ( trg ) ;
+    tail.eval ( trg , trg ) ;
+  }
+
+  void increase ( value_v & trg ,
+                  const std::size_t & cap ,
+                  const bool & _stuff = true )
+  {
+    head.increase ( trg , cap , _stuff ) ;
+    tail.eval ( trg , trg ) ;
+  }
+} ;
+
 // overload which takes grokkee type with different type signature.
 // to use this overload, you'll have to pass template arguments
 // T, N, D and L.
