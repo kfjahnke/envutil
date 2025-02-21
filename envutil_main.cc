@@ -153,7 +153,7 @@ bool facet_spec::init ( int argc , const char ** argv )
   convert_native_arguments(argc, (const char**)argv);
   ArgParse ap;
 
-  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL %F:TRX %F:TRY %F:TRZ", &filename , &projection_str, &hfov, &yaw, &pitch, &roll, &tr_x, &tr_y, &tr_z)
+  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL %F:TRX %F:TRY %F:TRZ %F:TPY %F:TPP %F:TPR", &filename , &projection_str, &hfov, &yaw, &pitch, &roll, &tr_x, &tr_y, &tr_z, &tp_y, &tp_p, &tp_r)
     .help("load oriented non-environment source image") ;
 
   if (ap.parse(argc, argv) < 0 ) {
@@ -534,9 +534,10 @@ void arguments::init ( int argc , const char ** argv )
 
   ap.separator("  parameters for mounted (facet) image input:");
   
-  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL %L:TRX %L:TRY %L:TRZ",
+  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL %L:TRX %L:TRY %L:TRZ %L:TPY %L:TPP %L:TPR",
                   &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v,
-                  &facet_trx_v, &facet_try_v, &facet_trz_v )
+                  &facet_trx_v, &facet_try_v, &facet_trz_v ,
+                  &facet_tpy_v, &facet_tpp_v, &facet_tpr_v )
     .help("load oriented non-environment source image") ;
 
   // TODO:
@@ -686,7 +687,7 @@ void arguments::init ( int argc , const char ** argv )
   facet_spec fspec ;
   for ( int i = 0 ; i < nfacets ; i++ )
   {
-    const char * spec[11] ;
+    const char * spec[14] ;
     spec [ 0 ] = "facet_spec" ;
     spec [ 1 ] = "--facet" ;
     spec [ 2 ] = facet_name_v[i].c_str() ;
@@ -698,7 +699,10 @@ void arguments::init ( int argc , const char ** argv )
     spec [ 8 ] = facet_trx_v[i].c_str() ;
     spec [ 9 ] = facet_try_v[i].c_str() ;
     spec [ 10 ] = facet_trz_v[i].c_str() ;
-    bool success = fspec.init ( 11 , spec ) ;
+    spec [ 11 ] = facet_tpy_v[i].c_str() ;
+    spec [ 12 ] = facet_tpp_v[i].c_str() ;
+    spec [ 13 ] = facet_tpr_v[i].c_str() ;
+    bool success = fspec.init ( 14 , spec ) ;
     if ( ! success )
     {
       std::cerr << "parse of facet argument with index " << i
@@ -710,6 +714,9 @@ void arguments::init ( int argc , const char ** argv )
     fspec.yaw *= M_PI / 180.0 ;
     fspec.pitch *= M_PI / 180.0 ;
     fspec.roll *= M_PI / 180.0 ;
+    fspec.tp_y *= M_PI / 180.0 ;
+    fspec.tp_p *= M_PI / 180.0 ;
+    fspec.tp_r *= M_PI / 180.0 ;
     fspec.step = get_step ( fspec.projection , fspec.width ,
                             fspec.height , fspec.hfov ) ;
 
@@ -728,7 +735,13 @@ void arguments::init ( int argc , const char ** argv )
                 << " step: " << m.step
                 << " y:" << m.yaw * 180.0 / M_PI 
                 << " p:" << m.pitch * 180.0 / M_PI
-                << " r:" << m.roll * 180.0 / M_PI << std::endl ;
+                << " r:" << m.roll * 180.0 / M_PI << std::endl
+                << "tr_x:" << m.tr_x * 180.0 / M_PI 
+                << " tr_y:" << m.tr_y * 180.0 / M_PI
+                << " tr_z:" << m.tr_z * 180.0 / M_PI
+                << " tp_y:" << m.tp_y * 180.0 / M_PI 
+                << " tp_p:" << m.tp_p * 180.0 / M_PI
+                << " tp_r:" << m.tp_r * 180.0 / M_PI << std::endl ;
   }
   nchannels = nch ;
 

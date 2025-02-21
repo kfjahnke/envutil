@@ -143,7 +143,7 @@ struct rotate_3d
 
   Imath::Quat < T > q ;
 
-  rotate_3d ( T roll , T pitch , T yaw , bool inverse = false )
+  rotate_3d ( T roll = 0 , T pitch = 0 , T yaw = 0 , bool inverse = false )
   {
     // set up the rotational quaternion. if 'inverse' is set, produce
     // the conjugate.
@@ -907,7 +907,7 @@ struct voronoi_syn_plus
 
 // helper class 'reproject_t' is needed for facets with translation
 // parameters. It receives a ray in model space coordinates, produced
-// by a stepper. The ray is projected to the plane one-forward and
+// by a stepper. The ray is projected to the reprojection plane and
 // the translation parameters are subtracted, resulting in a ray
 // in model space coordinates. This ray is finally rotated into the
 // facet's coordinate system (by applying the basis, bs), and the
@@ -916,6 +916,11 @@ struct voronoi_syn_plus
 // using a 'suffixed_t' object, and the resulting get_t produces
 // the desired rays in the facet's coordinate system, which can be
 // used to pick up pixel values or serve as a quality criterion.
+// There are a few fine points to take into account: the tr_x etc.
+// values can only be taken straight from the args object if the
+// reprojection plane is not tilted (tp_* == 0) - if so, the tr_*
+// values have to be rotated accordingly - this is done in the code
+// setting up the reproject_t objects
 
 typedef xel_t < float , 3 > ray_t ;
 
@@ -923,26 +928,65 @@ struct reproject_t
 : public unary_functor < ray_t , ray_t , 16 >
 {
   typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
+  typedef simdized_type < float , 16 > f_v ;
+  typedef typename f_v::mask_type mask_t ;
 
   float tr_x , tr_y , tr_z ;
   basis_t bs ;
 
-  reproject_t ( float _tr_x , float _tr_y , float _tr_z ,
+  reproject_t ( const ray_t & _trxyz ,
                 const basis_t & _bs )
-  : tr_x ( _tr_x ) ,
-    tr_y ( _tr_y ) ,
-    tr_z ( _tr_z ) ,
+  : tr_x ( _trxyz[0] ) ,
+    tr_y ( _trxyz[1] ) ,
+    tr_z ( _trxyz[2] ) ,
     bs ( _bs )
   { }
 
+  // reprojection may not be possible: if the incoming ray has
+  // zero or negative z, it can't be projected onto the plane
+  // one-forward. If that occurs, we return a straight-back ray,
+  // which is unlikely to occur in the given context: the code
+  // aims to produce an image mosaic of several images taken of
+  // a flat surface with variying camera positions - typically
+  // varying along the horizontal and with similar distance, and
+  // also with little yaw or pitch. Incoming 'impossible' rays
+  // occur only where the source images depict content which is
+  // not on the plane of the flat surface (so, beyond it's
+  // horizon). If the partial images don't provide content
+  // 'all the way' to directly behind the camera's optical
+  // axis, the result will be 0000 anyway.
+  // To solve the problem in a truly general way, 'impossible'
+  // rays would need to be tagged recognizably, or additional
+  // information (like, a mask) would have to be passed alongside
+  // the ray data - but since the reproject_t object is built into
+  // a get_t object which produces rays (and no masks) this is not
+  // possible with the current logic. I 'tag' the 'impossible' rays
+  // with a z component of negative infinity, in case calling code
+  // needs to recognize them.
+
   template < typename I , typename O >
-  void eval ( const I & _in , O & out )
+  mask_t eval ( const I & _in , O & out )
   {
+    auto mask = ( _in[2] <= 0.0f ) ;
+    if ( all_of ( mask ) )
+    {
+      out[0] = 0.0f ;
+      out[1] = 0.0f ;
+      out[2] = - std::numeric_limits<float>::infinity() ;
+      return mask_t ( false ) ;
+    }
     I in ;
     in[0] = ( _in[0] / _in[2] ) - tr_x ;
     in[1] = ( _in[1] / _in[2] ) - tr_y ;
     in[2] = 1.0f - tr_z ;
     out = in[0] * bs[0] + in[1] * bs[1] + in[2] * bs[2] ;
+    if ( any_of ( mask ) )
+    {
+      out[0] ( mask ) = 0.0f ;
+      out[1] ( mask ) = 0.0f ;
+      out[2] ( mask ) = - std::numeric_limits<float>::infinity() ;
+    }
+    return ! mask ;
   }
 } ;
 
@@ -956,17 +1000,44 @@ struct reproject9_t
   float tr_x , tr_y , tr_z ;
   basis_t bs ;
 
-  reproject9_t ( float _tr_x , float _tr_y , float _tr_z ,
+  reproject9_t ( const ray_t & _trxyz ,
                  const basis_t & _bs )
-  : tr_x ( _tr_x ) ,
-    tr_y ( _tr_y ) ,
-    tr_z ( _tr_z ) ,
+  : tr_x ( _trxyz[0] ) ,
+    tr_y ( _trxyz[1] ) ,
+    tr_z ( _trxyz[2] ) ,
     bs ( _bs )
   { }
+
+  // for twining, we have three rays to deal with: the current
+  // central viewing ray and the two rays corresponding with it's
+  // two 'canonical' neighbours. Here, we take the approach that
+  // an 'impossible' central ray always is accompanied by two
+  // other impossible rays, even if the canonical neighbours are
+  // valid. The effect is that twining will go through the futile
+  // exercise of evaluating the same impossible ray for each
+  // twining coefficient and sum up the results, which should be
+  // zero anyway. This seems wasteful, but should rarely occur,
+  // due to the same resoning as above: we're trying to create
+  // an image mosaic, and cases where 'impossible' rays occur
+  // are contrary to the purpose.
 
   template < typename I , typename O >
   void eval ( const I & _in , O & out )
   {
+    auto mask = ( _in[2] <= 0.0f ) ;
+    if ( all_of ( mask ) )
+    {
+      out[0] = 0.0f ;
+      out[1] = 0.0f ;
+      out[2] =  - std::numeric_limits<float>::infinity() ;
+      out[3] = 0.0f ;
+      out[4] = 0.0f ;
+      out[5] =  - std::numeric_limits<float>::infinity() ;
+      out[6] = 0.0f ;
+      out[7] = 0.0f ;
+      out[8] =  - std::numeric_limits<float>::infinity() ;
+      return ;
+    }
     I in ;
     in[0] = ( _in[0] / _in[2] ) - tr_x ;
     in[1] = ( _in[1] / _in[2] ) - tr_y ;
@@ -989,6 +1060,18 @@ struct reproject9_t
     out[6] = help3[0] ;
     out[7] = help3[1] ;
     out[8] = help3[2] ;
+    if ( any_of ( mask ) )
+    {
+      out[0] ( mask ) = 0.0f ;
+      out[1] ( mask ) = 0.0f ;
+      out[2] ( mask ) =  - std::numeric_limits<float>::infinity() ;
+      out[3] ( mask ) = 0.0f ;
+      out[4] ( mask ) = 0.0f ;
+      out[5] ( mask ) =  - std::numeric_limits<float>::infinity() ;
+      out[6] ( mask ) = 0.0f ;
+      out[7] ( mask ) = 0.0f ;
+      out[8] ( mask ) =  - std::numeric_limits<float>::infinity() ;
+    }
   }
 } ;
 
@@ -1042,6 +1125,15 @@ void fuse ( int ninputs )
   static std::map < std::string , std::shared_ptr<env_t> > content_map ;
   std::vector < env_t > env_v ;
 
+  std::vector < xel_t < double , 3 > > trxyzv ( args.nfacets ) ;
+
+  typedef rotate_3d < double , 16 > rotate_t ;
+  rotate_t r_camera ( args.roll , args.pitch , args.yaw , false ) ;
+
+  std::vector < rotate_t > rot_plane ( args.nfacets ) ;
+  std::vector < rotate_t > rot_plane_i ( args.nfacets ) ;
+  std::vector < rotate_t > rot_facet ( args.nfacets ) ;
+
   for ( int i = 0 ; i < args.nfacets ; i++ )
   {
     auto const & fct ( args.facet_spec_v [ i ] ) ; // shorthand
@@ -1083,47 +1175,113 @@ void fuse ( int ninputs )
     zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
     zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
 
-    // first capture the camera rotation as a basis_t (in basis1_v)
+    basis_t neutral { xx , yy , zz } ;
 
-    rotate_3d < double , 16 > r3 ( args.roll ,
-                                   args.pitch ,
-                                   args.yaw ,
-                                   false ) ;
+    // all facets need to process two rotations: one due to
+    // the viewer's orientation (global yaw, pitch and roll)
+    // and one due to the facet's own orientation. The first
+    // one is already set (it's the same throughout: rot_camera)
+    // now we create and save the facet-specific one.
 
-    auto xx1 = r3 ( xx ) ;
-    auto yy1 = r3 ( yy ) ;
-    auto zz1 = r3 ( zz ) ;
+    rotate_3d < double , 16 > r_facet ( fct.roll ,
+                                        fct.pitch ,
+                                        fct.yaw ,
+                                        true ) ;
+    rot_facet[i] = r_facet ;
 
-    basis_t bs1 { xx1 , yy1 , zz1 } ;
-    basis1_v.push_back ( bs1 ) ;
+    // additionally, the reprojection plane for facets with
+    // translation can be tilted. We need both the rotation and
+    // it's inverse:
 
-    // capture the rotation due to the facet's orientation
-    // as a basis_t (in basis2_v)
+    rotate_3d < double , 16 > r_plane ( fct.tp_r ,
+                                        fct.tp_p ,
+                                        fct.tp_y ,
+                                        true ) ;
+    rot_plane[i] = r_plane ;
 
-    rotate_3d < double , 16 > rr3 ( fct.roll ,
-                                    fct.pitch ,
-                                    fct.yaw ,
-                                    true ) ;
+    rotate_3d < double , 16 > r_plane_i ( fct.tp_r ,
+                                          fct.tp_p ,
+                                          fct.tp_y ,
+                                          false ) ;
+    rot_plane_i[i] = r_plane_i ;
 
-    auto xx2 = rr3 ( xx ) ;
-    auto yy2 = rr3 ( yy ) ;
-    auto zz2 = rr3 ( zz ) ;
+    if (    fct.tr_x == 0.0 && fct.tr_y == 0.0 && fct.tr_z == 0.0
+         && fct.tp_r == 0.0 && fct.tp_p == 0.0 && fct.tp_y == 0.0 )
+    {
+      // there are no translation parameters. only the combined
+      // rotations due to the orientation of the virtual camera
+      // and of the facet's orientation are used and directly
+      // fed to the stepper later on.
 
-    basis_t bs2 { xx2 , yy2 , zz2 } ;
-    basis2_v.push_back ( bs2 ) ;
+      xx = r_camera ( xx ) ;
+      yy = r_camera ( yy ) ;
+      zz = r_camera ( zz ) ;
 
-    // and also save the combined rotation, which is used
-    // most of the time - the separate steps are only needed
-    // for facets with translation parameters, this goes to
-    // plain basis_v
+      xx = r_facet ( xx ) ;
+      yy = r_facet ( yy ) ;
+      zz = r_facet ( zz ) ;
 
-    xx = rr3 ( xx1 ) ;
-    yy = rr3 ( yy1 ) ;
-    zz = rr3 ( zz1 ) ;
+      basis_t bs { xx , yy , zz } ;
+      basis_v.push_back ( bs ) ;
 
-    basis_t bs { xx , yy , zz } ;
-    basis_v.push_back ( bs ) ;
+      // basis1_v and basis2_v are not used, but the facet's slot
+      // has to be filled in with something, to keep all basis_v
+      // equally sized.
+
+      basis1_v.push_back ( neutral ) ;
+      basis2_v.push_back ( neutral ) ;
+    }
+    else
+    {
+      // handle yaw and pitch of the reprojection plane. The plane
+      // is always at unit distance from the master camera in the
+      // origin, and the yaw and pitch both determine the point where
+      // the unit sphere touches the plane and the plane's normal vector.
+
+      // with translation parameters, the two rotations are kept
+      // separate. the first brings us to the CS of the reprojection
+      // plane:
+
+      auto xx1 = r_camera ( xx ) ;
+      auto yy1 = r_camera ( yy ) ;
+      auto zz1 = r_camera ( zz ) ;
+
+      xx1 = r_plane ( xx1 ) ;
+      yy1 = r_plane ( yy1 ) ;
+      zz1 = r_plane ( zz1 ) ;
+
+      basis_t bs1 { xx1 , yy1 , zz1 } ;
+      basis1_v.push_back ( bs1 ) ;
+
+      // the second one brings us to the CS of the facet - rays which
+      // have been through the chain of transformations will now be
+      // usable with environment_t objects to produce pixel data.
+
+      auto xx2 = r_plane_i ( xx ) ;
+      auto yy2 = r_plane_i ( yy ) ;
+      auto zz2 = r_plane_i ( zz ) ;
+
+      xx2 = r_facet ( xx2 ) ;
+      yy2 = r_facet ( yy2 ) ;
+      zz2 = r_facet ( zz2 ) ;
+
+      basis_t bs2 { xx2 , yy2 , zz2 } ;
+      basis2_v.push_back ( bs2 ) ;
+
+      basis_v.push_back ( neutral ) ;
+    }
   }
+
+  // now we have a set of cases to handle, depending on the type
+  // of job we're running. We have to consider three points:
+
+  // - ninputs is either 3 or 9 - 3 for direct interpolation
+  //   and 9 for 'twining'
+
+  // - we may have only a single facet, in which case we can
+  //   handle the job with leaner code
+
+  // - facets may come with or without translation parameters
 
   if ( ninputs == 3 )
   {
@@ -1144,7 +1302,8 @@ void fuse ( int ninputs )
 
       const auto & fct ( args.facet_spec_v[0] ) ; // shorthand
 
-      if ( fct.tr_x != 0.0  || fct.tr_y != 0.0 || fct.tr_z != 0.0 )
+      if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
+           || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
       {
         // there are non-zero translation parameters for this facet,
         // so we have to add code to handle the reprojection of the
@@ -1160,11 +1319,13 @@ void fuse ( int ninputs )
 
         // the stepper, which only uses the rotation of the virtual
         // camera (basis1) is suffixed with a functor handling the
-        // projection of the facet to the one-forward plane and the
+        // projection of the facet to the reprojection plane and the
         // application of the camera translation.
-  
-        reproject_t rprj ( fct.tr_x , fct.tr_y , fct.tr_z ,
-                           basis2_v[0] ) ;
+
+        ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
+        trxyz = rot_plane[0] ( trxyz ) ;
+
+        reproject_t rprj ( trxyz , basis2_v[0] ) ;
 
         suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
 
@@ -1199,7 +1360,8 @@ void fuse ( int ninputs )
       {
         const auto & fct ( args.facet_spec_v[i] ) ; // shorthand
 
-        if ( fct.tr_x != 0.0  || fct.tr_y != 0.0 || fct.tr_z != 0.0 )
+        if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
+             || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
         {
           // if there are translation parameters for this facet,
           // proceed as in the single-facet case: suffix the stepper
@@ -1211,8 +1373,12 @@ void fuse ( int ninputs )
             ( basis1_v[i][0] , basis1_v[i][1] , basis1_v[i][2] ,
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
-          reproject_t rprj ( fct.tr_x , fct.tr_y , fct.tr_z ,
-                             basis2_v[i] ) ;
+
+          ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
+          trxyz = rot_plane[i] ( trxyz ) ;
+
+          reproject_t rprj ( trxyz , basis2_v[i] ) ;
+
           suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
           get_v.push_back ( sfg ) ;
         }
@@ -1274,7 +1440,8 @@ void fuse ( int ninputs )
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
 
-      if ( fct.tr_x != 0.0  || fct.tr_y != 0.0 || fct.tr_z != 0.0 )
+      if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
+           || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
       {
         deriv_stepper < float , 16 , STP , true > get_ray
             ( basis1_v[0][0] , basis1_v[0][1] , basis1_v[0][2] ,
@@ -1282,11 +1449,9 @@ void fuse ( int ninputs )
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
         twine_t < NCH , 16 > twenv ( env_v[0] , args.twine_spread ) ;
-
-        // work ( get_ray , twenv ) ;
-
-        reproject9_t rprj ( fct.tr_x , fct.tr_y , fct.tr_z ,
-                            basis2_v[0] ) ;
+        ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
+        trxyz = rot_plane[0] ( trxyz ) ;
+        reproject9_t rprj ( trxyz , basis2_v[0] ) ;
         suffixed_t < float , 9 , 2 , 16 > sfg ( get_ray , rprj ) ;
         work ( sfg , twenv ) ;
       }
@@ -1314,9 +1479,10 @@ void fuse ( int ninputs )
 
       for ( int i = 0 ; i < args.nfacets ; i++ )
       {
-          const auto & fct ( args.facet_spec_v[i] ) ;
+        const auto & fct ( args.facet_spec_v[i] ) ;
 
-        if ( fct.tr_x != 0.0  || fct.tr_y != 0.0 || fct.tr_z != 0.0 )
+        if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
+             || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
         {
           // we set up a deriv_stepper (specialized with the stepper
           // type given in template argument STP) which produces ninepacks
@@ -1330,8 +1496,10 @@ void fuse ( int ninputs )
 
           // and push it to the get_v vector
 
-          reproject9_t rprj ( fct.tr_x , fct.tr_y , fct.tr_z ,
-                              basis2_v[i] ) ;
+          ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
+          trxyz = rot_plane[i] ( trxyz ) ;
+
+          reproject9_t rprj ( trxyz , basis2_v[i] ) ;
 
           suffixed_t < float , 9 , 2 , 16 > sfg ( get_ray , rprj ) ;
 
