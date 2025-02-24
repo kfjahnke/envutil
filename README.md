@@ -296,7 +296,7 @@ envutil now only uses the 'facet' option to introduce one or more source
 images. So this option can occur more than once, but it has to be present
 at least once:
 
-## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL TRX TRY TRZ TPY TPP TPR G H
 ##     load oriented non-environment source image
 
 envutil will 'mount' images in various projections and hfov which may only
@@ -305,7 +305,15 @@ supported. hfov is in degrees - for cubemaps pass 90. The three values must
 be followed by the facet's orientation, given as three 'Euler angles' (yaw,
 pich, roll). If you want the facet to be mounted 'straight ahead', just pass
 0 0 0. All six values (image filename, projection, hfov, yaw, pitch, roll)
-must be passed after --facet, separated by space.
+must be passed after --facet, separated by space. I have added translation
+and shear parameters to the 'facet' option, which makes for a lengthy and
+cumbersome facet parameterization - this is okay in this feature branch,
+but eventually I'll move to a file-based parameterization. The translation
+and shear parameters are panotools-compatible, they relate like this:
+
+    TRX -> TrX    TRY -> TrY    TRZ -> TrZ
+    TPY -> Tpy    TPP -> Tpp    TPR -> unused in PTO
+    G   -> g      T   -> t
 
 You may pass more than one facet. Currently, where several facets provide
 visible content for a given viewing ray, envutil gives preference to one

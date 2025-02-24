@@ -153,7 +153,7 @@ bool facet_spec::init ( int argc , const char ** argv )
   convert_native_arguments(argc, (const char**)argv);
   ArgParse ap;
 
-  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL %F:TRX %F:TRY %F:TRZ %F:TPY %F:TPP %F:TPR %F:G %F:H", &filename , &projection_str, &hfov, &yaw, &pitch, &roll, &tr_x, &tr_y, &tr_z, &tp_y, &tp_p, &tp_r, &shear_g, &shear_t)
+  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL %F:TRX %F:TRY %F:TRZ %F:TPY %F:TPP %F:TPR %F:G %F:T", &filename , &projection_str, &hfov, &yaw, &pitch, &roll, &tr_x, &tr_y, &tr_z, &tp_y, &tp_p, &tp_r, &shear_g, &shear_t)
     .help("load oriented non-environment source image") ;
 
   if (ap.parse(argc, argv) < 0 ) {
