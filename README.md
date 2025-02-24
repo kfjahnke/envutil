@@ -199,7 +199,7 @@ envutil --help gives a summary of command line options:
       --output OUTPUT                output file name (mandatory)
 
     parameters for image input (one or several):
-      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL TRX TRY TRZ TPY TPP TPR G H
+      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL TRX TRY TRZ TPY TPP TPR G T
                                     load oriented source image
     important options which have defaults:
       --projection PRJ               projection used for the output image(s) (default: rectilinear)
@@ -296,12 +296,14 @@ envutil now only uses the 'facet' option to introduce one or more source
 images. So this option can occur more than once, but it has to be present
 at least once:
 
-## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL TRX TRY TRZ TPY TPP TPR G H
+## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL TRX TRY TRZ TPY TPP TPR G T
 ##     load oriented non-environment source image
 
 envutil will 'mount' images in various projections and hfov which may only
 cover a part of the full 360X180 degree environment. All projections are
-supported. hfov is in degrees - for cubemaps pass 90. The three values must
+supported. hfov is in degrees - for cubemaps and their 'biatan6' variant
+pass 90 (or whatever hfov your cube face images have) even though the whole
+cubemap does of course cover 360X180 degrees fov. The three values must
 be followed by the facet's orientation, given as three 'Euler angles' (yaw,
 pich, roll). If you want the facet to be mounted 'straight ahead', just pass
 0 0 0. All six values (image filename, projection, hfov, yaw, pitch, roll)
@@ -315,17 +317,25 @@ and shear parameters are panotools-compatible, they relate like this:
     TPY -> Tpy    TPP -> Tpp    TPR -> unused in PTO
     G   -> g      T   -> t
 
+Using a PTO-compatible lens correction polynomial is next on the list.
+
 You may pass more than one facet. Currently, where several facets provide
 visible content for a given viewing ray, envutil gives preference to one
 of them, following this scheme: For every candidate, the normalized 
-viewing ray's z (forward) component is isolated. The facet where it
-comes out largest 'wins' the contest - it's content is assigned to the
-viewing ray. The overall result resembles a voronoi diagram - facets with
+viewing ray's z (forward) component *in the facet's coordinate system* 
+is isolated. The facet where it comes out largest 'wins' the contest -
+it's content is assigned to the viewing ray.
+The overall result resembles a voronoi diagram - facets with
 transparency let other facets shine through oven if they don't 'win the
 contest'. You can't currently mix facets with and without transparency;
 all facets have to have the same channel count and transparency quality.
 If a facet has transparency and is situated in front of other facets,
 the facet(s) behind it will shine through.
+The facet prioritization is an interesting field. lux provides several
+different ways of prioritization, and I aim to do the same for envutil,
+to provide services like automatic preference to higher-res content
+or lux' shallow cone/steep pyramid weighting scheme. For now I use the
+simple voronoi criterion exclusively to establish the pixel pipeline.
 
 Why can the viewing ray's z component be used as 'quality' criterion?
 Because the 'steppers' which feed rays into the pixel pipeline produce
