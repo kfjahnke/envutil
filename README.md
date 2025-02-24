@@ -199,7 +199,7 @@ envutil --help gives a summary of command line options:
       --output OUTPUT                output file name (mandatory)
 
     parameters for image input (one or several):
-      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL TRX TRY TRZ TPY TPP TPR G H
                                     load oriented source image
     important options which have defaults:
       --projection PRJ               projection used for the output image(s) (default: rectilinear)
