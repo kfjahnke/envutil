@@ -62,8 +62,9 @@ using OIIO::TypeDesc ;
 using OIIO::ImageSpec ;
 
 // source_t provides pixel values from a mounted 2D manifold. The
-// incoming 2D coordinates are texture coordinates guaranteed to be
-// in the range of [0,1].
+// incoming 2D coordinates are pixel coordinates guaranteed to be
+// in the range of the spline:
+// ( -0.5 ... width - 0.5 ) , ( -0.5 ... height - 0.5 )
 
 template < std::size_t nchannels , std::size_t ncrd , std::size_t L >
 struct source_t
@@ -116,9 +117,9 @@ struct source_t
 
     if constexpr ( ncrd == 2 )
     {
-      crd[0] *= width ;
-      crd[1] *= height ;
-      crd -= .5f ;
+      // crd[0] *= width ;
+      // crd[1] *= height ;
+      // crd -= .5f ;
       bsp_ev.eval ( crd , px ) ;
     }
     else
@@ -168,11 +169,13 @@ struct mount_t
   using typename base_t::in_v ;
   using typename base_t::in_ele_v ;
   typedef typename in_ele_v::mask_type mask_t ;
+  typedef std::function < void ( crd_v & ) > planar_f ;
 
   extent_type extent ;
   crd_t center ;
   crd_t rgirth ;
   source_t < nchannels , 2 , L > inner ;
+  planar_f pf ;
 
   static_assert (    P == SPHERICAL
                   || P == CYLINDRICAL
@@ -180,14 +183,49 @@ struct mount_t
                   || P == STEREOGRAPHIC
                   || P == FISHEYE ) ;
 
+  static crd_t get_center
+    ( const source_t < nchannels , 2 , L > & src ,
+      const extent_type & ext )
+  {
+    // first get the center in model space coordinates
+
+    crd_t center { ( ext.x0 + ext.x1 ) * .5 ,
+                   ( ext.y0 + ext.y1 ) * .5 } ;
+
+    // then the distance from the left/upper margin of the extent
+
+    crd_t dc { center[0] - ext.x0 ,
+               center[1] - ext.y0 } ;
+
+    // now move to image coordinates
+
+    dc[0] *= src.width ;
+    dc[1] *= src.height ;
+    dc[0] -= .5 ;
+    dc[1] -= .5 ;
+
+    return dc ;
+  }
+                  
+  // calculate the scaling factor from model space to pixel units
+
+  static crd_t get_rgirth
+    ( const source_t < nchannels , 2 , L > & src ,
+      const extent_type & ext )
+  {
+    crd_t rgirth { src.width / ( ext.x1 - ext.x0 ) ,
+                   src.height / ( ext.y1 - ext.y0 ) } ;
+    return rgirth ;
+  }
+                            
   mount_t ( extent_type _extent ,
-            source_t < nchannels , 2 , L > & _inner )
+            source_t < nchannels , 2 , L > & _inner ,
+            const planar_f & _pf = [] ( crd_v & ) { } )
   : extent ( _extent ) ,
-    center { ( _extent.x0 + _extent.x1 ) * .5 ,
-             ( _extent.y0 + _extent.y1 ) * .5 } ,
-    rgirth { 1.0 / ( _extent.x1 - _extent.x0 ) ,
-             1.0 / ( _extent.y1 - _extent.y0 ) } ,
-    inner ( _inner )
+    center ( get_center ( _inner , _extent ) ) ,
+    rgirth ( get_rgirth ( _inner , _extent ) ) ,
+    inner ( _inner ) ,
+    pf ( _pf )
   { }
 
   // shade provides a pixel value for a 2D coordinate inside the
@@ -196,12 +234,11 @@ struct mount_t
 
   px_v shade ( crd_v crd )
   {
-    // move to texture coordinates. The eval code uses clamping,
-    // so absolute precision isn't required and multiplying with
-    // the reciprocal girth should be sufficient.
+    // move to image coordinates. The eval code uses clamping,
+    // so absolute precision isn't required.
 
-    crd[0] = ( crd[0] - extent.x0 ) * rgirth[0] ;
-    crd[1] = ( crd[1] - extent.y0 ) * rgirth[1] ;
+    crd[0] = ( crd[0] - extent.x0 ) * rgirth[0] - .5f ;
+    crd[1] = ( crd[1] - extent.y0 ) * rgirth[1] - .5f ;
 
     // use 'inner' to provide the pixel
 
@@ -220,22 +257,27 @@ struct mount_t
     if constexpr ( P == RECTILINEAR )
     {
       ray_to_rect_t<float,L>::eval ( crd3 , crd ) ;
+      pf ( crd ) ;
     }
     else if constexpr ( P == SPHERICAL )
     {
       ray_to_ll_t<float,L>::eval ( crd3 , crd ) ;
+      pf ( crd ) ;
     }
     else if constexpr ( P == CYLINDRICAL )
     {
       ray_to_cyl_t<float,L>::eval ( crd3 , crd ) ;
+      pf ( crd ) ;
     }
     else if constexpr ( P == STEREOGRAPHIC )
     {
       ray_to_ster_t<float,L>::eval ( crd3 , crd ) ;
+      pf ( crd ) ;
     }
     else if constexpr ( P == FISHEYE )
     {
       ray_to_fish_t<float,L>::eval ( crd3 , crd ) ;
+      pf ( crd ) ;
     }
   }
 
@@ -281,7 +323,7 @@ struct mount_t
   // eval puts it all together and yields pixel sets with 'misses' masked
   // out to zero.
 
-  void eval ( const in_v & ray , px_v & px )
+  mask_t eval ( const in_v & ray , px_v & px )
   {
     // the first three components have the 3D pickup coordinate itself
 
@@ -292,19 +334,11 @@ struct mount_t
     if ( none_of ( mask ) )
     {
       px = 0.0f ;
-      return ;
+      return mask ;
     }
 
-    // if constexpr ( ncrd == 3 )
-    // {
-      // this is easy: just call shade
+    px = shade ( crd ) ;
 
-      px = shade ( crd ) ;
-    // }
-    // else
-    // {
-    //   assert ( false ) ;
-    // }
     // mask out 'misses' to all-zero
 
     if ( ! all_of ( mask ) )
@@ -312,32 +346,7 @@ struct mount_t
       for ( int i = 0 ; i < nchannels ; i++ )
         px[i] ( ! mask ) = 0.0f ;
     }
-  }
 
-  // variant which returns a mask and does not paint misses 0000
-
-  mask_t mask_eval ( const in_v & ray , px_v & px )
-  {
-    // the first three components have the 3D pickup coordinate itself
-
-    crd3_v crd3 { ray[0] , ray[1] , ray[2] } ;
-    crd_v crd ;
-
-    auto mask = get_coordinate ( crd3 , crd ) ;
-
-    if ( any_of ( mask ) )
-    {
-      // if constexpr ( ncrd == 3 )
-      // {
-      //   // this is easy: just call shade
-
-        px = shade ( crd ) ;
-      // }
-      // else
-      // {
-      //   assert ( false ) ;
-      // }
-    }
     return mask ;
   }
 } ;
@@ -573,6 +582,7 @@ struct environment
   typedef typename in_ele_v::mask_type mask_t ;
 
   typedef zimt::xel_t < T , 2 > crd2_t ;
+  typedef simdized_type < crd2_t , 16 > crd_v ;
   typedef zimt::xel_t < T , 3 > ray_t ;
   typedef simdized_type < ray_t , 16 > ray_v ;
   typedef zimt::xel_t < U , C > px_t ;
@@ -682,11 +692,22 @@ struct environment
 
     // we fix the projection as a template argument to class mount_t.
 
+    typedef std::function < void ( crd_v & ) > planar_f ;
+    planar_f pf = [] ( crd_v & ) { } ;
+    if ( fct.shear_g != 0.0 || fct.shear_t != 0.0 )
+    {
+      pf = [=] ( crd_v & crd )
+        {
+          crd = {  crd[0] + ( crd[1] * fct.shear_g ) ,
+                   crd[1] + ( crd[0] * fct.shear_t ) } ;
+        } ;
+    }
+
     switch ( fct.projection )
     {
       case RECTILINEAR:
       {
-        mount_t < C , RECTILINEAR , 16 > mnt ( extent , src ) ;
+        mount_t < C , RECTILINEAR , 16 > mnt ( extent , src , pf ) ;
         env = mnt ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
@@ -694,7 +715,7 @@ struct environment
       }
       case SPHERICAL:
       {
-        mount_t < C , SPHERICAL , 16 > mnt ( extent , src ) ;
+        mount_t < C , SPHERICAL , 16 > mnt ( extent , src , pf ) ;
         env = mnt ;
         if ( full_environment )
           get_mask = []( const ray_v & ray )
@@ -706,7 +727,7 @@ struct environment
       }
       case CYLINDRICAL:
       {
-        mount_t < C , CYLINDRICAL , 16 > mnt ( extent , src ) ;
+        mount_t < C , CYLINDRICAL , 16 > mnt ( extent , src , pf ) ;
         env = mnt ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
@@ -714,7 +735,7 @@ struct environment
       }
       case STEREOGRAPHIC:
       {
-        mount_t < C , STEREOGRAPHIC , 16 > mnt ( extent , src ) ;
+        mount_t < C , STEREOGRAPHIC , 16 > mnt ( extent , src , pf ) ;
         env = mnt ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
@@ -722,7 +743,7 @@ struct environment
       }
       case FISHEYE:
       {
-        mount_t < C , FISHEYE , 16 > mnt ( extent , src ) ;
+        mount_t < C , FISHEYE , 16 > mnt ( extent , src , pf ) ;
         env = mnt ;
         if ( fct.hfov >= M_PI * 2.0 )
           get_mask = []( const ray_v & ray )
@@ -742,86 +763,11 @@ struct environment
     }
   }
 
-  // environment()
-  // {
-  //   // this code path is for 'true' environments which provide pixel
-  //   // data for the entire 360X180 degrees. For now, we accept either
-  //   // a 2:1 full equirect or a 1:6 vertically stacked cubemap.
-  //   // Here, we process args.input etc. - as opposed to a facet_spec
-  //   // object, which is used in the previous c'tor overload.
-  // 
-  //   auto & w ( args.env_width ) ;
-  //   auto & h ( args.env_height ) ;
-  // 
-  //   shape_type shape { w , h } ;
-  // 
-  //   if ( w == 2 * h )
-  //   {
-  //     if ( args.verbose )
-  //       std::cout << "environment has 2:1 aspect ratio, assuming latlon"
-  //                 << std::endl ;
-  // 
-  //     p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
-  //                                 { zimt::PERIODIC , zimt::REFLECT } ) ) ;
-  //     auto inp = ImageInput::open ( args.input ) ;
-  //     bool success = inp->read_image (
-  //       0 , 0 , 0 , C ,
-  //       TypeDesc::FLOAT ,
-  //       p_bspl->core.data() ,
-  //       sizeof ( in_px_t ) ,
-  //       p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
-  //     assert ( success ) ;
-  //     inp->close() ;
-  // 
-  //     p_bspl->spline_degree = args.prefilter_degree ;
-  //     spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
-  //     p_bspl->spline_degree = args.spline_degree ;
-  //     auto bsp_ev = zimt::make_evaluator < spl_t , float , LANES > ( *p_bspl ) ;
-  // 
-  //     env = ray_to_ll_t() + ll_to_px_t ( h ) + bsp_ev ;
-  //   }
-  //   else if ( h == 6 * w )
-  //   {
-  //     if ( args.verbose )
-  //     {
-  //       std::cout << "environment has 1:6 aspect ratio, assuming cubemap"
-  //                 << std::endl ;
-  //     }
-  //     if ( args.cbm_prj == CUBEMAP )
-  //     {
-  //       env = cubemap_t < C , CUBEMAP > () ;
-  //     }
-  //     else
-  //     {
-  //       env = cubemap_t < C , BIATAN6 > () ;
-  //     }
-  //   }
-  //   else
-  //   {
-  //     std::cerr << "environment doesn't have 2:1 or 1:6 aspect ratio"
-  //               << std::endl ;
-  // 
-  //     assert ( false ) ;
-  //   }
-  // 
-  //   // for full sphericals and cubemaps, get_mask always returns
-  //   // an all-true mask - if it's called at all.
-  // 
-  //   get_mask = [] ( const in_v & crd3 ) { return mask_t ( true ) ; } ;
-  // }
-
   // eval simply delegates to 'env'
 
   void eval ( const in_v & in , out_v & out )
   {
     env.eval ( in , out ) ;
-  }
-
-  mask_t masked_eval ( const in_v & in , out_v & out )
-  {
-    mask_t mask = get_mask() ;
-    env.eval ( in , out ) ;
-    return mask ;
   }
 
 } ;

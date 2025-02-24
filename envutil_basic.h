@@ -363,6 +363,7 @@ struct facet_spec
   std::size_t nchannels ;
   double tr_x , tr_y , tr_z ;
   double tp_y , tp_p , tp_r ;
+  double shear_g , shear_t ;
 
   bool init ( int argc , const char ** argv ) ;
 } ;
@@ -426,6 +427,8 @@ struct arguments
   std::vector < std::string > facet_tpy_v ;
   std::vector < std::string > facet_tpp_v ;
   std::vector < std::string > facet_tpr_v ;
+  std::vector < std::string > facet_shear_g_v ;
+  std::vector < std::string > facet_shear_t_v ;
   std::vector < facet_spec > facet_spec_v ;
 } ;
 

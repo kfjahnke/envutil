@@ -1140,7 +1140,9 @@ void fuse ( int ninputs )
 
     auto key =   fct.filename 
                + projection_name [ fct.projection ]
-               + std::to_string ( fct.hfov ) ;
+               + std::to_string ( fct.hfov )
+               + "." + std::to_string ( fct.shear_g )
+               + "." + std::to_string ( fct.shear_t ) ;
 
     auto it = content_map.find ( key ) ;
     if ( it == content_map.end() )

@@ -153,7 +153,7 @@ bool facet_spec::init ( int argc , const char ** argv )
   convert_native_arguments(argc, (const char**)argv);
   ArgParse ap;
 
-  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL %F:TRX %F:TRY %F:TRZ %F:TPY %F:TPP %F:TPR", &filename , &projection_str, &hfov, &yaw, &pitch, &roll, &tr_x, &tr_y, &tr_z, &tp_y, &tp_p, &tp_r)
+  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL %F:TRX %F:TRY %F:TRZ %F:TPY %F:TPP %F:TPR %F:G %F:H", &filename , &projection_str, &hfov, &yaw, &pitch, &roll, &tr_x, &tr_y, &tr_z, &tp_y, &tp_p, &tp_r, &shear_g, &shear_t)
     .help("load oriented non-environment source image") ;
 
   if (ap.parse(argc, argv) < 0 ) {
@@ -534,10 +534,11 @@ void arguments::init ( int argc , const char ** argv )
 
   ap.separator("  parameters for mounted (facet) image input:");
   
-  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL %L:TRX %L:TRY %L:TRZ %L:TPY %L:TPP %L:TPR",
+  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL %L:TRX %L:TRY %L:TRZ %L:TPY %L:TPP %L:TPR %L:G %L:H",
                   &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v,
                   &facet_trx_v, &facet_try_v, &facet_trz_v ,
-                  &facet_tpy_v, &facet_tpp_v, &facet_tpr_v )
+                  &facet_tpy_v, &facet_tpp_v, &facet_tpr_v ,
+                  &facet_shear_g_v , & facet_shear_t_v )
     .help("load oriented non-environment source image") ;
 
   // TODO:
@@ -687,7 +688,7 @@ void arguments::init ( int argc , const char ** argv )
   facet_spec fspec ;
   for ( int i = 0 ; i < nfacets ; i++ )
   {
-    const char * spec[14] ;
+    const char * spec[16] ;
     spec [ 0 ] = "facet_spec" ;
     spec [ 1 ] = "--facet" ;
     spec [ 2 ] = facet_name_v[i].c_str() ;
@@ -702,7 +703,9 @@ void arguments::init ( int argc , const char ** argv )
     spec [ 11 ] = facet_tpy_v[i].c_str() ;
     spec [ 12 ] = facet_tpp_v[i].c_str() ;
     spec [ 13 ] = facet_tpr_v[i].c_str() ;
-    bool success = fspec.init ( 14 , spec ) ;
+    spec [ 14 ] = facet_shear_g_v[i].c_str() ;
+    spec [ 15 ] = facet_shear_t_v[i].c_str() ;
+    bool success = fspec.init ( 16 , spec ) ;
     if ( ! success )
     {
       std::cerr << "parse of facet argument with index " << i
@@ -720,6 +723,15 @@ void arguments::init ( int argc , const char ** argv )
     fspec.step = get_step ( fspec.projection , fspec.width ,
                             fspec.height , fspec.hfov ) ;
 
+    // shear parameters are given in pixel units in PTO. to calculate
+    // the shear efficiently, we move to texture units - then we can
+    // use the straiǵhtforward shear function given in panotools math.c:
+
+    //   *x_src  = x_dest + var0 * y_dest;
+    //   *y_src  = y_dest + var1 * x_dest;
+
+    fspec.shear_g *= 1.0 / fspec.height ;
+    fspec.shear_t *= 1.0 / fspec.width ;
     facet_spec_v.push_back ( fspec ) ;
   }
   std::size_t nch = facet_spec_v[0].nchannels ;
@@ -732,16 +744,19 @@ void arguments::init ( int argc , const char ** argv )
                 << projection_name[m.projection]
                 << " " << m.width << "*" << m.height << "#" << m.nchannels
                 << " hfov: " << m.hfov * 180.0 / M_PI
-                << " step: " << m.step
-                << " y:" << m.yaw * 180.0 / M_PI 
+                << " step: " << m.step << std::endl
+                << "orientation  y:" << m.yaw * 180.0 / M_PI 
                 << " p:" << m.pitch * 180.0 / M_PI
                 << " r:" << m.roll * 180.0 / M_PI << std::endl
-                << "tr_x:" << m.tr_x * 180.0 / M_PI 
+                << "translation tr_x:" << m.tr_x * 180.0 / M_PI 
                 << " tr_y:" << m.tr_y * 180.0 / M_PI
-                << " tr_z:" << m.tr_z * 180.0 / M_PI
-                << " tp_y:" << m.tp_y * 180.0 / M_PI 
+                << " tr_z:" << m.tr_z * 180.0 / M_PI << std::endl
+                << "reprojection plane tp_y:" << m.tp_y * 180.0 / M_PI 
                 << " tp_p:" << m.tp_p * 180.0 / M_PI
-                << " tp_r:" << m.tp_r * 180.0 / M_PI << std::endl ;
+                << " tp_r:" << m.tp_r * 180.0 / M_PI << std::endl
+                << "shear g: " << m.shear_g
+                << " shear t: " << m.shear_t << " (in texture units)"
+                << std::endl ;
   }
   nchannels = nch ;
 
