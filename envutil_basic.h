@@ -384,6 +384,7 @@ struct arguments
   double yaw , pitch , roll ;
   double x0 , x1 , y0 , y1 ;
  
+  std::string pto_file ;
   std::string seqfile ;
   std::string codec ;
   float mbps ;

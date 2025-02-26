@@ -111,6 +111,7 @@
 // _get_dispatch in the nested namespace.
 
 #include "envutil_dispatch.h"
+#include "pto.h"
 
 #ifndef MULTI_SIMD_ISA
 
@@ -534,6 +535,10 @@ void arguments::init ( int argc , const char ** argv )
 
   ap.separator("  parameters for mounted (facet) image input:");
   
+  ap.arg("--pto PTOFILE")
+    .help("panotools script in higin PTO dialect (optional)")
+    .metavar("PTOFILE");
+
   ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL %L:TRX %L:TRY %L:TRZ %L:TPY %L:TPP %L:TPR %L:G %L:H",
                   &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v,
                   &facet_trx_v, &facet_try_v, &facet_trz_v ,
@@ -561,6 +566,7 @@ void arguments::init ( int argc , const char ** argv )
 
   output = ap["output"].as_string ( "" ) ;
   seqfile = ap["seqfile"].as_string ( "" ) ;
+  pto_file = ap["pto"].as_string ( "" ) ;
   twf_file = ap["twf_file"].as_string ( "" ) ;
   // fct_file = ap["fct_file"].as_string ( "" ) ;
   codec = ap["codec"].as_string ( "libx265" ) ; 
@@ -603,7 +609,8 @@ void arguments::init ( int argc , const char ** argv )
   }
   projection = projection_t ( prj ) ;
 
-  assert ( args.facet_name_v.size() > 0 ) ;
+  if ( pto_file == std::string() )
+    assert ( args.facet_name_v.size() > 0 ) ;
   assert ( output != std::string() ) ;
 
   if ( width == 0 )
@@ -684,7 +691,7 @@ void arguments::init ( int argc , const char ** argv )
   }
 
   nfacets = facet_name_v.size() ;
-  assert ( nfacets ) ;
+  // assert ( nfacets ) ;
   facet_spec fspec ;
   for ( int i = 0 ; i < nfacets ; i++ )
   {
@@ -734,6 +741,76 @@ void arguments::init ( int argc , const char ** argv )
     fspec.shear_t *= 1.0 / fspec.width ;
     facet_spec_v.push_back ( fspec ) ;
   }
+  std::cout << "******** PTO file " << pto_file << std::endl ;
+  if ( pto_file != std::string() )
+  {
+    pto_parser_type parser ;
+    auto success = parser.read_pto_file ( pto_file ) ;
+    // if ( success )
+    //   parser.walk() ;
+    auto & i_line_list ( parser.line_group [ "i" ] ) ;
+    for ( auto & i_line : i_line_list )
+    {
+      auto & dir ( i_line.field_map ) ;
+      facet_spec f ;
+      f.facet_no = nfacets++ ;
+      f.filename = dir [ "n" ] ;
+      if ( f.filename [ 0 ] == '"' )
+        f.filename = f.filename.substr ( 1 , f.filename.size() - 2 ) ;
+      int prj = std::stoi ( dir [ "f" ] ) ;
+      if ( prj == 0 )
+        f.projection = RECTILINEAR ;
+      else if ( prj == 1 )
+        f.projection = CYLINDRICAL ;
+      else if ( prj == 2 || prj == 3 ) // TODO: elliptic crop f. 2
+        f.projection = FISHEYE ;
+      else if ( prj == 4 )
+         f.projection = SPHERICAL ;
+      else if ( prj == 10 )
+        f.projection = STEREOGRAPHIC ;
+      else
+      {
+        std::cerr << "can't handle PTO projection code "
+                  << prj << " in i-line" << std::endl ;
+        exit ( -1 ) ;
+      }
+
+      f.projection_str = projection_name [ f.projection ] ;
+      f.hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
+
+      auto inp = ImageInput::open ( f.filename ) ;
+
+      if ( ! inp )
+      {
+        std::cerr << "failed to open facet image '"
+                  << f.filename << "'" << std::endl ;
+        exit ( -1 ) ;
+      }
+
+      const ImageSpec &spec = inp->spec() ;
+
+      f.width = spec.width ;
+      f.height = spec.height ;
+      f.nchannels = spec.nchannels ;
+      inp->close() ;
+
+      f.yaw = ( M_PI / 180.0 ) * std::stod ( dir [ "y" ] ) ;
+      f.pitch = ( M_PI / 180.0 ) * std::stod ( dir [ "p" ] ) ;
+      f.roll = ( M_PI / 180.0 ) * std::stod ( dir [ "r" ] ) ;
+      f.tr_x = std::stod ( dir [ "TrX" ] ) ;
+      f.tr_y = std::stod ( dir [ "TrY" ] ) ;
+      f.tr_z = std::stod ( dir [ "TrZ" ] ) ;
+      f.tp_y = ( M_PI / 180.0 ) * std::stod ( dir [ "Tpy" ] ) ;
+      f.tp_p = ( M_PI / 180.0 ) * std::stod ( dir [ "Tpp" ] ) ;
+      f.tp_r = 0.0 ;
+      f.shear_g = std::stod ( dir [ "g" ] ) / f.height ;
+      f.shear_t = std::stod ( dir [ "t" ] ) / f.width ;
+      f.step = get_step ( f.projection , f.width ,
+                          f.height , f.hfov ) ;
+      facet_spec_v.push_back ( f ) ;
+    }
+  }
+  assert ( nfacets ) ;
   std::size_t nch = facet_spec_v[0].nchannels ;
   for ( auto & m : facet_spec_v )
   {
@@ -748,9 +825,9 @@ void arguments::init ( int argc , const char ** argv )
                 << "orientation  y:" << m.yaw * 180.0 / M_PI 
                 << " p:" << m.pitch * 180.0 / M_PI
                 << " r:" << m.roll * 180.0 / M_PI << std::endl
-                << "translation tr_x:" << m.tr_x * 180.0 / M_PI 
-                << " tr_y:" << m.tr_y * 180.0 / M_PI
-                << " tr_z:" << m.tr_z * 180.0 / M_PI << std::endl
+                << "translation tr_x:" << m.tr_x 
+                << " tr_y:" << m.tr_y
+                << " tr_z:" << m.tr_z << std::endl
                 << "reprojection plane tp_y:" << m.tp_y * 180.0 / M_PI 
                 << " tp_p:" << m.tp_p * 180.0 / M_PI
                 << " tp_r:" << m.tp_r * 180.0 / M_PI << std::endl
