@@ -693,14 +693,81 @@ struct environment
     // we fix the projection as a template argument to class mount_t.
 
     typedef std::function < void ( crd_v & ) > planar_f ;
-    planar_f pf = [] ( crd_v & ) { } ;
+
+    bool have_shear = false ;
+    planar_f pf_shear = [] ( crd_v & ) { } ;
     if ( fct.shear_g != 0.0 || fct.shear_t != 0.0 )
     {
-      pf = [=] ( crd_v & crd )
+      have_shear = true ;
+      pf_shear = [=] ( crd_v & crd )
+      {
+        crd = {  crd[0] + ( crd[1] * fct.shear_g ) ,
+                 crd[1] + ( crd[0] * fct.shear_t ) } ;
+      } ;
+    }
+
+    bool have_lcp = false ;
+    planar_f pf_lcp = [] ( crd_v & ) { } ;
+    if ( fct.lens_correction_active )
+    {
+      have_lcp = true ;
+      pf_lcp = [=] ( crd_v & crd )
+      {
+        auto x = crd[0] ;
+        auto y = crd[1] ;
+
+        if ( fct.shift_only )
         {
-          crd = {  crd[0] + ( crd[1] * fct.shear_g ) ,
-                   crd[1] + ( crd[0] * fct.shear_t ) } ;
+          // add h and v to yield the output
+
+          crd[0] = x + fct.h ;
+          crd[1] = y + fct.v ;
+        }
+        else
+        {
+          // r is the distance to the center defined by (h,v)
+
+          auto r = sqrt ( x * x + y * y ) ;
+
+          // we cap the radius to avoid 'warp-back'
+
+          r ( r > fct.cap_radius ) = fct.cap_radius ;
+
+          // this is scaled to multiples of the reference radius
+
+          r /= float ( fct.s ) ;
+
+          // now we can calculate the scaling factor
+
+          auto f =   fct.a * r * r * r
+                   + fct.b * r * r
+                   + fct.c * r
+                   + fct.d ;
+
+          // apply f to x and y, and add h and v to yield the output
+
+          crd[0] = x * f + fct.h ;
+          crd[1] = y * f + fct.v ;
+        }
+      } ;
+    }
+
+    planar_f pf = pf_shear ;
+
+    if ( have_lcp )
+    {
+      if ( have_shear )
+      {
+        pf = [=] ( crd_v & crd )
+        {
+          pf_lcp ( crd ) ;
+          pf_shear ( crd ) ;
         } ;
+      }
+      else
+      {
+        pf = pf_lcp ;
+      }
     }
 
     switch ( fct.projection )

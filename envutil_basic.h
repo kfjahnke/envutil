@@ -356,6 +356,7 @@ struct facet_spec
   std::string projection_str ;
   projection_t projection ;
   double hfov ;
+  extent_type extent ;
   double step ;
   double yaw , pitch , roll ;
   std::size_t width ;
@@ -364,8 +365,55 @@ struct facet_spec
   double tr_x , tr_y , tr_z ;
   double tp_y , tp_p , tp_r ;
   double shear_g , shear_t ;
+  double s, a, b, c, d, h, v, cap_radius ;
+  bool lens_correction_active ;
+  bool shift_only ;
 
   bool init ( int argc , const char ** argv ) ;
+
+  // TODO scale d, e
+
+  void process_lc()
+  {
+    shift_only
+      = ( a == 0.0 && b == 0.0 && c == 0.0 ) ;
+
+    lens_correction_active
+      = ( a != 0.0 || b != 0.0 || c != 0.0 || h != 0.0 || v != 0.0 ) ;
+
+    if ( ! lens_correction_active )
+    {
+      s = 0.0 ;
+      d = 1.0 ;
+      return ;
+    }
+
+    // reference radius in PTO is half the extent of the smaller edge
+
+    double dv = fabs ( extent.y1 - extent.y0 ) / 2.0 ;
+    double dh = fabs ( extent.x1 - extent.x0 ) / 2.0 ;
+
+    s = ( dh < dv ) ? dh : dv ;
+
+    // set d so that the image is not scaled
+
+    d = 1.0 - ( a + b + c ) ;
+
+    // the PTO d and e parameters are in pixels, h and v in unit radii
+
+    double factor = fabs ( extent.x1 - extent.x0 ) / width ;
+    h *= factor ;
+    v *= factor ;
+
+    auto d1 = extent.x0 * extent.x0 + extent.y0 + extent.y0 ;
+    auto d2 = extent.x1 * extent.x1 + extent.y0 + extent.y0 ;
+    auto d3 = extent.x0 * extent.x0 + extent.y1 + extent.y1 ;
+    auto d4 = extent.x1 * extent.x1 + extent.y1 + extent.y1 ;
+    d1 = std::max ( d1 , d2 ) ;
+    d1 = std::max ( d1 , d3 ) ;
+    d1 = std::max ( d1 , d4 ) ;
+    cap_radius = sqrt ( d1 ) ;
+  }
 } ;
 
 struct arguments

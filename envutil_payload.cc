@@ -978,7 +978,7 @@ struct reproject_t
     I in ;
     in[0] = ( _in[0] / _in[2] ) - tr_x ;
     in[1] = ( _in[1] / _in[2] ) - tr_y ;
-    in[2] = 1.0f + tr_z ;
+    in[2] = 1.0f - tr_z ;
     out = in[0] * bs[0] + in[1] * bs[1] + in[2] * bs[2] ;
     if ( any_of ( mask ) )
     {
@@ -1041,13 +1041,13 @@ struct reproject9_t
     I in ;
     in[0] = ( _in[0] / _in[2] ) - tr_x ;
     in[1] = ( _in[1] / _in[2] ) - tr_y ;
-    in[2] = 1.0f + tr_z ;
+    in[2] = 1.0f - tr_z ;
     in[3] = ( _in[3] / _in[5] ) - tr_x ;
     in[4] = ( _in[4] / _in[5] ) - tr_y ;
-    in[5] = 1.0f + tr_z ;
+    in[5] = 1.0f - tr_z ;
     in[6] = ( _in[6] / _in[8] ) - tr_x ;
     in[7] = ( _in[7] / _in[8] ) - tr_y ;
-    in[8] = 1.0f + tr_z ;
+    in[8] = 1.0f - tr_z ;
     auto help1 = in[0] * bs[0] + in[1] * bs[1] + in[2] * bs[2] ;
     auto help2 = in[3] * bs[0] + in[4] * bs[1] + in[5] * bs[2] ;
     auto help3 = in[6] * bs[0] + in[7] * bs[1] + in[8] * bs[2] ;

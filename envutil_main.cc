@@ -748,6 +748,19 @@ void arguments::init ( int argc , const char ** argv )
     auto success = parser.read_pto_file ( pto_file ) ;
     // if ( success )
     //   parser.walk() ;
+
+    // instead of using straight std::stod on the values in the
+    // i-line, we use the lambda 'glean', which returns zero if
+    // the value is not set at all. One example is Tpp/Tpy,
+    // which isn't present in older panoramas.
+
+    auto glean = [] ( const std::string & str ) -> double
+    {
+      if ( str == std::string() )
+        return 0.0 ;
+      return std::stod ( str ) ;
+    } ;
+      
     auto & i_line_list ( parser.line_group [ "i" ] ) ;
     for ( auto & i_line : i_line_list )
     {
@@ -794,19 +807,27 @@ void arguments::init ( int argc , const char ** argv )
       f.nchannels = spec.nchannels ;
       inp->close() ;
 
-      f.yaw = ( M_PI / 180.0 ) * std::stod ( dir [ "y" ] ) ;
-      f.pitch = ( M_PI / 180.0 ) * std::stod ( dir [ "p" ] ) ;
-      f.roll = ( M_PI / 180.0 ) * std::stod ( dir [ "r" ] ) ;
-      f.tr_x = std::stod ( dir [ "TrX" ] ) ;
-      f.tr_y = std::stod ( dir [ "TrY" ] ) ;
-      f.tr_z = std::stod ( dir [ "TrZ" ] ) ;
-      f.tp_y = ( M_PI / 180.0 ) * std::stod ( dir [ "Tpy" ] ) ;
-      f.tp_p = ( M_PI / 180.0 ) * std::stod ( dir [ "Tpp" ] ) ;
+      f.yaw = ( M_PI / 180.0 ) * glean ( dir [ "y" ] ) ;
+      f.pitch = ( M_PI / 180.0 ) * glean ( dir [ "p" ] ) ;
+      f.roll = ( M_PI / 180.0 ) * glean ( dir [ "r" ] ) ;
+      f.tr_x = glean ( dir [ "TrX" ] ) ;
+      f.tr_y = glean ( dir [ "TrY" ] ) ;
+      f.tr_z = - glean ( dir [ "TrZ" ] ) ;
+      f.tp_y = ( M_PI / 180.0 ) * glean ( dir [ "Tpy" ] ) ;
+      f.tp_p = ( M_PI / 180.0 ) * glean ( dir [ "Tpp" ] ) ;
       f.tp_r = 0.0 ;
-      f.shear_g = std::stod ( dir [ "g" ] ) / f.height ;
-      f.shear_t = std::stod ( dir [ "t" ] ) / f.width ;
+      f.shear_g = glean ( dir [ "g" ] ) / f.height ;
+      f.shear_t = glean ( dir [ "t" ] ) / f.width ;
       f.step = get_step ( f.projection , f.width ,
                           f.height , f.hfov ) ;
+      f.extent = get_extent ( f.projection , f.width ,
+                              f.height , f.hfov ) ;
+      f.a = glean ( dir [ "a" ] ) ;
+      f.b = glean ( dir [ "b" ] ) ;
+      f.c = glean ( dir [ "c" ] ) ;
+      f.h = glean ( dir [ "d" ] ) ;
+      f.v = glean ( dir [ "e" ] ) ;
+      f.process_lc() ;
       facet_spec_v.push_back ( f ) ;
     }
   }

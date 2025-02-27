@@ -2,7 +2,7 @@
 /*                                                                      */
 /*   utility to convert and extract images from 360 degree environments */
 /*                                                                      */
-/*            Copyright 2024 by Kay F. Jahnke                           */
+/*            Copyright 2025 by Kay F. Jahnke                           */
 /*                                                                      */
 /*    The git repository for this software is at                        */
 /*                                                                      */
@@ -43,6 +43,17 @@
 // are comments, starting with '#', or empty, or don't start with a letter.
 // the fields always start with one or several letters and are followed
 // immediately by a value, which may be in quotes for string values.
+// The result of the parse holds std::string values for all parameters;
+// gleaning values (most are real numbers) from the parse tree is left
+// to the caller. This makes for a lean implementation with room for
+// extensions to the PTO format - many years ago, when I wrote a  parser
+// for PTO in python, I playfully called the 'language' in the PTO file
+// 'Linear P'. In retrospect I think this was a bit mean - the format is
+// compact and 'does the trick', and it's sure easy to parse.
+// The implementation is naive isofar as it's not shielded against
+// malformed input, but since PTO is usually software-generated, this
+// should not be too much of an issue. I am working with hugin's dialect
+// of PTO - other dialects may not parse right with the code given here.
 
 #include <map>
 #include <vector>
@@ -132,10 +143,8 @@ struct pto_parser_type
           auto source_line = line_group [ "i" ] [ refers_to ] ;
           field_value = source_line.field_map [ field_name ] ;
         }
-        pto_line.field_map [ field_name ] = field_value ;
       }
-      else
-        pto_line.field_map [ field_name ] = field_value ;
+      pto_line.field_map [ field_name ] = field_value ;
     }
 
     auto it = line_group.find ( pto_line.head ) ;
