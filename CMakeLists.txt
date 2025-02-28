@@ -108,7 +108,7 @@ endif()
 # assuming we have detected the architecture, we list ISAs
 
 if ( x86_64 )
-  list ( APPEND isa_l SSE2 SSSE3 SSE4 AVX2 AVX3 AVX3_ZEN4 AVX3_SPR )
+  list ( APPEND isa_l SSE2 SSSE3 SSE4 AVX2 AVX3 AVX3_ZEN4 AVX3_SPR AVX3_DL )
 # the NEON_BF16 ISA seems not to be built by default. We've used this
 # code to build envutil on a macBook pro with M1 processor:
 elseif ( arm64 )

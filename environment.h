@@ -631,19 +631,14 @@ struct environment
   typedef std::function < mask_t ( const in_v & ) > mask_f ;
   mask_f get_mask ;
 
-  // This c'tor overload is for environment objects made from facets.
+  // create an 'environment' object from a facet specification
   // Some facets may cover the full 360X180 degrees, but most will
   // only cover a part. The std::function get_mask, above, will
   // produce a mask which indicates which of the gleaned pixels
   // originate from the facet image - for facets with 'full cover',
-  // it will return an all_true mask unconditionally, and we hope
+  // it will return an all-true mask unconditionally, and we hope
   // that the optimizer can use this information as well to
   // streamline processing for such facets.
-  // Using 'fully covered' environments as facets offers more
-  // options for parameterization, because the environments can be
-  // oriented (using yaw, pitch and roll in the facet specification),
-  // whereas environments made with the next c'tor down are always
-  // mounted with zero Euler angles.
 
   environment ( const facet_spec & fct )
   {
@@ -681,7 +676,13 @@ struct environment
     p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
                                 { bc0 , zimt::REFLECT } ) ) ;
 
-    auto inp = ImageInput::open ( fct.filename ) ;
+    // currently building with raw::user_flip set to zero, to load
+    // raw images in memory order without EXIF rotation. This only
+    // affects raw images.
+
+    ImageSpec config;
+    config [ "raw:user_flip" ] = 0 ;
+    auto inp = ImageInput::open ( fct.filename , &config ) ;
 
     bool success = inp->read_image (
       0 , 0 , 0 , C ,

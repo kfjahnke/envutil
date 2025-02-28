@@ -424,9 +424,11 @@ struct voronoi_syn
 
     // do any of the rays hit the facet? then update 'next_best',
     // which, at this point, is still -1, indicating 'all misses'.
-    // This can't be the case any more. Also update max_z:
-    // overwrite the initial 'impossible' value with a real z
-    // value where the rays hit the facet.
+    // This can't be the case any more. Where rays hit this first
+    // facets (indicated by 'valid'), we now have a champion, which
+    // we save in champion_v. We also update max_z: we overwrite
+    // the initial 'impossibly small' value with a real z value
+    // where the rays hit the facet.
 
     if ( any_of ( valid ) )
     {
@@ -508,7 +510,9 @@ struct voronoi_syn
       // first. We refrain from testing for occupants with value
       // -1, because forming a mask and performing a masked assignment
       // is more costly then clearing trg. this is also the 'worst
-      // case' - preformance-wise - where the rays hit several facets. 
+      // case' - preformance-wise - where the rays hit several facets.
+      // Luckily, this is also usually quite rare - it only occurs
+      // where facets collide or near facet edges.
 
       trg = 0.0f ;
 
@@ -675,7 +679,7 @@ struct voronoi_syn_plus
 
     max_z[0] = std::numeric_limits<float>::lowest() ;
 
-    // Initailly, we have no valid 'champions'
+    // Initially, we have no valid 'champions'
 
     champion_v[0] = -1 ;
 
@@ -1571,7 +1575,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-#define NARROW_SCOPE
+// #define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate

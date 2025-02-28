@@ -186,7 +186,13 @@ bool facet_spec::init ( int argc , const char ** argv )
 
   // all seems well so far, let's open the image
 
-  auto inp = ImageInput::open ( filename ) ;
+  // currently building with raw::user_flip set to zero, to load
+  // raw images in memory order without EXIF rotation. This only
+  // affects raw images.
+
+  ImageSpec config;
+  config [ "raw:user_flip" ] = 0 ;
+  auto inp = ImageInput::open ( filename , &config ) ;
 
   if ( ! inp )
   {
@@ -773,7 +779,13 @@ void arguments::init ( int argc , const char ** argv )
       f.projection_str = projection_name [ f.projection ] ;
       f.hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
 
-      auto inp = ImageInput::open ( f.filename ) ;
+      // currently building with raw::user_flip set to zero, to load
+      // raw images in memory order without EXIF rotation. This only
+      // affects raw images.
+
+      ImageSpec config;
+      config [ "raw:user_flip" ] = 0 ;
+      auto inp = ImageInput::open ( f.filename , &config ) ;
 
       if ( ! inp )
       {
