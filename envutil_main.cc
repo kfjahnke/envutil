@@ -154,7 +154,7 @@ bool facet_spec::init ( int argc , const char ** argv )
   convert_native_arguments(argc, (const char**)argv);
   ArgParse ap;
 
-  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL %F:TRX %F:TRY %F:TRZ %F:TPY %F:TPP %F:TPR %F:G %F:T", &filename , &projection_str, &hfov, &yaw, &pitch, &roll, &tr_x, &tr_y, &tr_z, &tp_y, &tp_p, &tp_r, &shear_g, &shear_t)
+  ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL", &filename , &projection_str, &hfov, &yaw, &pitch, &roll)
     .help("load oriented non-environment source image") ;
 
   if (ap.parse(argc, argv) < 0 ) {
@@ -539,11 +539,8 @@ void arguments::init ( int argc , const char ** argv )
     .help("panotools script in higin PTO dialect (optional)")
     .metavar("PTOFILE");
 
-  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL %L:TRX %L:TRY %L:TRZ %L:TPY %L:TPP %L:TPR %L:G %L:H",
-                  &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v,
-                  &facet_trx_v, &facet_try_v, &facet_trz_v ,
-                  &facet_tpy_v, &facet_tpp_v, &facet_tpr_v ,
-                  &facet_shear_g_v , & facet_shear_t_v )
+  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL",
+                  &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v )
     .help("load oriented non-environment source image") ;
 
   // TODO:
@@ -695,7 +692,7 @@ void arguments::init ( int argc , const char ** argv )
   facet_spec fspec ;
   for ( int i = 0 ; i < nfacets ; i++ )
   {
-    const char * spec[16] ;
+    const char * spec[8] ;
     spec [ 0 ] = "facet_spec" ;
     spec [ 1 ] = "--facet" ;
     spec [ 2 ] = facet_name_v[i].c_str() ;
@@ -704,15 +701,7 @@ void arguments::init ( int argc , const char ** argv )
     spec [ 5 ] = facet_yaw_v[i].c_str() ;
     spec [ 6 ] = facet_pitch_v[i].c_str() ;
     spec [ 7 ] = facet_roll_v[i].c_str() ;
-    spec [ 8 ] = facet_trx_v[i].c_str() ;
-    spec [ 9 ] = facet_try_v[i].c_str() ;
-    spec [ 10 ] = facet_trz_v[i].c_str() ;
-    spec [ 11 ] = facet_tpy_v[i].c_str() ;
-    spec [ 12 ] = facet_tpp_v[i].c_str() ;
-    spec [ 13 ] = facet_tpr_v[i].c_str() ;
-    spec [ 14 ] = facet_shear_g_v[i].c_str() ;
-    spec [ 15 ] = facet_shear_t_v[i].c_str() ;
-    bool success = fspec.init ( 16 , spec ) ;
+    bool success = fspec.init ( 8 , spec ) ;
     if ( ! success )
     {
       std::cerr << "parse of facet argument with index " << i
@@ -724,21 +713,14 @@ void arguments::init ( int argc , const char ** argv )
     fspec.yaw *= M_PI / 180.0 ;
     fspec.pitch *= M_PI / 180.0 ;
     fspec.roll *= M_PI / 180.0 ;
-    fspec.tp_y *= M_PI / 180.0 ;
-    fspec.tp_p *= M_PI / 180.0 ;
-    fspec.tp_r *= M_PI / 180.0 ;
     fspec.step = get_step ( fspec.projection , fspec.width ,
                             fspec.height , fspec.hfov ) ;
-
-    // shear parameters are given in pixel units in PTO. to calculate
-    // the shear efficiently, we move to texture units - then we can
-    // use the straiǵhtforward shear function given in panotools math.c:
-
-    //   *x_src  = x_dest + var0 * y_dest;
-    //   *y_src  = y_dest + var1 * x_dest;
-
-    fspec.shear_g *= 1.0 / fspec.height ;
-    fspec.shear_t *= 1.0 / fspec.width ;
+    fspec.extent = get_extent ( fspec.projection , fspec.width ,
+                                fspec.height , fspec.hfov ) ;
+    fspec.tr_x = fspec.tr_y = fspec.tr_z = 0.0 ;
+    fspec.tp_y = fspec.tp_p = fspec.tp_r = 0.0 ;
+    fspec.shear_g = fspec.shear_t = 0.0 ;
+    fspec.a = fspec.b = fspec.c = fspec.h = fspec.v = 0.0 ;
     facet_spec_v.push_back ( fspec ) ;
   }
   std::cout << "******** PTO file " << pto_file << std::endl ;

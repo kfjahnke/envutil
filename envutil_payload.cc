@@ -409,7 +409,7 @@ struct voronoi_syn
     // 'real' z value can ever be this small.
 
     simdized_type < float , 16 >
-      max_z ( std::numeric_limits<float>::min() ) ;
+      max_z ( std::numeric_limits<float>::lowest() ) ;
 
     // next_best starts out with an invalid facet index, and if this
     // isn't updated during processing, it serves as an indicator
@@ -431,7 +431,7 @@ struct voronoi_syn
     if ( any_of ( valid ) )
     {
       next_best = 0 ;
-      champion_v = 0 ;
+      champion_v ( valid ) = 0 ;
       max_z ( valid ) = pv[0][2] ;
     }
 
@@ -453,7 +453,7 @@ struct voronoi_syn
       // we find is the best.
 
       simdized_type < float , 16 >
-        current_z ( std::numeric_limits<float>::min() ) ;
+        current_z ( std::numeric_limits<float>::lowest() ) ;
 
       current_z ( valid ) = pv[i][2] ;
 
@@ -673,7 +673,7 @@ struct voronoi_syn_plus
     // this z value is compared to a real z, it will always
     // come out smaller.
 
-    max_z[0] = std::numeric_limits<float>::min() ;
+    max_z[0] = std::numeric_limits<float>::lowest() ;
 
     // Initailly, we have no valid 'champions'
 
@@ -727,7 +727,7 @@ struct voronoi_syn_plus
       auto & current_z ( max_z [ layers ] ) ;
       auto & current_champion ( champion_v [ layers ] ) ;
 
-      current_z = std::numeric_limits<float>::min() ;
+      current_z = std::numeric_limits<float>::lowest() ;
       current_z ( valid ) = pv[i][2] ;
 
       current_champion = -1 ;

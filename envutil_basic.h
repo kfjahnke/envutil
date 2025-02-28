@@ -470,14 +470,6 @@ struct arguments
   std::vector < std::string > facet_yaw_v ;
   std::vector < std::string > facet_pitch_v ;
   std::vector < std::string > facet_roll_v ;
-  std::vector < std::string > facet_trx_v ;
-  std::vector < std::string > facet_try_v ;
-  std::vector < std::string > facet_trz_v ;
-  std::vector < std::string > facet_tpy_v ;
-  std::vector < std::string > facet_tpp_v ;
-  std::vector < std::string > facet_tpr_v ;
-  std::vector < std::string > facet_shear_g_v ;
-  std::vector < std::string > facet_shear_t_v ;
   std::vector < facet_spec > facet_spec_v ;
 } ;
 

@@ -254,31 +254,36 @@ struct mount_t
   
   void get_coordinate_nomask ( const crd3_v & crd3 , crd_v & crd ) const
   {
+    // depending on the source image's geometry, we convert the
+    // incoming 3D ray coordinate to a planar coordinate pertaining
+    // to the source image plane
+
     if constexpr ( P == RECTILINEAR )
     {
       ray_to_rect_t<float,L>::eval ( crd3 , crd ) ;
-      pf ( crd ) ;
     }
     else if constexpr ( P == SPHERICAL )
     {
       ray_to_ll_t<float,L>::eval ( crd3 , crd ) ;
-      pf ( crd ) ;
     }
     else if constexpr ( P == CYLINDRICAL )
     {
       ray_to_cyl_t<float,L>::eval ( crd3 , crd ) ;
-      pf ( crd ) ;
     }
     else if constexpr ( P == STEREOGRAPHIC )
     {
       ray_to_ster_t<float,L>::eval ( crd3 , crd ) ;
-      pf ( crd ) ;
     }
     else if constexpr ( P == FISHEYE )
     {
       ray_to_fish_t<float,L>::eval ( crd3 , crd ) ;
-      pf ( crd ) ;
     }
+
+    // we now have the 'raw' 2D coordinate in 'crd'. The last step
+    // applies an optional in-plane transformation, which is used
+    // for stuff like lens correction and shear.
+
+    pf ( crd ) ;
   }
 
   // get_coordinate yields a coordinate into the mounted 2D manifold
@@ -288,21 +293,45 @@ struct mount_t
 
   mask_t get_coordinate ( const crd3_v & crd3 , crd_v & crd ) const
   {
+    // first, obtain the 'raw' 2D source coordinate
+
     get_coordinate_nomask ( crd3 , crd ) ;
+
+    // test this coordinate against the boundaries of the image
+    // encoded in 'extent'
 
     auto mask =    ( crd[0] >= extent.x0 )
                 && ( crd[0] <= extent.x1 )
                 && ( crd[1] >= extent.y0 )
                 && ( crd[1] <= extent.y1 ) ;
 
-    if constexpr ( P == RECTILINEAR )
-      mask &= ( crd3[2] > 0.0f ) ;
+    // only for rectilinear images: clear the mask where the z
+    // coordinate of the ray is zero or negative
 
-    crd[0] ( ! mask ) = center[0] ;
-    crd[1] ( ! mask ) = center[1] ;
+    if constexpr ( P == RECTILINEAR )
+    {
+      mask &= ( crd3[2] > 0.0f ) ;
+    }
+
+    // now, where the mask is not set, assign 'center' to the
+    // 2D coordinate - this is a safe value avoiding problems
+    // if this value is used e.g. to produce a pixel value.
+    // We trust that the mask will prevent such pixels from
+    // actually being used. So this is merely a precaution.
+
+    crd ( ! mask ) = center ;
+
+    // finally, we return the *mask* - the resulting 2D
+    // coordinate is passed back via the non-const reference
+    // we received as 'crd' argument
 
     return mask ;
   }
+
+  // get_mask does everything which get_coordinate does, minus
+  // the actual coordinate transformation. This seems to produce
+  // redundant work, but I trust the compiler will recognize the
+  // common subexpression.
 
   mask_t get_mask ( const crd3_v & crd3 ) const
   {
@@ -343,8 +372,7 @@ struct mount_t
 
     if ( ! all_of ( mask ) )
     {
-      for ( int i = 0 ; i < nchannels ; i++ )
-        px[i] ( ! mask ) = 0.0f ;
+      px ( ! mask ) = 0.0f ;
     }
 
     return mask ;

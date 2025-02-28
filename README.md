@@ -266,7 +266,7 @@ may add a stage of processing to deal with non-linear-RGB input. Linear RGBA
 is fine; the import with OIIO should provide associated alpha which can be
 processed correctly by envutil as four-channel data, producing correct output
 for images with alpha channel. Single-channel data are also fine; the idea is
-to use them for greyscal images with thransparency. Channels beyond four are
+to use them for greyscale images with thransparency. Channels beyond four are
 ignored.
 
 # envutil Command Line Options
@@ -296,7 +296,7 @@ envutil now only uses the 'facet' option to introduce one or more source
 images. So this option can occur more than once, but it has to be present
 at least once:
 
-## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL TRX TRY TRZ TPY TPP TPR G T
+## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
 ##     load oriented non-environment source image
 
 envutil will 'mount' images in various projections and hfov which may only
@@ -307,17 +307,7 @@ cubemap does of course cover 360X180 degrees fov. The three values must
 be followed by the facet's orientation, given as three 'Euler angles' (yaw,
 pich, roll). If you want the facet to be mounted 'straight ahead', just pass
 0 0 0. All six values (image filename, projection, hfov, yaw, pitch, roll)
-must be passed after --facet, separated by space. I have added translation
-and shear parameters to the 'facet' option, which makes for a lengthy and
-cumbersome facet parameterization - this is okay in this feature branch,
-but eventually I'll move to a file-based parameterization. The translation
-and shear parameters are panotools-compatible, they relate like this:
-
-    TRX -> TrX    TRY -> TrY    TRZ -> TrZ
-    TPY -> Tpy    TPP -> Tpp    TPR -> unused in PTO
-    G   -> g      T   -> t
-
-Using a PTO-compatible lens correction polynomial is next on the list.
+must be passed after --facet, separated by space.
 
 You may pass more than one facet. Currently, where several facets provide
 visible content for a given viewing ray, envutil gives preference to one
@@ -366,6 +356,32 @@ compute. With a twining kernel of standard size, horizontal and vertical
 collision lines will be hard discontinuities. This is correct - the blending
 due to twining only affects tilted collision lines, unless the twining kernel
 is widened, which introduces overall blur as well.
+
+## --pto PTO-FILE
+
+envutil can process a growing subset of the PTO standard. Currently, the
+i-lines in a PTO file are scanned for file name, projection, yaw, pitch,
+roll, translation, shear and lens correction parameters. Other lines in
+the PTO file are currently ignored. images from PTO files are added to
+the set of facets given with --facet - if no --facet parameters are present,
+only those given in the PTO file are used. I have opted to restrict the
+facet parameters accessible with the --facet option to the set given
+above to avoid an overly large parameter signature - in favour of using
+PTO format for more complex facet parameterization. Note that envutil's
+processing of projections in PTO format is limited to rectilinear,
+spherical, cylindrical, fisheye, and stereographic. Also note that
+there is currently no image blending (no image splining with the
+Burt&Adelson image splining algorithm as I use it in lux) - the facets
+will have 'hard' edges. The facet prioritization is also fixed to a
+simple voronoi-diagram-like mode, more complex schemes like lux'
+shallow cone/steep pyramid method are not yet available in envutil.
+Image brightness (and vignetting) is not touched either, stacks, masks
+and cropping aren't supported. Nevertheless, the set of PTO parameters
+which envutil now recognizes should convey a good idea of the fit of an
+intended stitch - similar to the fast 'live stitch' used for animated
+sequences in lux. I may add more PTO features, but mainly I want the
+PTO option to introduce facets with extended geometrical information
+via a file, to avoid overly long and cumbersome parameter lists.
 
 ## --projection PRJ  target projection
 
