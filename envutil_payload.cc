@@ -434,7 +434,7 @@ struct voronoi_syn
     {
       next_best = 0 ;
       champion_v ( valid ) = 0 ;
-      max_z ( valid ) = pv[0][2] ;
+      max_z ( valid ) = pv[0][2] * env_v[0].recip_step ;
     }
 
     // now go through the facets in turn and replace the current
@@ -457,7 +457,7 @@ struct voronoi_syn
       simdized_type < float , 16 >
         current_z ( std::numeric_limits<float>::lowest() ) ;
 
-      current_z ( valid ) = pv[i][2] ;
+      current_z ( valid ) = pv[i][2] * env_v[i].recip_step ;
 
       // now we test whether current z values are larger than the
       // largest we've seen so far
@@ -698,7 +698,7 @@ struct voronoi_syn_plus
       next_best = 0 ;
       layers = 1 ;
       champion_v[0] ( valid ) = 0 ;
-      max_z[0] ( valid ) = pv[0][2] ;
+      max_z[0] ( valid ) = pv[0][2] * env_v[0].recip_step ;
     }
 
     // now go through the other facets in turn and perform the
@@ -732,7 +732,7 @@ struct voronoi_syn_plus
       auto & current_champion ( champion_v [ layers ] ) ;
 
       current_z = std::numeric_limits<float>::lowest() ;
-      current_z ( valid ) = pv[i][2] ;
+      current_z ( valid ) = pv[i][2] * env_v[i].recip_step ;
 
       current_champion = -1 ;
       current_champion ( valid ) = i ;
@@ -1145,6 +1145,7 @@ void fuse ( int ninputs )
     auto key =   fct.filename 
                + projection_name [ fct.projection ]
                + std::to_string ( fct.hfov )
+               + "." + std::to_string ( fct.masked )
                + "." + std::to_string ( fct.shear_g )
                + "." + std::to_string ( fct.shear_t ) ;
 
@@ -1294,10 +1295,9 @@ void fuse ( int ninputs )
     // ninputs == 3 means that we're not using twining, and the
     // steppers produce 'ordinary' rays with three components.
 
-    if ( args.nfacets == 1 )
+    if ( args.solo != -1 )
     {
-      // special case: there is only one facet. Using the multi-facet
-      // code would work, but would produce futile overhead.
+      // special case: use only one facet.
       // Note how we use a stepper which does not normalize it's result:
       // Since we don't compare the z component of the ray as quality
       // criterion (which we'd do for multiple facets) we can do without
@@ -1306,7 +1306,8 @@ void fuse ( int ninputs )
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
 
-      const auto & fct ( args.facet_spec_v[0] ) ; // shorthand
+      int f = args.solo ;
+      const auto & fct ( args.facet_spec_v [ f ] ) ; // shorthand
 
       if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
            || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
@@ -1319,7 +1320,7 @@ void fuse ( int ninputs )
         // note this setting VVV - we needn't normalize the ray here.
 
         STP < float , 16 , false > get_ray
-          ( basis1_v[0][0] , basis1_v[0][1] , basis1_v[0][2] ,
+          ( basis1_v[f][0] , basis1_v[f][1] , basis1_v[f][2] ,
             args.width , args.height ,
             args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
@@ -1329,27 +1330,27 @@ void fuse ( int ninputs )
         // application of the camera translation.
 
         ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
-        trxyz = rot_plane[0] ( trxyz ) ;
+        trxyz = rot_plane[f] ( trxyz ) ;
 
-        reproject_t rprj ( trxyz , basis2_v[0] ) ;
+        reproject_t rprj ( trxyz , basis2_v[f] ) ;
 
         suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
 
         // the resulting object is a get_t in it's own right, and
         // all that's left to do now is to call work:
 
-        work ( sfg , env_v[0] ) ;
+        work ( sfg , env_v[f] ) ;
       }
       else
       {
         // all translation parameters are zero. this is easy:
 
         STP < float , 16 , false > get_ray
-          ( basis_v[0][0] , basis_v[0][1] , basis_v[0][2] ,
+          ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
             args.width , args.height ,
             args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-        work ( get_ray , env_v[0] ) ;
+        work ( get_ray , env_v[f] ) ;
       }
     }
     else
@@ -1430,9 +1431,10 @@ void fuse ( int ninputs )
     // this is the code we use for twining. instead of processing
     // simple 3D rays, we process 'ninepacks'.
 
-    if ( args.nfacets == 1 )
+    if ( args.solo != -1 )
     {
-      const auto & fct ( args.facet_spec_v[0] ) ;
+      int f = args.solo ;
+      const auto & fct ( args.facet_spec_v[f] ) ;
 
       // special case: there is only one facet. We have to wrap the
       // single evaluator in a twine_t object to process the 'ninepacks'
@@ -1450,14 +1452,14 @@ void fuse ( int ninputs )
            || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
       {
         deriv_stepper < float , 16 , STP , true > get_ray
-            ( basis1_v[0][0] , basis1_v[0][1] , basis1_v[0][2] ,
+            ( basis1_v[f][0] , basis1_v[f][1] , basis1_v[f][2] ,
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-        twine_t < NCH , 16 > twenv ( env_v[0] , args.twine_spread ) ;
+        twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
         ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
-        trxyz = rot_plane[0] ( trxyz ) ;
-        reproject9_t rprj ( trxyz , basis2_v[0] ) ;
+        trxyz = rot_plane[f] ( trxyz ) ;
+        reproject9_t rprj ( trxyz , basis2_v[f] ) ;
         suffixed_t < float , 9 , 2 , 16 > sfg ( get_ray , rprj ) ;
         work ( sfg , twenv ) ;
       }
@@ -1467,11 +1469,11 @@ void fuse ( int ninputs )
         // with normalized rays:           VVVV
 
         deriv_stepper < float , 16 , STP , true > get_ray
-            ( basis_v[0][0] , basis_v[0][1] , basis_v[0][2] ,
+            ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-        twine_t < NCH , 16 > twenv ( env_v[0] , args.twine_spread ) ;
+        twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
 
         work ( get_ray , twenv ) ;
       }
@@ -1676,11 +1678,11 @@ struct dispatch
       case 3:
         roll_out < 3 > ( ninputs , projection ) ;
         break ;
-// #ifndef NARROW_SCOPE
+#ifndef NARROW_SCOPE
       case 4:
         roll_out < 4 > ( ninputs , projection ) ;
         break ;
-// #endif
+#endif
       std::cerr << "unhandled channel count " << nchannels
                 << std::endl ;
     }

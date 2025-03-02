@@ -61,6 +61,28 @@ using OIIO::ImageInput ;
 using OIIO::TypeDesc ;
 using OIIO::ImageSpec ;
 
+// the masking_t functor yields a pixel with C channels painted
+// 'paint' unconditionally.
+
+template < std::size_t D , std::size_t C , std::size_t L >
+struct masking_t
+: public zimt::unary_functor < zimt::xel_t < float , D > ,
+                               zimt::xel_t < float , C > ,
+                               L >
+{
+  const float paint ;
+
+  masking_t ( const float & _paint )
+  : paint ( _paint )
+  { }
+
+  template < typename I , typename O >
+  void eval ( const I & in , O & out )
+  {
+    out = paint ;
+  }
+} ;
+
 // source_t provides pixel values from a mounted 2D manifold. The
 // incoming 2D coordinates are pixel coordinates guaranteed to be
 // in the range of the spline:
@@ -100,13 +122,16 @@ struct source_t
   // taken for direct bilinear interpolation of the source data. Note how
   // we cast data() to float to 'shed' the channel count from the type
 
-  source_t ( std::shared_ptr < spl_t > _p_bspl )
+  source_t ( std::shared_ptr < spl_t > _p_bspl , int masked )
   : p_bspl ( _p_bspl ) ,
-    width ( _p_bspl->core.shape[0] ) ,
-    height ( _p_bspl->core.shape[1] )
+    width ( masked == -1 ? _p_bspl->core.shape[0] : 1 ) ,
+    height ( masked == -1 ? _p_bspl->core.shape[1] : 1 )
   {
-    bsp_ev = zimt::make_safe_evaluator
-                     < spl_t , float , L > ( *p_bspl ) ;
+    if ( masked == -1 )
+      bsp_ev = zimt::make_safe_evaluator
+                      < spl_t , float , L > ( *p_bspl ) ;
+    else
+      bsp_ev = masking_t < 2 , nchannels , L > ( masked ) ;
   }
 
   void eval ( const pkg_v & _crd , px_v & px )
@@ -583,6 +608,118 @@ void spherical_prefilter
   bspl.prefiltered = true ;
 }
 
+// this class translates from pixels with N channels to pixels with
+// M channels. It's silently assumed that incoming two- and four-
+// -channel data carry transparency in the last channel, whereas
+// one- and three-channel data are opaque. It's also assumed that
+// transparency is given as associated alpha.
+
+template < typename T , std::size_t N , std::size_t M , std::size_t L >
+struct repix_t
+: public unary_functor < xel_t < T , N > , xel_t < T , M > , L >
+{
+  typedef unary_functor < xel_t < T , N > ,
+                          xel_t < T , M > , L > base_t ;
+
+  using typename base_t::in_v ;
+  using typename base_t::out_v ;
+
+  void eval ( const in_v & in , out_v & out ,
+              const std::size_t & cap = L ) const
+  {
+    static_assert ( N > 0 && M > 0 && N < 5 && M < 5 ) ;
+
+    if constexpr ( N == M )
+    {
+      out = in ;
+    }
+    else if constexpr ( N == 1 )
+    {
+      if constexpr ( M == 3 )
+      {
+        out = in[0] ;
+      }
+      else
+      {
+        if constexpr ( M == 2 )
+        {
+          out[0] = in[0] ;
+          out[1] = 1 ;
+        }
+        else if constexpr ( M == 4 )
+        {
+          out[0] = in[0] ;
+          out[1] = in[0] ;
+          out[2] = in[0] ;
+          out[3] = 1 ;
+        }
+      }
+    }
+    else if constexpr ( N == 2 )
+    {
+      if constexpr ( M == 1 )
+      {
+        out[0] = in[0] / in[1] ;
+        out[0] ( in[1] == 0 ) = 0 ;
+      }
+      else if constexpr ( M == 3 )
+      {
+        out[0] = in[0] / in[1] ;
+        out[0] ( in[1] == 0 ) = 0 ;
+        out[1] = out[0] ;
+        out[2] = out[0] ;
+      }
+      else if constexpr ( M == 4 )
+      {
+        out[0] = in[0] ;
+        out[1] = in[0] ;
+        out[2] = in[0] ;
+        out[3] = in[1] ;
+      }
+    }
+    else if constexpr ( N == 3 )
+    {
+      if constexpr ( M == 1 )
+      {
+        out[0] = in.sum() / 3.0f ;
+      }
+      else if constexpr ( M == 2 )
+      {
+        out[0] = in.sum() / 3.0f ;
+        out[1] = 1 ;
+      }
+      else if constexpr ( M == 4 )
+      {
+        out[0] = in[0] ;
+        out[1] = in[1] ;
+        out[2] = in[2] ;
+        out[3] = 1 ;
+      }
+    }
+    else if constexpr ( N == 4 )
+    {
+      if constexpr ( M == 1 )
+      {
+        out[0] = in.sum() / 3.0f ;
+        out[0] /= in[3] ;
+        out[0] ( in[3] == 0 ) = 0 ;
+      }
+      else if constexpr ( M == 2 )
+      {
+        out[0] = in.sum() / 3.0f ;
+        out[1] = in[3] ;
+      }
+      else if constexpr ( M == 3 )
+      {
+        out[0] = in[0] / in[3] ;
+        out[1] = in[1] / in[3] ;
+        out[2] = in[2] / in[3] ;
+        out ( in[3] == 0 ) = 0 ;
+      }
+    }
+  }
+} ;
+
 // the 'environment' template codes objects which can serve as 'act'
 // functor in zimt::process. It's coded as a zimt::unary_functor
 // taking 3D 'ray' coordinates and producing pixels with C channels.
@@ -591,11 +728,11 @@ void spherical_prefilter
 // over the image data. The default is to use degree-1 b-splines,
 // which is also known as 'bilinear interpolation'. Other spline
 // degrees can be specified by passing 'spline_degree'. If necessary,
-// the image data are prefilered, so as to provide an interpolating
+// the image data are prefiltered, so as to provide an interpolating
 // spline.
 
 template < typename T , typename U , std::size_t C , std::size_t L >
-struct environment
+struct _environment
 : public zimt::unary_functor < zimt::xel_t < T , 3 > ,
                                zimt::xel_t < U , C > ,
                                L >
@@ -610,9 +747,9 @@ struct environment
   typedef typename in_ele_v::mask_type mask_t ;
 
   typedef zimt::xel_t < T , 2 > crd2_t ;
-  typedef simdized_type < crd2_t , 16 > crd_v ;
+  typedef simdized_type < crd2_t , L > crd_v ;
   typedef zimt::xel_t < T , 3 > ray_t ;
-  typedef simdized_type < ray_t , 16 > ray_v ;
+  typedef simdized_type < ray_t , L > ray_v ;
   typedef zimt::xel_t < U , C > px_t ;
   typedef zimt::xel_t < std::size_t , 2 > shape_type ;
   typedef zimt::xel_t < float , C > in_px_t ;
@@ -626,7 +763,7 @@ struct environment
   // we'll hold on to image data via a std::shared_ptr to a zimt::bspline.
 
   typedef zimt::bspline < in_px_t , 2 > spl_t ;
-  std::shared_ptr < spl_t > p_bspl ;
+  std::shared_ptr < spl_t > p_bspl = nullptr ;
 
   typedef std::function < mask_t ( const in_v & ) > mask_f ;
   mask_f get_mask ;
@@ -640,7 +777,7 @@ struct environment
   // that the optimizer can use this information as well to
   // streamline processing for such facets.
 
-  environment ( const facet_spec & fct )
+  _environment ( const facet_spec & fct )
   {
     // if the facet is in a cubemap format, we special-case here
     // and directly form a cubemap_t object with the facet_spec
@@ -649,7 +786,13 @@ struct environment
 
     if ( fct.projection == CUBEMAP || fct.projection == BIATAN6 )
     {
-      if ( fct.projection == CUBEMAP )
+      get_mask = []( const ray_v & ray ) { return mask_t ( true ) ; } ;
+
+      if ( fct.masked != -1 )
+      {
+        env = masking_t < 3 , C , L > ( fct.masked ) ;
+      }
+      else if ( fct.projection == CUBEMAP )
       {
         env = cubemap_t < C , CUBEMAP > ( fct ) ;
       }
@@ -657,7 +800,6 @@ struct environment
       {
         env = cubemap_t < C , BIATAN6 > ( fct ) ;
       }
-      get_mask = []( const ray_v & ray ) { return mask_t ( true ) ; } ;
       return ;
     }
 
@@ -673,45 +815,61 @@ struct environment
       if ( fabs ( fct.hfov - 2.0 * M_PI ) < .000001 )
         bc0 = PERIODIC ;
     }
-    p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
-                                { bc0 , zimt::REFLECT } ) ) ;
 
-    // currently building with raw::user_flip set to zero, to load
-    // raw images in memory order without EXIF rotation. This only
-    // affects raw images.
+    // gct.masked == -1 means 'normal operation': we set up a
+    // b-spline over the image data:
 
-    ImageSpec config;
-    config [ "raw:user_flip" ] = 0 ;
-    auto inp = ImageInput::open ( fct.filename , &config ) ;
+    if ( fct.masked == -1 )
+    {
+      // currently building with raw::user_flip set to zero, to load
+      // raw images in memory order without EXIF rotation. This only
+      // affects raw images.
 
-    bool success = inp->read_image (
-      0 , 0 , 0 , C ,
-      TypeDesc::FLOAT ,
-      p_bspl->core.data() ,
-      sizeof ( in_px_t ) ,
-      p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
-    assert ( success ) ;
-    inp->close() ;
+      ImageSpec config;
+      config [ "raw:user_flip" ] = 0 ;
+      auto inp = ImageInput::open ( fct.filename , &config ) ;
 
-    if (    fct.projection == SPHERICAL
+      p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+                                  { bc0 , zimt::REFLECT } ) ) ;
+
+      bool success = inp->read_image (
+        0 , 0 , 0 , C ,
+        TypeDesc::FLOAT ,
+        p_bspl->core.data() ,
+        sizeof ( in_px_t ) ,
+        p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
+      assert ( success ) ;
+
+      inp->close() ;
+
+      if (    fct.projection == SPHERICAL
           && fabs ( fct.hfov - 2.0 * M_PI ) < .000001
           && fct.width == 2 * fct.height )
-    {
-      // assume the mounted image is a full spherical
-      p_bspl->spline_degree = args.prefilter_degree ;
-      spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
-      p_bspl->spline_degree = args.spline_degree ;
-      full_environment = true ;
-    }
-    else
-    {
-      // assume it's a partial spherical, use ordinary prefilter
-      p_bspl->spline_degree = args.prefilter_degree ;
-      p_bspl->prefilter() ;
-      p_bspl->spline_degree = args.spline_degree ;
+      {
+        // assume the mounted image is a full spherical
+        p_bspl->spline_degree = args.prefilter_degree ;
+        spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
+        p_bspl->spline_degree = args.spline_degree ;
+        full_environment = true ;
+      }
+      else
+      {
+        // assume it's a partial spherical, use ordinary prefilter
+        p_bspl->spline_degree = args.prefilter_degree ;
+        p_bspl->prefilter() ;
+        p_bspl->spline_degree = args.spline_degree ;
+      }
     }
 
-    source_t < C , 2 , 16 > src ( p_bspl ) ;
+    // if we're making a mask, p_bspl is nullptr, and fct.masked
+    // is 1 for the facet for which we make the mask and zero for
+    // all other facets. source_t's c'tor will result in a suitable
+    // functor: one producing only zero, or one, respectively.
+    // For 'normal' operation, p_bspl points to a b-spline and
+    // fct.masked is -1. Then, the source_t will evaluate the
+    // b-spline to produce pixel values.
+
+    source_t < C , 2 , L > src ( p_bspl , fct.masked ) ;
 
     // for now, we mount images to the center; other types of cropping
     // might be added by providing suitable parameterization.
@@ -803,7 +961,7 @@ struct environment
     {
       case RECTILINEAR:
       {
-        mount_t < C , RECTILINEAR , 16 > mnt ( extent , src , pf ) ;
+        mount_t < C , RECTILINEAR , L > mnt ( extent , src , pf ) ;
         env = mnt ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
@@ -811,7 +969,7 @@ struct environment
       }
       case SPHERICAL:
       {
-        mount_t < C , SPHERICAL , 16 > mnt ( extent , src , pf ) ;
+        mount_t < C , SPHERICAL , L > mnt ( extent , src , pf ) ;
         env = mnt ;
         if ( full_environment )
           get_mask = []( const ray_v & ray )
@@ -823,7 +981,7 @@ struct environment
       }
       case CYLINDRICAL:
       {
-        mount_t < C , CYLINDRICAL , 16 > mnt ( extent , src , pf ) ;
+        mount_t < C , CYLINDRICAL , L > mnt ( extent , src , pf ) ;
         env = mnt ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
@@ -831,7 +989,7 @@ struct environment
       }
       case STEREOGRAPHIC:
       {
-        mount_t < C , STEREOGRAPHIC , 16 > mnt ( extent , src , pf ) ;
+        mount_t < C , STEREOGRAPHIC , L > mnt ( extent , src , pf ) ;
         env = mnt ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
@@ -839,7 +997,7 @@ struct environment
       }
       case FISHEYE:
       {
-        mount_t < C , FISHEYE , 16 > mnt ( extent , src , pf ) ;
+        mount_t < C , FISHEYE , L > mnt ( extent , src , pf ) ;
         env = mnt ;
         if ( fct.hfov >= M_PI * 2.0 )
           get_mask = []( const ray_v & ray )
@@ -868,6 +1026,109 @@ struct environment
 
 } ;
 
+// class environment is a wrapper around class _environment,
+// which has te workhorse code. the wrapper takes care of
+// converting pixels with the number of channels specific
+// to the facet to pixels with C channels, the number of
+// channels requested by the given template argument.
+// the conversion is handled by a repix_t object.
+
+template < typename T , typename U , std::size_t C ,
+           std::size_t L >
+struct environment
+: public zimt::unary_functor < zimt::xel_t < T , 3 > ,
+                               zimt::xel_t < U , C > ,
+                               L >
+{
+  typedef zimt::unary_functor < zimt::xel_t < T , 3 > ,
+                                zimt::xel_t < U , C > ,
+                                L > base_t ;
+
+  using typename base_t::in_v ;
+  using typename base_t::in_ele_v ;
+  using typename base_t::out_v ;
+  typedef typename in_ele_v::mask_type mask_t ;
+
+  typedef zimt::xel_t < T , 2 > crd2_t ;
+  typedef simdized_type < crd2_t , L > crd_v ;
+  typedef zimt::xel_t < T , 3 > ray_t ;
+  typedef simdized_type < ray_t , L > ray_v ;
+  typedef zimt::xel_t < U , C > px_t ;
+  typedef zimt::xel_t < std::size_t , 2 > shape_type ;
+  typedef zimt::xel_t < float , C > in_px_t ;
+
+  typedef std::function < mask_t ( const in_v & ) > mask_f ;
+  mask_f get_mask ;
+  const float recip_step ;
+
+  grok_type < zimt::xel_t < T , 3 > ,
+              zimt::xel_t < U , C > ,
+              L > env ;
+
+  void eval ( const in_v & in , out_v & out )
+  {
+    env.eval ( in , out ) ;
+  }
+
+  environment ( const facet_spec & fct )
+  : recip_step ( 1.0 / fct.step )
+  {
+    if ( fct.nchannels == C )
+    {
+      // the facet has the required channel count
+
+      _environment < T , U , C , L > e ( fct ) ;
+      env = e.env ;
+      get_mask = e.get_mask ;
+      return ;
+    }
+
+    // the required channel count is different, use a repix_t
+
+    switch ( fct.nchannels )
+    {
+      case 1 :
+      {
+        repix_t < U , 1 , C , L > repix ;
+        _environment < T , U , 1 , L > e ( fct ) ;
+        env = e.env + repix ;
+        get_mask = e.get_mask ;
+        break ;
+      }
+      case 2 :
+      {
+        repix_t < U , 2 , C , L > repix ;
+        _environment < T , U , 2 , L > e ( fct ) ;
+        env = e.env + repix ;
+        get_mask = e.get_mask ;
+        break ;
+      }
+      case 3 :
+      {
+        repix_t < U , 3 , C , L > repix ;
+        _environment < T , U , 3 , L > e ( fct ) ;
+        env = e.env + repix ;
+        get_mask = e.get_mask ;
+        break ;
+      }
+      case 4 :
+      {
+        repix_t < U , 4 , C , L > repix ;
+        _environment < T , U , 4 , L > e ( fct ) ;
+        env = e.env + repix ;
+        get_mask = e.get_mask ;
+        break ;
+      }
+      default:
+      {
+        std::cerr << "fct.nchannels invalid: " << fct.nchannels
+                  << std::endl ;
+        exit ( -1 ) ;
+      }
+    } ;
+  }
+} ;
+
 // environment9 objects mediate lookup with derivatives. Their eval
 // member function takes 'ninepacks' and provides pixels with
 // nchannels channels. This is used with 'twining'.
@@ -890,9 +1151,9 @@ struct environment9
   // the 'act' functor's 'inner' type is variable, so we use a
   // uniform 'outer' type by 'grokking' it (type erasure)
 
-  zimt::grok_type < crd9_t , px_t , 16 > act ;
+  zimt::grok_type < crd9_t , px_t , L > act ;
 
-  typedef environment < float , float , nchannels , 16 > env_t ;
+  typedef environment < float , float , nchannels , L > env_t ;
 
   environment9 ( env_t * p_env )
   {
@@ -911,12 +1172,12 @@ struct environment9
       if ( args.twine_precise )
       {
         // TODO: I think this is futile.
-        act = twine_t < nchannels , 16 , true >
+        act = twine_t < nchannels , L , true >
           ( *p_env , args.twine_spread ) ;
       }
       else
       {
-        act = twine_t < nchannels , 16 , false >
+        act = twine_t < nchannels , L , false >
           ( *p_env , args.twine_spread ) ;
       }
     }

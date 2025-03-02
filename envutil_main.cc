@@ -549,10 +549,17 @@ void arguments::init ( int argc , const char ** argv )
                   &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v )
     .help("load oriented non-environment source image") ;
 
-  // TODO:
-  // ap.arg("--fct_file FCT_FILE")
-  //   .help("read multi-facet environment from FCT_FILE")
-  //   .metavar("FCT_FILE");
+  ap.add_argument("--solo FACET_INDEX")
+    .help("show only this facet (indexes starting from zero)")
+    .metavar("FACET_INDEX") ;
+
+  ap.add_argument("--mask_for FACET_INDEX")
+    .help("paint this facet white, all others black")
+    .metavar("FACET_INDEX") ;
+
+  ap.add_argument("--nchannels CHANNELS")
+    .help("produce output with CHANNELS channels (1-4)")
+    .metavar("CHANNELS") ;
 
   if (ap.parse(argc, argv) < 0 ) {
       std::cerr << ap.geterror() << std::endl;
@@ -826,10 +833,62 @@ void arguments::init ( int argc , const char ** argv )
     }
   }
   assert ( nfacets ) ;
-  std::size_t nch = facet_spec_v[0].nchannels ;
+
+  solo = ap["solo"].get<int> ( -1 ) ;
+  if ( solo != -1 )
+    assert ( solo < nfacets ) ;
+
+  // if there is only one facet, we set 'solo' to zero, this will
+  // also result in fcet zero's 'active' field being set true
+
+  if ( nfacets == 1 )
+    solo = 0 ;
+
+  mask_for = ap["mask_for"].get<int> ( -1 ) ;
+  if ( mask_for != -1 )
+    assert ( mask_for < nfacets ) ;
+
+  nchannels = 1 ;
+
   for ( auto & m : facet_spec_v )
   {
-    assert ( m.nchannels == nch ) ;
+    // if this facet has a higher channel count than what we've
+    // seen so far, update nchannels
+
+    if ( m.nchannels > nchannels )
+      nchannels = m.nchannels ;
+
+    // if there is a 'solo' argument, set only this facet active
+
+    if ( solo == -1 )
+    {
+      m.active = true ;
+    }
+    else
+    {
+      if ( m.facet_no == solo )
+        m.active = true ;
+      else
+        m.active = false ;
+    }
+
+    // if there is a mask_for argument, set only this facet's
+    // 'masked' field to 1 - all other facets' 'mask' field to
+    // zero. If there is no 'mask_for' argument, the 'mask'
+    // field is set to -1 in all facets.
+
+    if ( mask_for == -1 )
+    {
+      m.masked = -1 ;
+    }
+    else
+    {
+      if ( m.facet_no == mask_for )
+        m.masked = 1 ;
+      else
+        m.masked = 0 ;
+    }
+
     if ( verbose )
       std::cout << "facet " << m.facet_no
                 << " '" << m.filename << "' "
@@ -848,9 +907,30 @@ void arguments::init ( int argc , const char ** argv )
                 << " tp_r:" << m.tp_r * 180.0 / M_PI << std::endl
                 << "shear g: " << m.shear_g
                 << " shear t: " << m.shear_t << " (in texture units)"
-                << std::endl ;
+                << std::endl
+                << "active: " << ( m.active ? "yes" : "no" )
+                << "  masked: " << ( mask_for == -1
+                                   ? "no"
+                                   : ( m.masked == 0
+                                       ? "black"
+                                       : "white" ) ) << std::endl ;
   }
-  nchannels = nch ;
+
+  // if there is an 'nchannels' argument, it overrides the value
+  // we have set up from looking at the facets (the maximum seen)
+  // the facet's own nchannels value depends on the image it's
+  // made from, and the pixels will be forced to the global
+  // nchannels value during processing. So the default behaviour
+  // is to render the target image with the highest channel count
+  // seen in any of the facets, but with a global nchannels
+  // override, the target image will be rendered with that number
+  // of channels unconditionally.
+
+  int nch = ap["nchannels"].get<int> ( 0 ) ;
+  if ( nch > 0 )
+    nchannels = nch ;
+  if ( verbose )
+    std::cout << "global nchannels set to: " << nchannels << std::endl ;
 
   if ( twf_file != std::string() )
   {

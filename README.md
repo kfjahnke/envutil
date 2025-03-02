@@ -198,9 +198,14 @@ envutil --help gives a summary of command line options:
     mandatory options:
       --output OUTPUT                output file name (mandatory)
 
-    parameters for image input (one or several):
-      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL TRX TRY TRZ TPY TPP TPR G T
-                                    load oriented source image
+    parameters for mounted (facet) image input:
+      --pto PTOFILE            panotools script in higin PTO dialect (optional)
+      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+                              load oriented non-environment source image
+      --solo FACET_INDEX      show only this facet (indexes starting from zero)
+      --mask_for FACET_INDEX   paint this facet white, all others black
+      --nchannels CHANNELS     produce output with CHANNELS channels (1-4)
+
     important options which have defaults:
       --projection PRJ               projection used for the output image(s) (default: rectilinear)
       --hfov ANGLE                   horiziontal field of view of the output (default: 90)

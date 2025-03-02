@@ -351,6 +351,8 @@ typename U::value_type angle ( const U & a , const U & b )
 
 struct facet_spec
 {
+  bool active ;
+  int masked ;
   int facet_no ;
   std::string filename ;
   std::string projection_str ;
@@ -471,6 +473,9 @@ struct arguments
   std::vector < std::string > facet_pitch_v ;
   std::vector < std::string > facet_roll_v ;
   std::vector < facet_spec > facet_spec_v ;
+
+  int solo ;
+  int mask_for ;
 } ;
 
 extern arguments args ;
