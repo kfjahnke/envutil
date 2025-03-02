@@ -779,6 +779,17 @@ struct _environment
 
   _environment ( const facet_spec & fct )
   {
+    // sneaky: this might as well be a member variable, but having
+    // it static to a member function saves the need for external
+    // instantiation
+
+    #define PSPL(NCH) std::shared_ptr \
+      < bspline < xel_t < float , NCH > , 2 > >
+
+    static std::map < std::string , PSPL(C) > spl_map ;
+
+    #undef PSPL
+
     // if the facet is in a cubemap format, we special-case here
     // and directly form a cubemap_t object with the facet_spec
     // as argument. get_mask in this case unconditionally returns
@@ -788,17 +799,70 @@ struct _environment
     {
       get_mask = []( const ray_v & ray ) { return mask_t ( true ) ; } ;
 
+      // if we're doing a masking job, we create a special kind
+      // of environment object. TODO: if the cubemap carries an
+      // alpha channel, it's more involved - still to be done!
+
       if ( fct.masked != -1 )
       {
         env = masking_t < 3 , C , L > ( fct.masked ) ;
       }
-      else if ( fct.projection == CUBEMAP )
-      {
-        env = cubemap_t < C , CUBEMAP > ( fct ) ;
-      }
       else
       {
-        env = cubemap_t < C , BIATAN6 > ( fct ) ;
+        // for 'normal' operation, we actually need image data.
+        // image data are valuable assets, so we keep track of
+        // images we load in 'spl_map' and reuse the data in RAM
+        // if we already have them.
+
+        auto it = spl_map.find ( fct.filename ) ;
+        if ( it != spl_map.end() )
+        {
+          // we're in luck - this image file was already loaded
+          // into a b-spline previously.
+
+          if ( args.verbose )
+            std::cout << "cubemap " << fct.filename
+                      << " is already present in RAM" << std::endl ;
+
+          p_bspl = it->second ;
+
+          // we use cubemap_t's functor taking the shared_ptr to
+          // the b-spline as second argument
+
+          if ( fct.projection == CUBEMAP )
+          {
+            env = cubemap_t < C , CUBEMAP > ( fct , p_bspl ) ;
+          }
+          else
+          {
+            env = cubemap_t < C , BIATAN6 > ( fct , p_bspl ) ;
+          }
+        }
+        else
+        {
+          if ( args.verbose )
+            std::cout << "cubemap " << fct.filename
+                      << " is now loaded from disk" << std::endl ;
+
+          // here we don't pass a shared_ptr to a b-spline. This
+          // c'tor overload of class cubemap_t loads image data
+          // from disk and sets up a new cubemap_t object using
+          // a newly-set-up b-spline. We extract the shared_ptr
+          // to the new b-spline and store it in spl_map.
+
+          if ( fct.projection == CUBEMAP )
+          {
+            cubemap_t < C , CUBEMAP > cbm ( fct ) ;
+            spl_map [ fct.filename ] = cbm.p_bsp ;
+            env = cbm ;
+          }
+          else
+          {
+            cubemap_t < C , BIATAN6 > cbm ( fct ) ;
+            spl_map [ fct.filename ] = cbm.p_bsp ;
+            env = cbm ;
+           }
+        }
       }
       return ;
     }
@@ -821,43 +885,76 @@ struct _environment
 
     if ( fct.masked == -1 )
     {
-      // currently building with raw::user_flip set to zero, to load
-      // raw images in memory order without EXIF rotation. This only
-      // affects raw images.
-
-      ImageSpec config;
-      config [ "raw:user_flip" ] = 0 ;
-      auto inp = ImageInput::open ( fct.filename , &config ) ;
-
-      p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
-                                  { bc0 , zimt::REFLECT } ) ) ;
-
-      bool success = inp->read_image (
-        0 , 0 , 0 , C ,
-        TypeDesc::FLOAT ,
-        p_bspl->core.data() ,
-        sizeof ( in_px_t ) ,
-        p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
-      assert ( success ) ;
-
-      inp->close() ;
-
-      if (    fct.projection == SPHERICAL
-          && fabs ( fct.hfov - 2.0 * M_PI ) < .000001
-          && fct.width == 2 * fct.height )
+      auto it = spl_map.find ( fct.filename ) ;
+      if ( it != spl_map.end() )
       {
-        // assume the mounted image is a full spherical
-        p_bspl->spline_degree = args.prefilter_degree ;
-        spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
-        p_bspl->spline_degree = args.spline_degree ;
-        full_environment = true ;
+        // we're in luck - this image file was already loaded
+        // into a b-spline previously.
+
+        if ( args.verbose )
+          std::cout << "image " << fct.filename
+                    << " is already present in RAM" << std::endl ;
+
+        p_bspl = it->second ;
       }
       else
       {
-        // assume it's a partial spherical, use ordinary prefilter
-        p_bspl->spline_degree = args.prefilter_degree ;
-        p_bspl->prefilter() ;
-        p_bspl->spline_degree = args.spline_degree ;
+        // no luck - we need to load the image data from disk
+
+        if ( args.verbose )
+          std::cout << "image " << fct.filename
+                    << " is now loaded from disk" << std::endl ;
+
+        // currently building with raw::user_flip set to zero, to load
+        // raw images in memory order without EXIF rotation. This only
+        // affects raw images.
+
+        ImageSpec config;
+        config [ "raw:user_flip" ] = 0 ;
+        auto inp = ImageInput::open ( fct.filename , &config ) ;
+
+        p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+                                    { bc0 , zimt::REFLECT } ) ) ;
+
+        bool success = inp->read_image (
+          0 , 0 , 0 , C ,
+          TypeDesc::FLOAT ,
+          p_bspl->core.data() ,
+          sizeof ( in_px_t ) ,
+          p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
+        assert ( success ) ;
+
+        inp->close() ;
+
+        // we save the shared_ptr to the newly made b-spline in
+        // spl_map, to make it available for reuse if needed.
+
+        spl_map [ fct.filename ] = p_bspl ;
+
+        // the spline needs to be prefiltered appropriately.
+
+        if (    fct.projection == SPHERICAL
+            && fabs ( fct.hfov - 2.0 * M_PI ) < .000001
+            && fct.width == 2 * fct.height )
+        {
+          // assume the mounted image is a full spherical
+
+          p_bspl->spline_degree = args.prefilter_degree ;
+          spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
+          p_bspl->spline_degree = args.spline_degree ;
+          full_environment = true ;
+        }
+        else
+        {
+          // assume it's a partial spherical, use ordinary
+          // prefilter. Note that we may prefilter with a
+          // different degree (prefilter_degree) if that was
+          // specified in args.
+
+          p_bspl->spline_degree = args.prefilter_degree ;
+          p_bspl->prefilter() ;
+          p_bspl->spline_degree = args.spline_degree ;
+        }
       }
     }
 
@@ -868,6 +965,8 @@ struct _environment
     // For 'normal' operation, p_bspl points to a b-spline and
     // fct.masked is -1. Then, the source_t will evaluate the
     // b-spline to produce pixel values.
+    // TODO: as stated above, if the source image carries an alpha
+    // channel, we need to do more - i.e. load the alpha data
 
     source_t < C , 2 , L > src ( p_bspl , fct.masked ) ;
 

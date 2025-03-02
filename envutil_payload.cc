@@ -1126,9 +1126,9 @@ void fuse ( int ninputs )
   // hfov or projection will be re-loaded and don't share the same
   // environment object.
 
-  static std::map < std::string , std::shared_ptr<env_t> > content_map ;
-  std::vector < env_t > env_v ;
+  // static std::map < std::string , std::shared_ptr<env_t> > content_map ;
 
+  std::vector < env_t > env_v ;
   std::vector < xel_t < double , 3 > > trxyzv ( args.nfacets ) ;
 
   typedef rotate_3d < double , 16 > rotate_t ;
@@ -1142,36 +1142,11 @@ void fuse ( int ninputs )
   {
     auto const & fct ( args.facet_spec_v [ i ] ) ; // shorthand
 
-    auto key =   fct.filename 
-               + projection_name [ fct.projection ]
-               + std::to_string ( fct.hfov )
-               + "." + std::to_string ( fct.masked )
-               + "." + std::to_string ( fct.shear_g )
-               + "." + std::to_string ( fct.shear_t ) ;
+    // first we create an environment object and push it to env_v.
+    // the environment object takes care of redundancy: if the facet
+    // image is already in RAM, it won't be loaded again.
 
-    auto it = content_map.find ( key ) ;
-    if ( it == content_map.end() )
-    {
-      if ( args.verbose )
-        std::cout << fct.filename << " is registered as environment "
-        << key << std::endl ;
-      content_map [ key ]
-        = std::make_shared < env_t > ( fct ) ;
-    }
-    else
-    {
-      if ( args.verbose )
-        std::cout << fct.filename << " already registered as "
-        << key << " - reusing it"
-        << std::endl ;
-    }
-
-    // we're now certain to have a suitable entry in the content map,
-    // so we can push a copy to env_v. this is lightweight, because
-    // the actual data are also held via a shared_ptr to a bspline
-    // object.
-
-    env_v.push_back ( * ( content_map [ key ] ) ) ;
+    env_v.push_back ( env_t ( fct ) ) ;
 
     // we also need several rotations stemming from the
     // orientation of the virtual camera and the orientation

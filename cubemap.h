@@ -1158,22 +1158,10 @@ public:
     cubemap_to_pixel ( face , in_face , px ) ;
   }
 
-  // the c'tor without arguments obtains the parameterization from
-  // the global 'args' object
-
-  // cubemap_t()
-  // : cubemap_t ( args.env_width , args.cbmfov ,
-  //               args.support_min , args.tile_size )
-  // {
-  //   if ( args.multiple_input )
-  //   {
-  //     load ( args.cfs.get_filenames() ) ;
-  //   }
-  //   else
-  //   {
-  //     load ( args.input ) ;
-  //   }
-  // }
+  // this c'tor overload is used when loading a facet image of
+  // a cubemap from disk. Here, we call the c'tor overload which
+  // sets the cubemap up fully (store, p_ul etc.), then load the
+  // data with 'load'.
 
   cubemap_t ( const facet_spec & fct )
   : cubemap_t ( fct.width , fct.hfov ,
@@ -1193,6 +1181,22 @@ public:
       }
     }
     load ( fct.filename ) ;
+  }
+
+  // this c'tor overload is used when creating a cubemap_t from
+  // a facet image which is alread present in RAM. Note that this
+  // only sets the cubemap_t up for evaluation - some member variables
+  // are not set (like store, p_ul), but for evaluation, these members
+  // are not needed - the 'metrics' and the b-splne suffice.
+
+  cubemap_t ( const facet_spec & fct ,
+              std::shared_ptr < spl_t > _p_bsp )
+  : metrics_t ( fct.width , fct.hfov ,
+                args.support_min , args.tile_size )
+  {
+    assert ( _p_bsp != nullptr ) ;
+    p_bsp = _p_bsp ;
+    bsp_ev = zimt::make_evaluator < spl_t , float , LANES > ( *p_bsp ) ;
   }
 
 } ; // end of struct cubemap_t
