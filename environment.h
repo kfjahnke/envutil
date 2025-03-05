@@ -53,6 +53,7 @@
 #include "twining.h"
 #include "geometry.h"
 #include "cubemap.h"
+#include "masking.h"
 
 HWY_BEFORE_NAMESPACE() ;
 BEGIN_ZIMT_SIMD_NAMESPACE(project)
@@ -60,28 +61,6 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 using OIIO::ImageInput ;
 using OIIO::TypeDesc ;
 using OIIO::ImageSpec ;
-
-// the masking_t functor yields a pixel with C channels painted
-// 'paint' unconditionally.
-
-template < std::size_t D , std::size_t C , std::size_t L >
-struct masking_t
-: public zimt::unary_functor < zimt::xel_t < float , D > ,
-                               zimt::xel_t < float , C > ,
-                               L >
-{
-  const float paint ;
-
-  masking_t ( const float & _paint )
-  : paint ( _paint )
-  { }
-
-  template < typename I , typename O >
-  void eval ( const I & in , O & out )
-  {
-    out = paint ;
-  }
-} ;
 
 // source_t provides pixel values from a mounted 2D manifold. The
 // incoming 2D coordinates are pixel coordinates guaranteed to be
@@ -124,14 +103,23 @@ struct source_t
 
   source_t ( std::shared_ptr < spl_t > _p_bspl , int masked )
   : p_bspl ( _p_bspl ) ,
-    width ( masked == -1 ? _p_bspl->core.shape[0] : 1 ) ,
-    height ( masked == -1 ? _p_bspl->core.shape[1] : 1 )
+    width ( _p_bspl ? _p_bspl->core.shape[0] : 1 ) ,
+    height ( _p_bspl ? _p_bspl->core.shape[1] : 1 )
   {
     if ( masked == -1 )
+    {
       bsp_ev = zimt::make_safe_evaluator
                       < spl_t , float , L > ( *p_bspl ) ;
-    else
+    }
+    else if ( nchannels == 1 || nchannels == 3 )
+    {
       bsp_ev = masking_t < 2 , nchannels , L > ( masked ) ;
+    }
+    else
+    {
+      bsp_ev = alpha_masking_t < nchannels , L >
+                 ( masked , p_bspl ) ;
+    }
   }
 
   void eval ( const pkg_v & _crd , px_v & px )
@@ -720,6 +708,110 @@ struct repix_t
   }
 } ;
 
+// cubemap_view_t is a stripped-down version of cubemap_t which
+// is strictly for viewing. It depends on a ready-made b-spline
+// holding the IR image of a cubemap (conveniently made by using
+// cubemap_t originally) and a minimal set of parameters and
+// code to produce pixel values for ray coordinates. It can also
+// produce masks. I prefer to have this class here, because it
+// is quite specific and I want to keep details like masking
+// (which requires classes masking_t or alpha_masking_t) out of
+// the header cubemap.h.
+
+template < std::size_t nchannels , projection_t cbm_prj >
+struct cubemap_view_t
+: public zimt::unary_functor
+   < zimt::xel_t < float , 3 > ,
+     zimt::xel_t < float , nchannels > ,
+     LANES >
+{
+  typedef zimt::xel_t < float , 2 > crd2_t ;
+  typedef zimt::xel_t < float , 3 > ray_t ;
+  typedef zimt::xel_t < float , nchannels > px_t ;
+
+  typedef zimt::simdized_type < int , LANES > i_v ;
+  typedef zimt::simdized_type < crd2_t , LANES > crd2_v ;
+  typedef zimt::simdized_type < ray_t , LANES > ray_v ;
+  typedef zimt::simdized_type < px_t , LANES > px_v ;
+
+  typedef zimt::bspline < px_t , 2 > spl_t ;
+
+  std::shared_ptr < spl_t > p_bsp ;
+
+  // we hold the functor producing pixels as a grok_type, which
+  // gives us more flexibility because we can override it later on,
+  // e.g. to produce masks instead of image data.
+
+  zimt::grok_type < crd2_t , px_t , LANES > ev ;
+
+  // these are the variables which are needed from cubemap_t to
+  // evaluate the b-spline holding the IR image
+
+  const float refc_md , model_to_px ;
+  const int section_px ;
+
+  cubemap_view_t ( float _refc_md ,
+                   float _model_to_px ,
+                   std::shared_ptr < spl_t > _p_bsp ,
+                   int masked )
+  : refc_md ( _refc_md ) ,
+    model_to_px ( _model_to_px ) ,
+    p_bsp ( _p_bsp ) ,
+    section_px ( _p_bsp->core.shape [ 0 ] )
+  {
+    if ( masked != -1 )
+    {
+      assert ( nchannels == 2 || nchannels == 4 ) ;
+      ev = alpha_masking_t < nchannels , LANES > ( masked , p_bsp ) ;
+    }
+    else
+    {
+      // std::cout << "making an evaluator from " << p_bsp << std::endl ;
+      ev = make_safe_evaluator ( * p_bsp ) ;
+    }
+  }
+
+  // this is the same code as in metrics.h - it's all we need to
+  // obtain the pick-up coordinate in spline units
+
+  void get_pickup_coordinate_px ( const i_v & face ,
+                                  const crd2_v & in_face ,
+                                  crd2_v & pickup ) const
+  {
+    pickup = in_face + refc_md ;
+    pickup *= model_to_px ;
+    pickup[1] += ( face * section_px ) ;
+    pickup -= .5f ;
+  }
+
+  // and this is the same code as in cubemap.h
+
+  void cubemap_to_pixel ( const i_v & face ,
+                          const crd2_v & in_face ,
+                          px_v & px )
+  {
+    crd2_v pickup ;
+    get_pickup_coordinate_px ( face , in_face , pickup ) ;
+    ev.eval ( pickup , px ) ;
+  }
+
+  void eval ( const ray_v & ray , px_v & px )
+  {
+    i_v face ;
+    crd2_v in_face ;
+
+    ray_to_cubeface < float , LANES > ( ray , face , in_face ) ;
+
+    if constexpr ( cbm_prj == BIATAN6 )
+      in_face = float ( 4.0 / M_PI ) * atan ( in_face ) ;
+
+    // std::cout << "face: " << face << " in_face " << in_face << std::endl ;
+    cubemap_to_pixel ( face , in_face , px ) ;
+    // std::cout << "px: " << px << std::endl ;
+  }
+
+} ;
+
 // the 'environment' template codes objects which can serve as 'act'
 // functor in zimt::process. It's coded as a zimt::unary_functor
 // taking 3D 'ray' coordinates and producing pixels with C channels.
@@ -797,80 +889,129 @@ struct _environment
 
     if ( fct.projection == CUBEMAP || fct.projection == BIATAN6 )
     {
+      metrics_t cbm_metrics ( fct.width , fct.hfov ,
+                              args.support_min ,
+                              args.tile_size ) ;
+
+      // collision of terminology: get_mask gets a SIMD mask which
+      // is true for rays which hit the facet. obviously, this must
+      // be an all-tru mask for cubemaps, because they cover the
+      // entire 360X180. The masks we refer to next are masks
+      // which are 1 - or white - where a facet produces visible
+      // contribution to the final image. To form such masks,
+      // what we're doing conceptually is to replace one facet
+      // image's pixels with entirely white pixels and all other
+      // facet images' pixels with black pixels. If we form an
+      // output image from such modified data, we receive the
+      // desired mask.
+
       get_mask = []( const ray_v & ray ) { return mask_t ( true ) ; } ;
 
-      // if we're doing a masking job, we create a special kind
-      // of environment object. TODO: if the cubemap carries an
-      // alpha channel, it's more involved - still to be done!
+      // if we're doing a masking job for a facet without alpha
+      // channel (one or three channels, greyscale and RGB), we
+      // create a special kind of environment object where we
+      // don't even have to open the image: all we need is it's
+      // metrics, which can be gleaned from the facet_spec in fct.
 
-      if ( fct.masked != -1 )
+      if ( ( fct.masked != -1 ) && ( C == 1 || C == 3 ) )
       {
         env = masking_t < 3 , C , L > ( fct.masked ) ;
       }
-      else
+      else 
       {
-        // for 'normal' operation, we actually need image data.
+        // for 'normal' operation, and also for masking jobs with
+        // facets with alpha channel, we actually need image data.
         // image data are valuable assets, so we keep track of
         // images we load in 'spl_map' and reuse the data in RAM
         // if we already have them.
 
         auto it = spl_map.find ( fct.filename ) ;
-        if ( it != spl_map.end() )
+
+        if ( it == spl_map.end() )
         {
-          // we're in luck - this image file was already loaded
-          // into a b-spline previously.
+          if ( args.verbose )
+            std::cout << "cubemap " << fct.filename
+                      << " is now loaded from disk" << std::endl ;
+
+          // The b-spline used inside a cubemap_t object is not simply
+          // a spline over the image data, but the result of quite
+          // elaborate processing, and possibly a composite of six
+          // discrete cube face images. So we set up a cubemap_t
+          // object and then extract it's b-spline. Later on, we'll
+          // us a cubemap_view_t object to obtain pixel data from
+          // that spline.
+
+          if ( fct.projection == CUBEMAP )
+          {
+            cubemap_t < C , CUBEMAP > cbm ( fct.width , fct.hfov ,
+                                            args.support_min ,
+                                            args.tile_size ) ;
+            cbm.load ( fct.filename ) ;
+            p_bspl = cbm.p_bsp ;
+            spl_map [ fct.filename ] = p_bspl ;
+          }
+          else
+          {
+            cubemap_t < C , BIATAN6 > cbm ( fct.width , fct.hfov ,
+                                            args.support_min ,
+                                            args.tile_size ) ;
+            cbm.load ( fct.filename ) ;
+            p_bspl = cbm.p_bsp ;
+            spl_map [ fct.filename ] = p_bspl ;
+          }
+        }
+        else
+        {
+          // we're in luck - this cubemap was already loaded
+          // into a cubemap_t object previously and the resulting
+          // bspline object was extracted.
 
           if ( args.verbose )
             std::cout << "cubemap " << fct.filename
                       << " is already present in RAM" << std::endl ;
 
           p_bspl = it->second ;
+        }
 
-          // we use cubemap_t's functor taking the shared_ptr to
-          // the b-spline as second argument
+        // now that we have the b-spline, we can set up a cubemap_view_t.
+        // This only needs a few parameters characterizing the meaning
+        // of the spline (refc_md and model_to_px), the spline itself
+        // and a variable indicating whether we want pixel or masking
+        // data.
 
-          if ( fct.projection == CUBEMAP )
-          {
-            env = cubemap_t < C , CUBEMAP > ( fct , p_bspl ) ;
-          }
-          else
-          {
-            env = cubemap_t < C , BIATAN6 > ( fct , p_bspl ) ;
-          }
+        if ( fct.projection == CUBEMAP )
+        {
+          env = cubemap_view_t < C , CUBEMAP >
+                 ( cbm_metrics.refc_md ,
+                   cbm_metrics.model_to_px ,
+                   p_bspl , fct.masked ) ;
         }
         else
         {
-          if ( args.verbose )
-            std::cout << "cubemap " << fct.filename
-                      << " is now loaded from disk" << std::endl ;
-
-          // here we don't pass a shared_ptr to a b-spline. This
-          // c'tor overload of class cubemap_t loads image data
-          // from disk and sets up a new cubemap_t object using
-          // a newly-set-up b-spline. We extract the shared_ptr
-          // to the new b-spline and store it in spl_map.
-
-          if ( fct.projection == CUBEMAP )
-          {
-            cubemap_t < C , CUBEMAP > cbm ( fct ) ;
-            spl_map [ fct.filename ] = cbm.p_bsp ;
-            env = cbm ;
-          }
-          else
-          {
-            cubemap_t < C , BIATAN6 > cbm ( fct ) ;
-            spl_map [ fct.filename ] = cbm.p_bsp ;
-            env = cbm ;
-           }
+          env = cubemap_view_t < C , BIATAN6 >
+                 ( cbm_metrics.refc_md ,
+                   cbm_metrics.model_to_px ,
+                   p_bspl , fct.masked ) ;
         }
       }
+      // we're done with the case that the facet is a cubemap, so we
+      // return early - the remainder of this function deals with other
+      // types of facets.
+
       return ;
     }
 
-    // the facet isn't a cubemap.
+    // the facet isn't a cubemap. First we check if the facet provides
+    // full 360X180 degree coverage, in which case we can use slightly
+    // more performant code (we need no SIMD masks to indicate where
+    // the facet provides data and where it doesn't).
 
     shape_type shape { fct.width , fct.height } ;
     bool full_environment = false ;
+
+    // most facets are rendered with REFLECT boundary conditions,
+    // but if the facet covers the full 360 degrees in the horiontal,
+    // we'll use PERIODIC boundary conditions instead.
 
     zimt::bc_code bc0 = zimt::REFLECT ;
     if (    fct.projection == SPHERICAL
@@ -880,12 +1021,17 @@ struct _environment
         bc0 = PERIODIC ;
     }
 
-    // gct.masked == -1 means 'normal operation': we set up a
-    // b-spline over the image data:
+    // fct.masked == -1 means 'normal operation': we set up a
+    // b-spline over the image data. The image data are also
+    // needed for a masking job for facets with alpha channel.
+    // masking jobs for images without an alpha channel don't
+    // need image data, so we don't set up a b-spline at all
+    // and leave p_bspl at it's default value of nullptr.
 
-    if ( fct.masked == -1 )
+    if ( fct.masked == -1 || ( C == 2 || C == 4 ) )
     {
       auto it = spl_map.find ( fct.filename ) ;
+
       if ( it != spl_map.end() )
       {
         // we're in luck - this image file was already loaded
@@ -958,15 +1104,13 @@ struct _environment
       }
     }
 
-    // if we're making a mask, p_bspl is nullptr, and fct.masked
+    // if we're making a mask for an image without alpha channel,
+    // p_bspl is nullptr (we don't need image data), and fct.masked
     // is 1 for the facet for which we make the mask and zero for
     // all other facets. source_t's c'tor will result in a suitable
     // functor: one producing only zero, or one, respectively.
-    // For 'normal' operation, p_bspl points to a b-spline and
-    // fct.masked is -1. Then, the source_t will evaluate the
-    // b-spline to produce pixel values.
-    // TODO: as stated above, if the source image carries an alpha
-    // channel, we need to do more - i.e. load the alpha data
+    // For 'normal' operation and masking jobs for images with
+    // alpha channel, p_bspl points to a b-spline.
 
     source_t < C , 2 , L > src ( p_bspl , fct.masked ) ;
 
@@ -976,15 +1120,27 @@ struct _environment
     auto extent = get_extent ( fct.projection , fct.width ,
                                fct.height , fct.hfov  ) ;
 
-    // we fix the projection as a template argument to class mount_t.
+    // Some facets require additional processing of the planar (image)
+    // coordinates which the source_t object receives. This is needed
+    // if the PTO file specifies shear and/or lens correction parameters.
+    // This can't currently be affected by command line parameters.
+    // We encode such processing in a std::function modifying the
+    // SIMD vector of 2D coordinates:
 
     typedef std::function < void ( crd_v & ) > planar_f ;
 
     bool have_shear = false ;
     planar_f pf_shear = [] ( crd_v & ) { } ;
+
+    bool have_lcp = false ;
+    planar_f pf_lcp = [] ( crd_v & ) { } ;
+
+    // first we check for shear - this is quite simple:
+
     if ( fct.shear_g != 0.0 || fct.shear_t != 0.0 )
     {
       have_shear = true ;
+
       pf_shear = [=] ( crd_v & crd )
       {
         crd = {  crd[0] + ( crd[1] * fct.shear_g ) ,
@@ -992,11 +1148,13 @@ struct _environment
       } ;
     }
 
-    bool have_lcp = false ;
-    planar_f pf_lcp = [] ( crd_v & ) { } ;
+    // now for lens correction. This code is more involved; here we
+    // use an adapted version of the lens correction code in lux:
+
     if ( fct.lens_correction_active )
     {
       have_lcp = true ;
+
       pf_lcp = [=] ( crd_v & crd )
       {
         auto x = crd[0] ;
@@ -1038,7 +1196,14 @@ struct _environment
       } ;
     }
 
-    planar_f pf = pf_shear ;
+    // now we set up 'pf' to use none, one or both in-plane functions:
+
+    planar_f pf = pf_shear ; // pf_shear is no-op if there is no shear
+
+    // with lens control active, that has to be done before shear is
+    // applied - shear is usually from scanning prints, so it's the
+    // last step (we're doing an inverse transform from target to
+    // source)
 
     if ( have_lcp )
     {
@@ -1055,6 +1220,12 @@ struct _environment
         pf = pf_lcp ;
       }
     }
+
+    // we fix the projection as a template argument to class mount_t,
+    // passing the planar function as well. Then we also set up the
+    // get_mask function - this is specific to the mount_t, and since
+    // we 'grok' the mount_t by assigning to 'env' we can't perform
+    // the operation later on.
 
     switch ( fct.projection )
     {

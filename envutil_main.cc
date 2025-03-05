@@ -639,67 +639,6 @@ void arguments::init ( int argc , const char ** argv )
   if ( height == 0 )
     height = width ;
 
-  if ( seqfile == std::string() )
-  {
-    // single-image output (no sequence file given)
-    // if there is a sequence file, the variables which are set
-    // here will be set for every frame specified in the sequence,
-    // and single-image parameters from the CL have no effect.
-
-    if ( verbose)
-    {
-      std::cout << "output: " << output << std::endl ;
-      std::cout << "output projection: " << prj_str << std::endl ;
-
-      if ( hfov > 0.0 )
-        std::cout << "output hfov: " << hfov << std::endl ;
-
-      std::cout << "virtual camera yaw: " << yaw
-                << " pitch: " << pitch
-                << " roll: " << roll << std::endl ;
-    }
-
-    // convert angles to radians
-
-    hfov *= M_PI / 180.0 ;
-    yaw *= M_PI / 180.0 ;
-    pitch *= M_PI / 180.0 ;
-    roll *= M_PI / 180.0 ;
-
-    // calculate extent - a non-zero hfov overrides x0, x1, y0, and y1
-
-    step = 0.0 ;
-    if ( hfov != 0.0 )
-    {
-      auto extent = get_extent ( projection , width , height , hfov  ) ;
-      x0 = extent.x0 ;
-      x1 = extent.x1 ;
-      y0 = extent.y0 ;
-      y1 = extent.y1 ;
-    }
-    assert ( x0 < x1 ) ;
-    assert ( y0 < y1 ) ;
-
-    step = ( x1 - x0 ) / width ;
-
-    if ( verbose )
-    {
-      if ( hfov == 0.0 )
-      {
-        std::cout << "extent calculated from hfov:"
-                  << std::endl ;
-      }
-      else
-      {
-        std::cout << "extent gleaned from command line arguments:"
-                  << std::endl ;
-      }
-      std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
-      std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
-      std::cout << "step: " << step << std::endl ;
-    }
-  }
-
   nfacets = facet_name_v.size() ;
   // assert ( nfacets ) ;
   facet_spec fspec ;
@@ -736,13 +675,28 @@ void arguments::init ( int argc , const char ** argv )
     fspec.a = fspec.b = fspec.c = fspec.h = fspec.v = 0.0 ;
     facet_spec_v.push_back ( fspec ) ;
   }
-  std::cout << "******** PTO file " << pto_file << std::endl ;
+
+  bool p_line_present = false ;
+  projection_t p_line_projection ;
+  std::size_t p_line_width ;
+  std::size_t p_line_height ;
+  double p_line_hfov ;
+
   if ( pto_file != std::string() )
   {
+    if ( verbose )
+      std::cout << "processing PTO file " << pto_file << std::endl ;
+
     pto_parser_type parser ;
     auto success = parser.read_pto_file ( pto_file ) ;
-    // if ( success )
-    //   parser.walk() ;
+
+    if ( verbose )
+      std::cout << "PTO file parse "
+                << ( success ? "succeeded" : "failed" )
+                << std::endl ;
+
+    if ( ! success )
+      exit ( -1 ) ;
 
     // instead of using straight std::stod on the values in the
     // i-line, we use the lambda 'glean', which returns zero if
@@ -756,6 +710,40 @@ void arguments::init ( int argc , const char ** argv )
       return std::stod ( str ) ;
     } ;
       
+    auto & p_line_list ( parser.line_group [ "p" ] ) ;
+    if ( p_line_list.size() != 0 )
+      p_line_present = true ;
+
+    for ( auto & p_line : p_line_list )
+    {
+      auto & dir ( p_line.field_map ) ;
+      int prj = std::stoi ( dir [ "f" ] ) ;
+      if ( prj == 0 )
+        p_line_projection = RECTILINEAR ;
+      else if ( prj == 1 )
+        p_line_projection = CYLINDRICAL ;
+      else if ( prj == 2 )
+        p_line_projection = SPHERICAL ;
+      else if ( prj == 3 )
+        p_line_projection = FISHEYE ;
+      else if ( prj == 4 )
+         p_line_projection = STEREOGRAPHIC ;
+      else
+      {
+        // TODO: allow override, better error message, check
+        // abort code (currently produces a zombie process)
+        std::cerr << "can't handle PTO projection code "
+                  << prj << " in p-line" << std::endl ;
+
+        p_line_projection = PRJ_NONE ;
+      }
+      p_line_width = std::stoi ( dir [ "w" ] ) ;
+      p_line_height = std::stoi ( dir [ "h" ] ) ;
+      p_line_hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
+
+      break ; // additional p-lines are ignored for now.
+    }
+
     auto & i_line_list ( parser.line_group [ "i" ] ) ;
     for ( auto & i_line : i_line_list )
     {
@@ -931,6 +919,79 @@ void arguments::init ( int argc , const char ** argv )
     nchannels = nch ;
   if ( verbose )
     std::cout << "global nchannels set to: " << nchannels << std::endl ;
+
+  if ( seqfile == std::string() )
+  {
+    if ( p_line_present )
+    {
+      hfov = p_line_hfov ;
+      projection = p_line_projection ;
+      prj_str = projection_name [ projection ] ;
+      width = p_line_width ;
+      height = p_line_height ;
+    }
+    else
+    {
+      hfov *= M_PI / 180.0 ;
+    }
+
+    // single-image output (no sequence file given)
+    // if there is a sequence file, the variables which are set
+    // here will be set for every frame specified in the sequence,
+    // and single-image parameters from the CL have no effect.
+
+    if ( verbose)
+    {
+      std::cout << "output: " << output << std::endl ;
+      std::cout << "output projection: " << prj_str << std::endl ;
+
+      if ( hfov > 0.0 )
+        std::cout << "output hfov: " << hfov << std::endl ;
+
+      std::cout << "virtual camera yaw: " << yaw
+                << " pitch: " << pitch
+                << " roll: " << roll << std::endl ;
+    }
+
+    // convert angles to radians
+
+    yaw *= M_PI / 180.0 ;
+    pitch *= M_PI / 180.0 ;
+    roll *= M_PI / 180.0 ;
+
+    // calculate extent - a non-zero hfov overrides x0, x1, y0, and y1
+
+    step = 0.0 ;
+    if ( hfov != 0.0 )
+    {
+      auto extent = get_extent ( projection , width , height , hfov  ) ;
+      x0 = extent.x0 ;
+      x1 = extent.x1 ;
+      y0 = extent.y0 ;
+      y1 = extent.y1 ;
+    }
+    assert ( x0 < x1 ) ;
+    assert ( y0 < y1 ) ;
+
+    step = ( x1 - x0 ) / width ;
+
+    if ( verbose )
+    {
+      if ( hfov == 0.0 )
+      {
+        std::cout << "extent calculated from hfov:"
+                  << std::endl ;
+      }
+      else
+      {
+        std::cout << "extent gleaned from command line arguments:"
+                  << std::endl ;
+      }
+      std::cout << "x0: " << x0 << " x1: " << x1 << std::endl ;
+      std::cout << "y0: " << y0 << " y1: " << y1 << std::endl ;
+      std::cout << "step: " << step << std::endl ;
+    }
+  }
 
   if ( twf_file != std::string() )
   {

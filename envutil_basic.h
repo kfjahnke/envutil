@@ -115,7 +115,8 @@ const char * const projection_name[]
   "stereographic" ,
   "fisheye" ,
   "cubemap" ,
-  "biatan6"
+  "biatan6" ,
+  "unsupported"
 } ;
 
 extern long rt_cumulated ;
