@@ -226,7 +226,7 @@ void work ( get_t & get , act_t & act )
   // a multithreaded pipeline which fills the target image.
   
   zimt::bill_t bill ;
-  bill.njobs = 1 ;
+  // bill.njobs = 1 ;
 
   std::chrono::system_clock::time_point start
     = std::chrono::system_clock::now() ;

@@ -352,7 +352,6 @@ typename U::value_type angle ( const U & a , const U & b )
 
 struct facet_spec
 {
-  bool active ;
   int masked ;
   int facet_no ;
   std::string filename ;

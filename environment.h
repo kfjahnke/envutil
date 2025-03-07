@@ -602,12 +602,12 @@ void spherical_prefilter
 // one- and three-channel data are opaque. It's also assumed that
 // transparency is given as associated alpha.
 
-template < typename T , std::size_t N , std::size_t M , std::size_t L >
+template < typename T , std::size_t IN , std::size_t OUT , std::size_t L >
 struct repix_t
-: public unary_functor < xel_t < T , N > , xel_t < T , M > , L >
+: public unary_functor < xel_t < T , IN > , xel_t < T , OUT > , L >
 {
-  typedef unary_functor < xel_t < T , N > ,
-                          xel_t < T , M > , L > base_t ;
+  typedef unary_functor < xel_t < T , IN > ,
+                          xel_t < T , OUT > , L > base_t ;
 
   using typename base_t::in_v ;
   using typename base_t::out_v ;
@@ -615,49 +615,49 @@ struct repix_t
   void eval ( const in_v & in , out_v & out ,
               const std::size_t & cap = L ) const
   {
-    static_assert ( N > 0 && M > 0 && N < 5 && M < 5 ) ;
+    static_assert ( IN > 0 && OUT > 0 && IN < 5 && OUT < 5 ) ;
 
-    if constexpr ( N == M )
+    if constexpr ( IN == OUT )
     {
       out = in ;
     }
-    else if constexpr ( N == 1 )
+    else if constexpr ( IN == 1 )
     {
-      if constexpr ( M == 3 )
+      if constexpr ( OUT == 3 )
       {
         out = in[0] ;
       }
       else
       {
-        if constexpr ( M == 2 )
+        if constexpr ( OUT == 2 )
         {
           out[0] = in[0] ;
-          out[1] = 1 ;
+          out[1] = 1.0f ;
         }
-        else if constexpr ( M == 4 )
+        else if constexpr ( OUT == 4 )
         {
           out[0] = in[0] ;
           out[1] = in[0] ;
           out[2] = in[0] ;
-          out[3] = 1 ;
+          out[3] = 1.0f ;
         }
       }
     }
-    else if constexpr ( N == 2 )
+    else if constexpr ( IN == 2 )
     {
-      if constexpr ( M == 1 )
+      if constexpr ( OUT == 1 )
       {
         out[0] = in[0] / in[1] ;
-        out[0] ( in[1] == 0 ) = 0 ;
+        out[0] ( in[1] == 0.0f ) = 0.0f ;
       }
-      else if constexpr ( M == 3 )
+      else if constexpr ( OUT == 3 )
       {
         out[0] = in[0] / in[1] ;
-        out[0] ( in[1] == 0 ) = 0 ;
+        out[0] ( in[1] == 0.0f ) = 0.0f ;
         out[1] = out[0] ;
         out[2] = out[0] ;
       }
-      else if constexpr ( M == 4 )
+      else if constexpr ( OUT == 4 )
       {
         out[0] = in[0] ;
         out[1] = in[0] ;
@@ -665,44 +665,119 @@ struct repix_t
         out[3] = in[1] ;
       }
     }
-    else if constexpr ( N == 3 )
+    else if constexpr ( IN == 3 )
     {
-      if constexpr ( M == 1 )
+      if constexpr ( OUT == 1 )
       {
         out[0] = in.sum() / 3.0f ;
       }
-      else if constexpr ( M == 2 )
+      else if constexpr ( OUT == 2 )
       {
         out[0] = in.sum() / 3.0f ;
-        out[1] = 1 ;
+        out[1] = 1.0f ;
       }
-      else if constexpr ( M == 4 )
+      else if constexpr ( OUT == 4 )
       {
         out[0] = in[0] ;
         out[1] = in[1] ;
         out[2] = in[2] ;
-        out[3] = 1 ;
+        out[3] = 1.0f ;
       }
     }
-    else if constexpr ( N == 4 )
+    else if constexpr ( IN == 4 )
     {
-      if constexpr ( M == 1 )
+      if constexpr ( OUT == 1 )
       {
-        out[0] = in.sum() / 3.0f ;
+        out[0] = ( in[0] + in[1] + in[2] ) / 3.0f ;
         out[0] /= in[3] ;
-        out[0] ( in[3] == 0 ) = 0 ;
+        out[0] ( in[3] == 0.0f ) = 0.0f ;
       }
-      else if constexpr ( M == 2 )
+      else if constexpr ( OUT == 2 )
       {
-        out[0] = in.sum() / 3.0f ;
+        out[0] = ( in[0] + in[1] + in[2] ) / 3.0f ;
         out[1] = in[3] ;
       }
-      else if constexpr ( M == 3 )
+      else if constexpr ( OUT == 3 )
       {
         out[0] = in[0] / in[3] ;
         out[1] = in[1] / in[3] ;
         out[2] = in[2] / in[3] ;
-        out ( in[3] == 0 ) = 0 ;
+        out ( in[3] == 0.0f ) = 0.0f ;
+      }
+    }
+  }
+} ;
+
+// for masking jobs, the R, G and B values are irrelevant. The 'colour'
+// is either 1.0 or 0.0, and if there are three 'colour' channels, they
+// are equal. So where the class above would form averages, we can simply
+// pick any of the three channels. Alpha is preserved and kept associated.
+// Only one- and two-chanel output is allowed, that's the point after all.
+// Note that we have to propagate the transparency of the facet: here we
+// produce the input to the synopsis-forming object, and for jobs with
+// alpha channel, this object has to do alpha compositing to create correct
+// output. The final product after the synopsis will carry two (equal)
+// channels - the 'colour' can only be 0 or 1, and since we're working with
+// associated alpha, the first channel is 1 * alpha, so == alpha. Only
+// after the synopsis, the alpha channel can be discarded to form a plain
+// grey-scale mask.
+
+template < typename T , std::size_t IN , std::size_t OUT , std::size_t L >
+struct mono_t
+: public unary_functor < xel_t < T , IN > , xel_t < T , OUT > , L >
+{
+  typedef unary_functor < xel_t < T , IN > ,
+                          xel_t < T , OUT > , L > base_t ;
+
+  using typename base_t::in_v ;
+  using typename base_t::out_v ;
+
+  void eval ( const in_v & in , out_v & out ,
+              const std::size_t & cap = L ) const
+  {
+    static_assert ( IN > 0 && OUT > 0 && IN < 5 && OUT < 5 ) ;
+    assert ( OUT == 1 || OUT == 2 ) ;
+
+    if constexpr ( IN == OUT )
+    {
+      out = in ;
+    }
+    else if constexpr ( IN == 1 )
+    {
+      // OUT must be 2
+      out[0] = in[0] ;
+      out[1] = 1.0f ;
+    }
+    else if constexpr ( IN == 2 )
+    {
+      // OUT must be 1
+      out[0] = in[0] / in[1] ;
+      out[0] ( in[1] == 0.0f ) = 0.0f ;
+    }
+    else if constexpr ( IN == 3 )
+    {
+      if constexpr ( OUT == 1 )
+      {
+        out[0] = in[0] ;
+      }
+      else if constexpr ( OUT == 2 )
+      {
+        out[0] = in[0] ;
+        out[1] = 1.0f ;
+      }
+    }
+    else if constexpr ( IN == 4 )
+    {
+      if constexpr ( OUT == 1 )
+      {
+        out[0] = in[0] ;
+        out[0] /= in[3] ;
+        out[0] ( in[3] == 0.0f ) = 0.0f ;
+      }
+      else if constexpr ( OUT == 2 )
+      {
+        out[0] = in[0] ;
+        out[1] = in[3] ;
       }
     }
   }
@@ -1355,47 +1430,97 @@ struct environment
 
     // the required channel count is different, use a repix_t
 
-    switch ( fct.nchannels )
+    if ( fct.masked == -1 )
     {
-      case 1 :
+      switch ( fct.nchannels )
       {
-        repix_t < U , 1 , C , L > repix ;
-        _environment < T , U , 1 , L > e ( fct ) ;
-        env = e.env + repix ;
-        get_mask = e.get_mask ;
-        break ;
-      }
-      case 2 :
+        case 1 :
+        {
+          repix_t < U , 1 , C , L > repix ;
+          _environment < T , U , 1 , L > e ( fct ) ;
+          env = e.env + repix ;
+          get_mask = e.get_mask ;
+          break ;
+        }
+        case 2 :
+        {
+          repix_t < U , 2 , C , L > repix ;
+          _environment < T , U , 2 , L > e ( fct ) ;
+          env = e.env + repix ;
+          get_mask = e.get_mask ;
+          break ;
+        }
+        case 3 :
+        {
+          repix_t < U , 3 , C , L > repix ;
+          _environment < T , U , 3 , L > e ( fct ) ;
+          env = e.env + repix ;
+          get_mask = e.get_mask ;
+          break ;
+        }
+        case 4 :
+        {
+          repix_t < U , 4 , C , L > repix ;
+          _environment < T , U , 4 , L > e ( fct ) ;
+          env = e.env + repix ;
+          get_mask = e.get_mask ;
+          break ;
+        }
+        default:
+        {
+          std::cerr << "fct.nchannels invalid: " << fct.nchannels
+                    << std::endl ;
+          exit ( -1 ) ;
+        }
+      } ;
+    }
+    else
+    {
+      // for masking jobs, we use mono_t instead of repix_t. This will
+      // only work if C == 1 or C == 2.
+
+      switch ( fct.nchannels )
       {
-        repix_t < U , 2 , C , L > repix ;
-        _environment < T , U , 2 , L > e ( fct ) ;
-        env = e.env + repix ;
-        get_mask = e.get_mask ;
-        break ;
-      }
-      case 3 :
-      {
-        repix_t < U , 3 , C , L > repix ;
-        _environment < T , U , 3 , L > e ( fct ) ;
-        env = e.env + repix ;
-        get_mask = e.get_mask ;
-        break ;
-      }
-      case 4 :
-      {
-        repix_t < U , 4 , C , L > repix ;
-        _environment < T , U , 4 , L > e ( fct ) ;
-        env = e.env + repix ;
-        get_mask = e.get_mask ;
-        break ;
-      }
-      default:
-      {
-        std::cerr << "fct.nchannels invalid: " << fct.nchannels
-                  << std::endl ;
-        exit ( -1 ) ;
-      }
-    } ;
+        case 1 :
+        {
+          mono_t < U , 1 , C , L > mono ;
+          _environment < T , U , 1 , L > e ( fct ) ;
+          env = e.env + mono ;
+          get_mask = e.get_mask ;
+          break ;
+        }
+        case 2 :
+        {
+          mono_t < U , 2 , C , L > mono ;
+          _environment < T , U , 2 , L > e ( fct ) ;
+          env = e.env + mono ;
+          get_mask = e.get_mask ;
+          break ;
+        }
+        case 3 :
+        {
+          mono_t < U , 3 , C , L > mono ;
+          _environment < T , U , 3 , L > e ( fct ) ;
+          env = e.env + mono ;
+          get_mask = e.get_mask ;
+          break ;
+        }
+        case 4 :
+        {
+          mono_t < U , 4 , C , L > mono ;
+          _environment < T , U , 4 , L > e ( fct ) ;
+          env = e.env + mono ;
+          get_mask = e.get_mask ;
+          break ;
+        }
+        default:
+        {
+          std::cerr << "fct.nchannels invalid: " << fct.nchannels
+                    << std::endl ;
+          exit ( -1 ) ;
+        }
+      } ;
+    }
   }
 } ;
 

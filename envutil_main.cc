@@ -390,10 +390,6 @@ void arguments::init ( int argc , const char ** argv )
 
   ap.separator("  mandatory options:");
 
-  // ap.arg("--input INPUT")
-  //   .help("input file name (mandatory if no 'facet' is given)")
-  //   .metavar("INPUT");
-
   ap.arg("--output OUTPUT")
     .help("output file name (mandatory)")
     .metavar("OUTPUT");
@@ -418,17 +414,6 @@ void arguments::init ( int argc , const char ** argv )
     .help("height of the output (default: same as width)")
     .metavar("EXTENT");
 
-  // // additional input parameters for cubemap input
-  // ap.separator("  additional input parameters for cubemap input:");
-  // 
-  // ap.arg("--cbmfov ANGLE")
-  //   .help("horiziontal field of view of cubemap input (default: 90)")
-  //   .metavar("ANGLE");
-  // 
-  // ap.arg("--cbm_prj PRJ")
-  //   .help("projection for cubemaps (default: cubemap - alt. biatan6)")
-  //   .metavar("PRJ");
-
   ap.arg("--support_min EXTENT")
     .help("minimal additional support around the cube face proper")
     .metavar("EXTENT");
@@ -437,11 +422,8 @@ void arguments::init ( int argc , const char ** argv )
     .help("tile size for the internal representation image")
     .metavar("EXTENT");
 
-  // ap.arg("--ctc CTC")
-  //   .help("pass '1' to interpret cbmfov as center-to-center (default 0)")
-  //   .metavar("CTC");
-
   // parameters for single-image output
+
   ap.separator("  additional parameters for single-image output:");
 
   ap.arg("--yaw ANGLE")
@@ -473,6 +455,7 @@ void arguments::init ( int argc , const char ** argv )
     .metavar("EXTENT");
 
   // parameters for multi-image and video output
+
   ap.separator("  additional parameters for multi-image and video output:");
 
   ap.arg("--seqfile SEQFILE")
@@ -492,11 +475,8 @@ void arguments::init ( int argc , const char ** argv )
     .metavar("FPS");
 
   // interpolation options
-  ap.separator("  interpolation options:");
 
-  ap.arg("--itp ITP")
-    .help("interpolator: 1 for b-spline, -2 b-spline+twining")
-    .metavar("ITP");
+  ap.separator("  interpolation options:");
 
   ap.arg("--prefilter DEG")
     .help("prefilter degree (>= 0) for b-spline-based interpolations")
@@ -506,15 +486,16 @@ void arguments::init ( int argc , const char ** argv )
     .help("degree of the spline (>= 0) for b-spline-based interpolations")
     .metavar("DEG");
 
-  // parameters for twining (with --itp -2)
-  ap.separator("  parameters for twining (with --itp -2):");
+  // parameters for twining
+
+  ap.separator("  parameters for twining (--twine 1 switches twining off)");
 
   ap.arg("--twine TWINE")
-    .help("use twine*twine oversampling - default: automatic settings")
+    .help("use twine*twine oversampling - omit this arg for automatic twining")
     .metavar("TWINE");
 
   ap.arg("--twf_file TWF_FILE")
-    .help("read twining filter kernel from TWF_FILE")
+    .help("read twining filter kernel from TWF_FILE (switches twining on)")
     .metavar("TWF_FILE");
 
   ap.arg("--twine_normalize", &twine_normalize)
@@ -582,7 +563,7 @@ void arguments::init ( int argc , const char ** argv )
   codec = ap["codec"].as_string ( "libx265" ) ; 
   mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
   fps = ap["fps"].get<int>(60);
-  itp = ap["itp"].get<int>(1);
+  // itp = ap["itp"].get<int>(1);
   prefilter_degree = ap["prefilter"].get<int>(-1);
   spline_degree = ap["degree"].get<int>(1);
   twine = ap["twine"].get<int>(0);
@@ -837,28 +818,18 @@ void arguments::init ( int argc , const char ** argv )
     assert ( mask_for < nfacets ) ;
 
   nchannels = 1 ;
+  bool alpha_seen = false ;
 
   for ( auto & m : facet_spec_v )
   {
+    if ( m.nchannels == 2 || m.nchannels == 4 )
+      alpha_seen = true ;
+
     // if this facet has a higher channel count than what we've
     // seen so far, update nchannels
 
     if ( m.nchannels > nchannels )
       nchannels = m.nchannels ;
-
-    // if there is a 'solo' argument, set only this facet active
-
-    if ( solo == -1 )
-    {
-      m.active = true ;
-    }
-    else
-    {
-      if ( m.facet_no == solo )
-        m.active = true ;
-      else
-        m.active = false ;
-    }
 
     // if there is a mask_for argument, set only this facet's
     // 'masked' field to 1 - all other facets' 'mask' field to
@@ -896,12 +867,22 @@ void arguments::init ( int argc , const char ** argv )
                 << "shear g: " << m.shear_g
                 << " shear t: " << m.shear_t << " (in texture units)"
                 << std::endl
-                << "active: " << ( m.active ? "yes" : "no" )
                 << "  masked: " << ( mask_for == -1
                                    ? "no"
                                    : ( m.masked == 0
                                        ? "black"
                                        : "white" ) ) << std::endl ;
+  }
+
+  // special case: there was at least one 2-channel facet, which is
+  // taken as greyscale with alpha, resulting in alpha_seen true. And
+  // there were also three-channel facets, so that nchannels is now
+  // three (the maximum seen). In this case we up nchannels to four
+  // to enforce alpha processing.
+
+  if ( alpha_seen && nchannels == 3 )
+  {
+    nchannels = 4 ;
   }
 
   // if there is an 'nchannels' argument, it overrides the value
@@ -917,6 +898,7 @@ void arguments::init ( int argc , const char ** argv )
   int nch = ap["nchannels"].get<int> ( 0 ) ;
   if ( nch > 0 )
     nchannels = nch ;
+
   if ( verbose )
     std::cout << "global nchannels set to: " << nchannels << std::endl ;
 
@@ -993,6 +975,8 @@ void arguments::init ( int argc , const char ** argv )
     }
   }
 
+  itp = -2 ;
+
   if ( twf_file != std::string() )
   {
     // if user passes a twf-file, it's used to set up the twining
@@ -1002,7 +986,14 @@ void arguments::init ( int argc , const char ** argv )
     read_twf_file ( twine_spread ) ;
     assert ( twine_spread.size() ) ;
   }
-  else if ( itp == -2 )
+  else if ( twine == 1 )
+  {
+    // user has passed twine == 1 explicitly. We set itp to 1, to
+    // use 'straight' interpolation witout twining
+
+    itp = 1 ;
+  }
+  else
   {
     if ( twine == 0 )
     {

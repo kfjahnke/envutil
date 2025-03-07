@@ -83,12 +83,8 @@ but you'll want a script to produce the seqfile - it's a bit like a
 slicer file for a 3D printer - you don't want to write that by hand,
 either. Default is H265 with 60 fps and 8 Mbit/sec.
 
-You can choose several different interpolation methods with the --itp
-command line argument. The default is --itp 1, which uses b-spline
-interpolation. This is fast and often good enough, especially if there
-are no great scale changes involved - so, if the output's resolution is
-similar to the input's.
---itp -2 uses 'twining' - oversampling with subsequent weighted pixel
+You can choose several different interpolation methods. The default
+is to use 'twining' - oversampling with subsequent weighted pixel
 binning. The default with this method is to use a simple box filter
 on a signal which is interpolated with b-spline interpolation; the
 number of taps and the footprint of the pick-up are set automatically.
@@ -105,10 +101,13 @@ flexibility isn't accessible in 'envutil' with the parameterization
 as it stands now, but it's already quite useful with the few parameters
 I offer. Automatic twining is also used for video output, where fixed
 twining parameters would fail to adapt to changing hfov. Use of twining
-is strongly recommended for video output to avoid aliasing.
+is strongly recommended for video output to avoid aliasing. You may
+switch twining off by passing --twine 1. The b-spline used as 'ground
+truth' can be parameterized with the --degree and --prefilter arguments,
+see there.
 
 There is also code to read the twining filter kernel from a file
-(use --twf_file); this filter can be scalled by additionally passing
+(use --twf_file); this filter can be scaled by additionally passing
 --twine_width. This allows for arbitrary filters. Processing time rises
 with the number of twining coefficients, and especially with several
 facets as input, transparency, and large twining kernels, production
@@ -228,11 +227,10 @@ envutil --help gives a summary of command line options:
       --fps FPS                      output video FPS frames/sec (default: 60)
 
     interpolation options:
-      --itp ITP            interpolator: 1 for spline, -2 for b-spline+twining
-      --prefilter DEG      prefilter degree for the b-spline (>= 0)
-      --degree DEG         degree of the b-spline (>= 0)
+      --prefilter DEG                prefilter degree for the b-spline (>= 0)
+      --degree DEG                   degree of the b-spline (>= 0)
 
-    parameters for twining (with --itp -2):
+    parameters for twining:
       --twine TWINE                  use twine*twine oversampling - default: automatic settings
       --twf_file TWF_FILE            read twining filter kernel from TWF_FILE
       --twine_normalize              normalize twining filter weights gleaned from a file
@@ -280,6 +278,160 @@ The options are given with a headline made from the argument parser's help
 text. The capitalized word following the parameter is a placeholder for the
 actual value you pass.
 
+#  parameters for mounted (facet) image input:
+
+envutil uses the 'facet' option or a PTO file to introduce one or more
+source images. Both options can occur together, and you can pass several
+--facet options, but there can currently be at most one PTO file.
+
+## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+##     load oriented non-environment source image
+
+envutil will 'mount' images in various projections and hfov which may only
+cover a part of the full 360X180 degree environment. All projections are
+supported. hfov is in degrees - for cubemaps and their 'biatan6' variant
+pass 90 (or whatever hfov your cube face images have) even though the whole
+cubemap does of course cover 360X180 degrees fov. The three values must
+be followed by the facet's orientation, given as three 'Euler angles' (yaw,
+pitch, roll). If you want the facet to be mounted 'straight ahead', just pass
+0 0 0. All six values (image filename, projection, hfov, yaw, pitch, roll)
+must be passed after --facet, separated by space.
+
+You may pass more than one facet. Currently, where several facets provide
+visible content for a given viewing ray, envutil gives preference to one
+of them, following this scheme: For every candidate, the normalized 
+viewing ray's z (forward) component *in the facet's coordinate system* 
+is isolated. To this, the reciprocal 'step' value is added - see just
+below for an explanation. The facet where the sum comes out largest 'wins'
+the contest - it's content is assigned to the viewing ray.
+
+The 'step' value is a measure of the change in a viewing ray's angle
+(measured in radians) when moving one pixel to the right in the image
+center. Images with high resolution per degree of hfov have small step
+values, and vice versa - so the reciprocal step value is higher for
+images with higer resolution, and adding this datum to the z value
+will give preference to images with higher resolution. The effect is
+that higher-res content is placed 'in front of' lower-res content,
+which is usually desirable. This scheme for prioritization can produce
+unexpected results, though - lower-res content can simply disappear
+behind higher-res facets. Keep this in mind if you can't see some of
+your input in the output - you can pass --solo for the facet in question
+to make sure that it is in the viewing area at all.
+
+The overall result - especially when all images have the same resolution
+- resembles a voronoi diagram. Facets with transparency let other facets
+shine through oven if they don't 'win the contest'. You can mix facets
+with and without transparency: all facets are 'pulled up' to the highest
+channel count, but it's probably better if all input facets have the
+same channel count and transparency quality. If a facet has transparency
+and is situated 'in front' of other facets, the facet(s) behind it will
+shine through. So, to reiterate: higher resolution content is given
+priority over lower resolution content, and if facets with equal resolution
+collide, the pixels from the facet whose center is closest-by are given
+priority. The latter is the same criterion as 'highest z component'.
+
+Why can the viewing ray's z component be used as 'quality' criterion?
+Because the 'steppers' which feed rays into the pixel pipeline produce
+rays in each facet's 'native' coordinate system - so any rotations due
+to the facet's own orientation and the virtual camera's orientation are
+handled by the stepper. This facilitates handling at the receiving end,
+and for multi-facet operation, the rays are also normalized. With normalized
+rays as input, comparing their z component is enough to figure out the
+voronoi criterion: The maximum z value is 1.0, a normalized ray straight
+ahead, which corresponds with the facet image's center. the smaller the
+z value, the farther away the ray is from the center, down to -1, which
+is a ray 'straight back'.
+
+If you use multi-facet input with simple interpolation (--twine 1), you may
+notice ungainly staircase artifacts where facets collide, and also where
+the facets border on 'empty space'. This is due to the way facets are
+prioritized: only one facet can 'win the contest', and there is currently
+no implementation of feathering. If you use twining, the effect is mitigated,
+the facets are blended to a certain degree, and the edges are faded into
+black. The larger the twining kernel is, the better the effect. When
+automatic twining is used, the twining kernel is calculated to suit all
+facets - if some facets have very high resolution, this may result in a
+large twining kernel to avoid aliasing even for the parts of the target
+image which show low-res content, bringing computation load up even if
+most of the target image may come from lower resolution content. So the
+choice of the automatic twining kernel is conservative but may be slow to
+compute. With a twining kernel of standard size, horizontal and vertical
+collision lines will be hard discontinuities. This is correct - the blending
+due to twining only affects tilted collision lines, unless the twining kernel
+is widened, which introduces overall blur as well.
+
+## --pto PTO-FILE       panotools script in higin PTO dialect (optional)
+
+envutil can process a growing subset of the PTO standard. Currently, the
+i-lines in a PTO file are scanned for file name, projection, hfov, yaw,
+pitch, roll, translation, shear and lens correction parameters. For an
+explanation of PTO lens correction parameters, see this [Wiki Page](https://wiki.panotools.org/Lens_correction_model).
+Other lines in the PTO file are currently ignored. images from PTO files
+are added to the set of facets given with --facet - if no --facet parameters
+are present, only those given in the PTO file are used. I have opted to
+restrict the facet parameters accessible with the --facet option to the
+set given above to avoid an overly large parameter signature - in favour
+of using PTO format for more complex facet parameterization. Note that
+envutil's processing of projections in PTO format is limited to rectilinear,
+spherical, cylindrical, fisheye, and stereographic. Also note that there is
+currently no image blending (no image splining with the Burt&Adelson image
+splining algorithm as I use it in lux) - the facets will have 'hard' edges.
+The facet prioritization is also fixed to a simple voronoi-diagram-like
+mode, more complex schemes like lux' shallow cone/steep pyramid method are
+not yet available in envutil. Image brightness (and vignetting) is not
+touched either, stacks, masks and cropping aren't supported. Nevertheless,
+the set of PTO parameters which envutil now recognizes should convey a good
+idea of the fit of an intended stitch - similar to the fast 'live stitch'
+used for animated sequences in lux. I may add more PTO features, but mainly
+I want the PTO option to introduce facets with extended geometrical 
+information via a file, to avoid overly long and cumbersome parameter lists.
+envutil parses PTO format 'leniently' - you need to pass an image file
+name, projection and hfov in the i-lines, but other parameters may or
+may not be present; if they are not given envutil sets them to zero.
+And if the i-line contains fields which envutil does not process, they
+are simply ignored.
+
+## --solo FACET_INDEX       show only this facet (indexes starting from zero)
+
+This is mostly useful when processing PTO files. envutil ignores all
+facets but the specified one - processing is as if they did not exist
+at all, even if they would otherwise occlude the 'solo' facet.
+
+## --mask_for FACET_INDEX   paint this facet white, all others black
+
+The caption is slightly simplified, so here's the whole story: processing
+replaces all colour or greyscale channels with 1 (full intensity) in
+the indicated facet - or, if an alpha channel is present, with the value
+of the alpha channel, so that the pixel, interpreted as associated alpha,
+is like a full-intensity pixel with the given transparency. Other facets
+are treated in the same way, but receive zero intensity while retaining
+an alpha value, if present. Further processing is the same.
+Because all colour channels receive the same intensity value, the global
+channel count can be reduced to one (if no alpha is present) or two (for
+facets with alpha channel) - by passing --nchannels. single-channel masks
+can even be made without loading any images, because there is no alpha
+channel to consider. Masks with alpha channel may have (semi-)transparent
+areas where none of the facets provides full opacity. Areas not covered
+by any facets will also come out black or transparent black.
+
+## --nchannels CHANNELS     produce output with CHANNELS channels (1-4)
+
+This option sets the global channel count for all facets before they
+are combined into the target image. The facets are forced to this common
+channel count, processig facet data with alpha channel as assocotaed alpha.
+This is a handy way to reduce the channel count for masking jobs (as stated
+in the previous chapter) or to produce greyscale imagery. Reduction of RGB
+information to greyscale is by averaging. If this option is not present,
+facets may still be 'pulled up' to a different channel count before they are
+submitted to prioritization. Here's the rule: all facets are pulled up to
+the channel count of the facet with the highest channel count. If any facet
+has an alpha channel and the maximal channel count would not contain an
+alpha channel, this is added - this can happen if there are two-channel
+facets (greyscale+alpha) and RGB facets but no RGBA facets - the resulting
+global chanel count will be set to four for RGBA.
+
+# Parameters for Single-Image Output
+
 ## --output OUTPUT       output file name (mandatory)
 
 The output will be stored under this name. If you are generating cubemaps
@@ -294,99 +446,6 @@ element like %03d to get alphabetically sortable images - in preference to
 e.g. %d which does not produce leading zeroes. If you are generating image
 sequences and your output parameter is *not* a format string, envutil will
 produce video output to the given filename.
-
-# Parameters for (facet) image input
-
-envutil now only uses the 'facet' option to introduce one or more source
-images. So this option can occur more than once, but it has to be present
-at least once:
-
-## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
-##     load oriented non-environment source image
-
-envutil will 'mount' images in various projections and hfov which may only
-cover a part of the full 360X180 degree environment. All projections are
-supported. hfov is in degrees - for cubemaps and their 'biatan6' variant
-pass 90 (or whatever hfov your cube face images have) even though the whole
-cubemap does of course cover 360X180 degrees fov. The three values must
-be followed by the facet's orientation, given as three 'Euler angles' (yaw,
-pich, roll). If you want the facet to be mounted 'straight ahead', just pass
-0 0 0. All six values (image filename, projection, hfov, yaw, pitch, roll)
-must be passed after --facet, separated by space.
-
-You may pass more than one facet. Currently, where several facets provide
-visible content for a given viewing ray, envutil gives preference to one
-of them, following this scheme: For every candidate, the normalized 
-viewing ray's z (forward) component *in the facet's coordinate system* 
-is isolated. The facet where it comes out largest 'wins' the contest -
-it's content is assigned to the viewing ray.
-The overall result resembles a voronoi diagram - facets with
-transparency let other facets shine through oven if they don't 'win the
-contest'. You can't currently mix facets with and without transparency;
-all facets have to have the same channel count and transparency quality.
-If a facet has transparency and is situated in front of other facets,
-the facet(s) behind it will shine through.
-The facet prioritization is an interesting field. lux provides several
-different ways of prioritization, and I aim to do the same for envutil,
-to provide services like automatic preference to higher-res content
-or lux' shallow cone/steep pyramid weighting scheme. For now I use the
-simple voronoi criterion exclusively to establish the pixel pipeline.
-
-Why can the viewing ray's z component be used as 'quality' criterion?
-Because the 'steppers' which feed rays into the pixel pipeline produce
-rays in each facet's 'native' coordinate system - so any rotations due
-to the facet's own orientation and the virtual camera's orientation are
-handled by the stepper. This facilitates handling at the receiving end,
-and for multi-facet operation, the rays are also normalized. With normalized
-rays as input, comparing their z component is enough to figure out the
-voronoi criterion: The maximum z value is 1.0, a normalized ray straight
-ahead, which corresponds with the facet image's center. the smaller the
-z value, the farther away the ray is from the center, down to -1, which
-is a ray 'straight back'.
-
-If you use multi-facet input with simple interpolation (--itp 1), you may
-notice ungainly staircase artifacts where facets collide, and also where
-the facets border on 'empty space'. This is due to the way facets are
-prioritized: only one facet can 'win the contest', and there is currently
-no implementation of feathering. If you use twining, the effect is mitigated,
-the facets are blended to a certain degree, and the edges are faded into
-black. The larger the twining kernel is, the better the effect. When
-automatic twining is used, the twining kernel is calculated to suit all
-facets - if some facets have very high resolution, this may result in a
-large twining kernel to avoid aliasing even for the parts of the target
-image which show the high-res content, bringing computation load up even if
-most of the target image may come from lower resolution content. So the
-choice of the automatic twining kernel is conservative but may be slow to
-compute. With a twining kernel of standard size, horizontal and vertical
-collision lines will be hard discontinuities. This is correct - the blending
-due to twining only affects tilted collision lines, unless the twining kernel
-is widened, which introduces overall blur as well.
-
-## --pto PTO-FILE
-
-envutil can process a growing subset of the PTO standard. Currently, the
-i-lines in a PTO file are scanned for file name, projection, yaw, pitch,
-roll, translation, shear and lens correction parameters. Other lines in
-the PTO file are currently ignored. images from PTO files are added to
-the set of facets given with --facet - if no --facet parameters are present,
-only those given in the PTO file are used. I have opted to restrict the
-facet parameters accessible with the --facet option to the set given
-above to avoid an overly large parameter signature - in favour of using
-PTO format for more complex facet parameterization. Note that envutil's
-processing of projections in PTO format is limited to rectilinear,
-spherical, cylindrical, fisheye, and stereographic. Also note that
-there is currently no image blending (no image splining with the
-Burt&Adelson image splining algorithm as I use it in lux) - the facets
-will have 'hard' edges. The facet prioritization is also fixed to a
-simple voronoi-diagram-like mode, more complex schemes like lux'
-shallow cone/steep pyramid method are not yet available in envutil.
-Image brightness (and vignetting) is not touched either, stacks, masks
-and cropping aren't supported. Nevertheless, the set of PTO parameters
-which envutil now recognizes should convey a good idea of the fit of an
-intended stitch - similar to the fast 'live stitch' used for animated
-sequences in lux. I may add more PTO features, but mainly I want the
-PTO option to introduce facets with extended geometrical information
-via a file, to avoid overly long and cumbersome parameter lists.
 
 ## --projection PRJ  target projection
 
@@ -530,8 +589,6 @@ projection and interpolations near the poles will 'look at' pixels which
 are nearby on the spherical surface, even if they are on opposite sides of the
 pole, so you can e.g. safely extract nadir caps.
 
-# Parameters for Single-Image Output
-
 ## --yaw ANGLE       yaw of the virtual camera (in degrees)
 ## --pitch ANGLE     pitch of the virtual camera (in degrees)
 ## --roll ANGLE      roll of the virtual camera (in degrees)
@@ -631,43 +688,42 @@ when it's displayed.
 
 # Interpolation Options
 
-## --itp ITP
+envutil will use 'twining' with automatic settings as it's default
+interpolation method. You can explicitly disable twining by passing
+--twine 1 - this results in 'straight' b-spline interpolation directly
+from the source image data:
 
-This is an integer value determining the interpolation method. There are
-currently two modes of interpolation:
+    use b-spline interpolation directly on the source image(s). This
+    is the fastest option, and unless there is a significant scale
+    change involved, the output should be 'good enough' for most still
+    image renditions. This is the default, with a spline degree of 1,
+    a.k.a. bilinear interpolation. Other spline degrees can be chosen
+    by passing --degree D, where D is the degree of the spline. Per
+    default, splines with degree > 1 are 'prefiltered'. You may pass
+    --prefilter D to apply a prefilter for a different degree than the
+    one used for evaluation. This can be used e.g. to blur the output
+    (use a smaller value for the prefilter degree than for the spline
+    degree). Note that b-splines may 'overshoot', unless you omit
+    the prefilter. This depends on the signal - if it's sufficiently
+    band-limited (nothing above half Nyquist frequency), the spline
+    won't overshoot. Using a degree-2 b-spline without prefilter
+    (--degree 2 --prefilter 0) introduces only slight blur and won't
+    overshoot - it's often a good compromise and also avoids the
+    star-shaped artifacts typical of degree-1 b-splines when the
+    signal is magnified a lot.
 
-    1 - use b-spline interpolation directly on the source image(s). This
-        is the fastest option, and unless there is a significant scale
-        change involved, the output should be 'good enough' for most still
-        image renditions. This is the default, with a spline degree of 1,
-        a.k.a. bilinear interpolation. Other spline degrees can be chosen
-        by passing --degree D, where D is the degree of the spline. Per
-        default, splines with degree > 1 are 'prefiltered'. You may pass
-        --prefilter D to apply a prefilter for a different degree than the
-        one used for evaluation. This can be used e.g. to blur the output
-        (use a smaller value for the prefilter degree than for the spline
-        degree). Note that b-splines may 'overshoot', unless you omit
-        the prefilter. This depends on the signal - if it's sufficiently
-        band-limited (nothing above half Nyquist frequency), the spline
-        won't overshoot. Using a degree-2 b-spline without prefilter
-        (--degree 2 --prefilter 0) introduces only slight blur and won't
-        overshoot - it's often a good compromise and also avoids the
-        star-shaped artifacts typical of degree-1 b-splines when the
-        signal is magnified a lot.
+If you don't pass --twine, or pass a value other than one, envutil uses
+twining to avoid aliasing and star-shaped artifacts of bilinear interpolation:
 
-    -2 - use 'twining' - this is a method which first super-samples and then
-        combines several pixels to one output pixel ('binning'). This is my
-        own invention. It's quite fast and produces good quality output.
-        This method should see community review to compare it with other
-        methods. If you only pass --itp -2 and not --twine, envutil will
-        set up twining parameters calculated to fit well with the
-        transformation at hand, and that's also done for image sequence
-        output, where the parameters have to adapt to the changing geometry.
-        The 'twining' interpolator is 'grafted' onto the 'substrate'
-        interpolator - that is the b-spline from the source image, which
-        you parameterize just as for --itp 1. So if you pass --degree 3,
-        the 'substrate' of the twining operator will be a cubic b-spline,
-        rather than a degree-1 b-spline (a.k.a bilinear interpolation).
+    use 'twining' - this is a method which first super-samples and then
+    combines several pixels to one output pixel ('binning'). This is my
+    own invention. It's quite fast and produces good quality output.
+    This method should see community review to compare it with other
+    methods. The 'twining' interpolator is 'grafted' onto the 'substrate'
+    interpolator - that is the b-spline from the source image. So if you
+    pass --degree 3, the 'substrate' of the twining operator will be a
+    cubic b-spline, rather than a degree-1 b-spline (a.k.a bilinear
+    interpolation) which is the default.
 
 In general, producing visible output is often a two-step process. The first
 step is to provide some sort of 'ground truth' - an internal representation
@@ -701,7 +757,7 @@ an 'image pyramid' - a set of images where each has half the resolution
 of the one 'below' it. OIIO can use this strategy (look for mip-mapping),
 and it's advantage is that pickup kernels can remain relatively small,
 because there are fewer pixels to form a sum over to avoid aliasing.
-Other rendering schemes in envutil do not currently use image pyramids;
+The rendering schemes in envutil do not currently use image pyramids;
 twining deals with the aliasing problem by picking adequately large
 kernels directly on the first-stage signal. It would be feasible, though,
 to add pyramid schemes. One problem with image pyramids is the fact that
@@ -720,19 +776,10 @@ and rendering must be as fast as possible). This would also be the case
 in envutil when multiple-image or video output is made, but I don't exploit
 this scheme in envutil.
 
-Why use a negative value for the second interpolation mode? This is similar
-to the values used in lux for 'decimators' - in lux, positive values are
-reserved for degrees of a b-spline reconstruction filter used as low-pass
-filter. bilinear interpolation is the same as a degree-1 b-spline, hence the
-value 1 for bilinear interpolation. In envutil, I have decided against using
-positive 'itp' values from 'meaning' b-splines -here, you pass --itp 1 for
-all splines, and --degree and, optionally, --prefilter additionally condition
-the spline:
-
 ##  --degree DEG      degree of the b-spline (>= 0)
 ##  --prefilter DEG   prefilter degree (>= 0) for the b-spline
 
-Images created with itp set to 1 or -2 both use b-splines as their substrate.
+All rendering in envutil use b-splines as the 'ground truth' substrate.
 If you don't pass --degree or --prefilter, a degree-1 b-spline is used - this
 is also known as 'bilinear interpolation' and already 'quite good'. But higher
 spline degrees can produce even better output, especially if the view magnifies
@@ -742,6 +789,7 @@ interpolating spline, meaning it will yield precisely the same pixel values
 as the input when evaluated at discrete coordinates. This requires prefiltering
 of the spline coefficients with a prefilter of the same degree as the spline,
 which is done by default.
+
 If you pass a different prefilter degree, the coefficients are prefiltered
 *as if* the spline degree were so, whereas the evaluation is done with the
 given degree. You can use this to produce smoother output (lower prefilter
@@ -752,20 +800,20 @@ Nyquist frequency. With raw images straight from the camera this is usually
 the case, but processed or generated images often have high frequency content
 which will result in these artifacts, which become annoyingly visible at high
 magnifications. One way to deal with this problem is to accept a certain amount
-of smoothing by omitting the prefilter - so, passing --prefilter 0 and --degree
+of smoothing by omitting the prefilter, e.g. passing --prefilter 0 and --degree
 greater than one. With a spline degree of two and no prefiltering, there is
 mild suppression of high frequencies, but there are no ringing artifacts, and
-this is often a good compromise.
+this is often a good compromise. bilinear interpolation also does not suffer
+from ringing artifacts - there, the drawback is the 'star-shaped artifacts'
+in magnifying views.
 
 # Twining-specific options
 
-These options control the 'twining' filter. These options only have an effect if
-you activate twining with --itp -2. envutil will use b-spline interpolation on
-the source image for single-point lookups, and it will perform more lookups and
-then combine several neighbouring pixels from the oversampled result into each
-target pixel. See the documentation on 'itp' for more details about the
-parameterization of the b-spline - the default is to use a degree-1 b-spline
-(a.k.a bilinear interpolation).
+These options control the 'twining' filter, which is active by default (switch
+it off by passing --twine 1 explicitly ) envutil will use b-spline interpolation
+on the source image for single-point lookups, and it will perform more lookups
+and then combine several neighbouring pixels from the oversampled result into
+each target pixel.
 
 The operation of the twining filter differs conceptually from OIIO's pick-up
 with derivatives: OIIO's filter (as I understand it) looks at the difference
@@ -795,21 +843,23 @@ Keeping this in mind, if you want to set up a twining filter yourself, either
 by passing twining-related parameters setting the number and 'spread' of
 the filter coefficients or by passing a file with filter coefficients, you
 must be careful to operate within these constraints - using automatic
-twining, on the other hand (just pass --itp -2 and no other twining-related
-arguments) will figure out a parameter set which should keep the filter
-within the constraints, so you neither get aliasing for down-scaling views
-nor bilinear artifacts in up-scaling views. When creating a twining filter
-externally, be generous: processing is fast even with many sub-pickups,
-so using a larger number than strictly necessary won't do much harm. If
-you produce a magnifying view and can use a b-spline with degree two or
-more, twining is futile, because the b-spline interpolation already
-produces a near-optimal result.
+twining, on the other hand will figure out a parameter set which should 
+keep the filter within the constraints, so you neither get aliasing for
+down-scaling views nor bilinear artifacts in up-scaling views.
+When creating a twining filter externally, be generous: processing is fast
+even with many sub-pickups, so using a larger number than strictly necessary
+won't do much harm, just take a little longer. If you produce a magnifying
+view and can use a b-spline with degree two or more, twining is futile,
+because the b-spline interpolation already produces a near-optimal result.
+If there are several facets, automatic twining will configure the filter
+so that even the most scaled-down content shows no aliasing.
 
 ## --twf_file TWF_FILE   read twining filter from a file
 
 Passing a twf file with this option reads the twining filter from this file,
 and ignores most other twining-related options. The file is a simple text file
-with three float values per line, let's call them x, y and w.
+with three float values per line, let's call them x, y and w. This option
+switches twining on unconditionally.
 
 The x and y values are offsets from the pick-up location and w is a weight.
 The x and y values are offsets in the horizontal/vertical of the target
@@ -878,16 +928,19 @@ is stored. This keeps the pipeline 'afloat' in SIMD registers, which is fast
 (as is the arithmetic) - especially when highway or Vc are used, which
 increase SIMD performance particularly well.
 
-If you activate twining by selecting --itp -2, but don't pass --twine
-(or pass --twine 0 explicitly), envutil will set up twining parameters
+So here's the explanation why --twine 1 switches twining off: a twining
+filter with just one pick-up point is simply 'straight' single-point
+lookup of the 'ground truth' b-spline.
+
+If you don't deactivate twining, envutil will set up twining parameters
 automatically, so that they fit the relation of input and output. If the
 output magnifies (in it's center), the twine width will be widened to
 avoid star-shaped artifacts in the output. Otherwise, the twine factor
 will be raised to avoid aliasing. You can see the values which envutil
 calculates if you pass -v. If the effect isn't to your liking, you can
-take the automatically calculated values as a starting point, but even if
-you pass --twine, the values will adapt in an image sequence. --twine
-only has an effect for single-image output
+take the automatically calculated values as a starting point. There are
+several optional parameters to change the twining filter and override
+automatic parameterization:
 
 ## --twine_width TWINE_WIDTH  alter the size of the pick-up area of the twining filter
 
@@ -956,7 +1009,7 @@ and very high resolution - and this very high resolution is not actually
 exploited (or usable) to provide fine detail. AFAICT, OIIO's spline-based
 interpolators (e.g. bicubic) don't use prefiltering and therefore produce
 noticeable blurring. Try a b-spline with proper prefiltering and no twining
-(--itp 1 -degree 3) to see the difference - you'll see no blurring, but if
+(--twine 1 -degree 3) to see the difference - you'll see no blurring, but if
 the view magnifies and the signal isn't band-limited, you may see ringing
 artifacts.
 
@@ -1010,8 +1063,8 @@ with the target coordinate - the discrete coordinate where an output
 pixel will appear. Next, it figures out a 3D 'ray' coordinate which
 encodes the direction where the lookup should 'look for' content. This
 obviously depends on the target projection and the orientation of the
-virtual camera. With 'simple' interpolation - like the bilinear
-interpolation you get with --itp 1, the next step is to find a 2D
+virtual camera. With 'simple' interpolation - like the bilinear interpolation
+you get by default with --twine 1, the next step is to find a 2D
 coordinate into the source image which has the content corresponding
 to the given ray and interpolate a pixel value from the source image
 at that coordinate.
@@ -1129,7 +1182,7 @@ to interpret the difference differently, a pair of 3D vectors which can be used
 to construct a plane and place several lookup points on that plane, to combine
 their results to form the output as a weighted sum.
 
-From visual inspection of the results, envutil's use of OIIO's lookup seems to produce
+From visual inspection of the results, envutil's use of OIIO's lookup produced
 quite soft images. OIIO's lookup is - with the settings envutil uses - conservative
 and makes an effort to avoid aliasing, erring on the side of caution. Of course I
 can't rule out that my use of OIIO's lookup is not coded correctly, but I'm quite
@@ -1141,8 +1194,8 @@ why this process isn't very fast. OIIO's method of inspecting the derivatives ha
 the advantage of being perfectly general, and the lookup can decide for each pixel
 whether it needs to be interpolated or antialiased - and how much.
 
-In contrast, using bilinear interpolation (--itp 1) is very fast, but it's not
-adequate for all situations - especially not if there are large differences in
+In contrast, using bilinear interpolation is very fast, but it's not adequate
+for all situations - especially not if there are large differences in
 resolution between input and output. If the scale of the output is much smaller
 than the input's, the use of 'twining' should provide adequate antialiasing.
 When scaling up, bilinear interpolation only produces visible artifacts if the
