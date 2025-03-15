@@ -209,10 +209,23 @@ void work ( get_t & get , act_t & act )
   // receive the output pixels. Again we use a static object:
   // the output size will remain the same, so the array can be
   // re-used every time and we don't have to deallocate and then
-  // reallocate the memory.
+  // reallocate the memory. If there is a cropping specification
+  // for the output image (from a PTO file's p-line), the target
+  // array is sized accordingly.
 
-  static zimt::array_t < 2 , px_t >
-    trg ( { args.width , args.height } ) ;
+  std::size_t w , h ;
+  if ( args.have_crop )
+  {
+    w = args.p_crop_x1 - args.p_crop_x0 ;
+    h = args.p_crop_y1 - args.p_crop_y0 ;
+  }
+  else
+  {
+    w = args.width ;
+    h = args.height ;
+  }
+
+  static zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
   
   // set up a zimt::storer to populate the target array with
   // zimt::process. This is the third component needed for
@@ -226,7 +239,16 @@ void work ( get_t & get , act_t & act )
   // a multithreaded pipeline which fills the target image.
   
   zimt::bill_t bill ;
-  // bill.njobs = 1 ;
+
+  // If there is a cropping specification for the output image
+  // (from a PTO file's p-line), the discrete coordinates fed into
+  // the pixel pipeline have to be raised appropriately:
+
+  if ( args.have_crop )
+  {
+    bill.get_offset.push_back ( args.p_crop_x0 ) ;
+    bill.get_offset.push_back ( args.p_crop_y0 ) ;
+  }
 
   std::chrono::system_clock::time_point start
     = std::chrono::system_clock::now() ;
@@ -1370,7 +1392,7 @@ void fuse ( int ninputs )
 
           // set up a simple single-coordinate stepper of the type
           // fixed by 'STP'. This route is taken with direct b-spline
-          // interpolation (itp 1)
+          // interpolation (no twining)
 
           // note this setting VV - we need to normalize the ray here.
 

@@ -57,16 +57,13 @@
 // given by --width and --height. You must pass an output filename
 // with --output; --input specifies the environment image.
 //
-// You can choose several different interpolation methods with the --itp
-// cammand line argument. The default is --itp 1, which uses bilinear
-// interpolation. This is fast and often good enough, especially if there
-// are no great scale changes involved - so, if the output's resolution is
-// similar to the input's. --itp -2
-// uses 'twining' - inlined oversampling with subsequent weighted pixel
-// binning. The default with this method is to use a simple box filter
-// whose specific parameterization is set up automatically. Additional
-// parameters can change the amount of oversampling and add gaussian
-// weights to the filter parameters. 'twining' is quite fast (if the number
+// Per default, envutil uses 'twining' - inlined oversampling with
+// subsequent weighted pixel binning. The default with this method is
+// to use a simple box filter whose specific parameterization is set
+// up automatically. Additional/ parameters can change the amount of
+// oversampling and add gaussian weights to the filter parameters.
+// To switch twining off and use direct interpolation from the source
+// image data, pass --twine 1. 'twining' is quite fast (if the number
 // of filter taps isn't very large. When down-scaling, the parameter
 // 'twine' should be at least the same as the scaling factor to avoid
 // aliasing. When upscaling, larger twining values will slighly soften
@@ -168,6 +165,10 @@ bool facet_spec::init ( int argc , const char ** argv )
     std::cerr << "facet hfov invalid: " << hfov << std::endl ;
     return false ;
   }
+
+  // initially, the asset key is just the filename.
+
+  asset_key = filename ;
 
   // determine facet image's projection
   int prj = 0 ;
@@ -563,7 +564,6 @@ void arguments::init ( int argc , const char ** argv )
   codec = ap["codec"].as_string ( "libx265" ) ; 
   mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
   fps = ap["fps"].get<int>(60);
-  // itp = ap["itp"].get<int>(1);
   prefilter_degree = ap["prefilter"].get<int>(-1);
   spline_degree = ap["degree"].get<int>(1);
   twine = ap["twine"].get<int>(0);
@@ -654,6 +654,8 @@ void arguments::init ( int argc , const char ** argv )
     fspec.tp_y = fspec.tp_p = fspec.tp_r = 0.0 ;
     fspec.shear_g = fspec.shear_t = 0.0 ;
     fspec.a = fspec.b = fspec.c = fspec.h = fspec.v = 0.0 ;
+    fspec.have_crop = false ;
+    fspec.have_pto_mask = false ;
     facet_spec_v.push_back ( fspec ) ;
   }
 
@@ -722,6 +724,18 @@ void arguments::init ( int argc , const char ** argv )
       p_line_height = std::stoi ( dir [ "h" ] ) ;
       p_line_hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
 
+      std::string crop_str = dir [ "S" ] ;
+      if ( crop_str != std::string() )
+      {
+        have_crop = true ;
+        std::regex crop_regex ( "([0-9]+),([0-9]+),([0-9]+),([0-9]+)" ) ;
+        std::smatch parts ;
+        std::regex_match ( crop_str , parts , crop_regex ) ;
+        p_crop_x0 = std::stoi ( parts[1].str() ) ;
+        p_crop_x1 = std::stoi ( parts[2].str() ) ;
+        p_crop_y0 = std::stoi ( parts[3].str() ) ;
+        p_crop_y1 = std::stoi ( parts[4].str() ) ;
+      }
       break ; // additional p-lines are ignored for now.
     }
 
@@ -732,8 +746,11 @@ void arguments::init ( int argc , const char ** argv )
       facet_spec f ;
       f.facet_no = nfacets++ ;
       f.filename = dir [ "n" ] ;
+      f.have_crop = false ;
+      f.have_pto_mask = false ;
       if ( f.filename [ 0 ] == '"' )
         f.filename = f.filename.substr ( 1 , f.filename.size() - 2 ) ;
+      f.asset_key = f.filename ;
       int prj = std::stoi ( dir [ "f" ] ) ;
       if ( prj == 0 )
         f.projection = RECTILINEAR ;
@@ -798,10 +815,111 @@ void arguments::init ( int argc , const char ** argv )
       f.h = glean ( dir [ "d" ] ) ;
       f.v = glean ( dir [ "e" ] ) ;
       f.process_lc() ;
+      std::string crop_str = dir [ "S" ] ;
+      if ( crop_str != std::string() )
+      {
+        f.have_crop = true ;
+        std::regex crop_regex ( "([0-9]+),([0-9]+),([0-9]+),([0-9]+)" ) ;
+        std::smatch parts ;
+        std::regex_match ( crop_str , parts , crop_regex ) ;
+        f.crop_x0 = std::stoi ( parts[1].str() ) ;
+        f.crop_x1 = std::stoi ( parts[2].str() ) ;
+        f.crop_y0 = std::stoi ( parts[3].str() ) ;
+        f.crop_y1 = std::stoi ( parts[4].str() ) ;
+      }
       facet_spec_v.push_back ( f ) ;
+    }
+
+    const std::regex mask_corner_regex
+      ( "([+-]?[0-9.]+)\\s([+-]?[0-9.]+)" ) ;
+
+    auto & k_line_list ( parser.line_group [ "k" ] ) ;
+
+    if ( verbose && k_line_list.size() != 0 )
+      std::cout << "processing " << k_line_list.size()
+                << " masks" << std::endl ;
+
+    int mask_no = 0 ;
+    for ( auto & k_line : k_line_list )
+    {
+      auto & dir ( k_line.field_map ) ;
+      pto_mask_type mask ;
+      mask.image = std::stoi ( dir [ "i" ] ) ;
+      facet_spec_v [ mask.image ] . have_pto_mask = true ;
+      mask.variant = std::stoi ( dir [ "t" ] ) ;
+      mask.vertex_list = dir [ "p" ] ;
+
+      auto start = std::sregex_iterator ( mask.vertex_list.begin() ,
+                                          mask.vertex_list.end() ,
+                                          mask_corner_regex ) ;
+      auto end = std::sregex_iterator() ;
+      for ( auto i = start ; i != end ; ++i )
+      {
+        // iterate over the items and separate name and value
+
+        auto item = i->str() ;
+        std::smatch parts ;
+        std::regex_match ( item , parts , mask_corner_regex ) ;
+
+        auto xs = parts[1].str() ;
+        auto ys = parts[2].str() ;
+
+        mask.vx.push_back ( std::stod ( xs ) ) ;
+        mask.vy.push_back ( std::stod ( ys ) ) ;
+
+        // TODO: this works only for natively landscape images, for portrait
+        // the coordinates have to be modified to refer to the rotated image
+      }
+      
+      if ( mask.variant != 0 )
+      {
+        // TODO: we might also process exclude masks for 'all images with
+        // the same lens', but so far, we have no concept of a 'lens' in
+        // envutil. I'm also unsure about 'include masks'. The wiki is
+        // a bit vague insofar as it states that PTO masks are more like
+        // hints to the stitcher (especially include masks). Definitely,
+        // an include mask is nothing which can be implemented as an
+        // attribute of a facet - it affects all facets which are touched
+        // by the mask.
+
+        std::cerr << "warning: mask type not implemented: " << mask.variant
+                  << " this mask will be ignored" << std::endl ;
+      }
+
+      // more for reference:
+
+      pto_mask_v.push_back ( mask ) ;
+
+      // the exclude masks are stored with the facet they refer to:
+
+      auto & fct ( facet_spec_v [ mask.image ] ) ;
+      fct.pto_mask_v.push_back ( mask ) ;
+
+      // we suffix the sequential numbers of all used masks to the
+      // asset key to avoid reusing facets with the same name but
+      // different masking/cropping.
+
+      std::string suffix ( "." ) ;
+      if ( fct.filename == fct.asset_key )
+      {
+        suffix += args.pto_file + "." ;
+        fct.have_pto_mask = true ;
+      }
+      suffix += std::to_string ( mask_no ) ;
+      fct.asset_key += suffix ;
+      ++ mask_no ;
     }
   }
   assert ( nfacets ) ;
+
+  if ( verbose )
+  {
+    for ( const auto mask: pto_mask_v )
+      std::cout << mask ;
+    if ( have_crop )
+      std::cout << "p-line crop: " << p_crop_x0 << " " << p_crop_x1
+                << " " << p_crop_y0 << " " << p_crop_y1 << std::endl ;
+  }
 
   solo = ap["solo"].get<int> ( -1 ) ;
   if ( solo != -1 )
@@ -822,6 +940,11 @@ void arguments::init ( int argc , const char ** argv )
 
   for ( auto & m : facet_spec_v )
   {
+    if ( m.have_pto_mask || m.have_crop )
+    {
+      if ( m.nchannels == 1 || m.nchannels == 3 )
+        m.nchannels ++ ;
+    }
     if ( m.nchannels == 2 || m.nchannels == 4 )
       alpha_seen = true ;
 
@@ -849,6 +972,7 @@ void arguments::init ( int argc , const char ** argv )
     }
 
     if ( verbose )
+    {
       std::cout << "facet " << m.facet_no
                 << " '" << m.filename << "' "
                 << projection_name[m.projection]
@@ -866,12 +990,16 @@ void arguments::init ( int argc , const char ** argv )
                 << " tp_r:" << m.tp_r * 180.0 / M_PI << std::endl
                 << "shear g: " << m.shear_g
                 << " shear t: " << m.shear_t << " (in texture units)"
-                << std::endl
-                << "  masked: " << ( mask_for == -1
-                                   ? "no"
-                                   : ( m.masked == 0
-                                       ? "black"
-                                       : "white" ) ) << std::endl ;
+                << std::endl ;
+      if ( m.masked != -1 )
+        std::cout << "  b/w mask only: " << ( m.masked == 0
+                                              ? "black"
+                                              : "white" ) << std::endl ;
+      if ( m.have_crop )
+        std::cout << "  cropping active: " << m.crop_x0 << " "
+                  << m.crop_x1 << " " << m.crop_y0
+                  << " " << m.crop_y1 << std::endl ;
+    }
   }
 
   // special case: there was at least one 2-channel facet, which is
@@ -882,6 +1010,8 @@ void arguments::init ( int argc , const char ** argv )
 
   if ( alpha_seen && nchannels == 3 )
   {
+    std::cout << "found at least one image with transparency"
+              << std::endl ;
     nchannels = 4 ;
   }
 
@@ -897,12 +1027,15 @@ void arguments::init ( int argc , const char ** argv )
 
   int nch = ap["nchannels"].get<int> ( 0 ) ;
   if ( nch > 0 )
+  {
+    std::cout << "global nchannels override in arguments" << std::endl ;
     nchannels = nch ;
+  }
 
   if ( verbose )
     std::cout << "global nchannels set to: " << nchannels << std::endl ;
 
-  if ( seqfile == std::string() )
+  // if ( seqfile == std::string() )
   {
     if ( p_line_present )
     {
@@ -975,8 +1108,6 @@ void arguments::init ( int argc , const char ** argv )
     }
   }
 
-  itp = -2 ;
-
   if ( twf_file != std::string() )
   {
     // if user passes a twf-file, it's used to set up the twining
@@ -986,23 +1117,14 @@ void arguments::init ( int argc , const char ** argv )
     read_twf_file ( twine_spread ) ;
     assert ( twine_spread.size() ) ;
   }
-  else if ( twine == 1 )
-  {
-    // user has passed twine == 1 explicitly. We set itp to 1, to
-    // use 'straight' interpolation witout twining
-
-    itp = 1 ;
-  }
-  else
+  else if ( twine != 1 )
   {
     if ( twine == 0 )
     {
-      // user has passed twine 0, or not passed anything - but itp
-      // is -2. We set up the twining with automatically generated
-      // parameters.
+      // user has passed twine 0, or not passed anything. We set
+      // up the twining with automatically generated parameters.
 
-      // figure out the magnification in the image center as a
-      // guideline. For single facet operation, this is fine.
+      // figure out the magnification in the image center.
       // To make sure that the twine value is sufficiently large
       // for all contributing facets, we look for the smallest
       // 'step' value in the facet population and calculate
@@ -1011,11 +1133,25 @@ void arguments::init ( int argc , const char ** argv )
       // most of the result, so this detection and method is
       // conservative but potentially computationally expensive.
 
-      double smallest_step = args.facet_spec_v[0].step ;
-
-      for ( const auto & fspec : args.facet_spec_v )
+      double smallest_step = std::numeric_limits < double > :: max() ;
+      
+      if ( nfacets == 1 || solo > 0 )
       {
-        smallest_step = std::min ( fspec.step , smallest_step ) ;
+        // in solo mode, we calculate the twining factor to be suitable
+        // for the single facet we're processing. This is debatable:
+        // the result will differ slightly from what this facet's image
+        // will be in a synopsis. The difference should be sub-pixel
+        // only, though, and we avoid overkill for facets which have
+        // lower resolution.
+
+        smallest_step = args.facet_spec_v[solo].step ;
+      }
+      else
+      { 
+        for ( const auto & fspec : args.facet_spec_v )
+        {
+          smallest_step = std::min ( fspec.step , smallest_step ) ;
+        }
       }
 
       double mag = smallest_step / step ;
@@ -1043,18 +1179,30 @@ void arguments::init ( int argc , const char ** argv )
 
           if ( args.nfacets > 1 )
             twine = 3 ;
+          else if ( mag < 2.0 ) // << tapering
+            twine = 2 ;
           else
             twine = 1 ;
         }
         else
         {
+          // we're using binlinear interpolation. since this is a
+          // magnifying view, there may be star-shaped artifacts in the
+          // 'ground truth' rendition, so we use twining.
+
           twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
+
+          // the twine width is set equal to the magnification: We want
+          // to form the weighted sum over a field of as many pixels in
+          // the source signal as correspond to a single pixel in the
+          // target.
+
           twine_width = mag ;
         }
       }
       else
       {
-        // otherwise, we use a twine size which depends on the
+        // for down-scaling, we use a twine size which depends on the
         // downscaling factor (reciprocal of 'mag') and a twine_width
         // of 1.0: we only want anti-aliasing. picking a sufficiently
         // large twine value guarantees that we're not skipping any
@@ -1149,7 +1297,7 @@ int main ( int argc , const char ** argv )
       args.yaw = seq_yaw * M_PI / 180.0 ;
       args.pitch = seq_pitch * M_PI / 180.0 ;
       args.roll = seq_roll * M_PI / 180.0 ;
-
+    
       auto extent = get_extent ( args.projection , args.width ,
                                  args.height , args.hfov  ) ;
       args.x0 = extent.x0 ;
@@ -1187,7 +1335,7 @@ int main ( int argc , const char ** argv )
     // arguments into type information.
 
     int nch = args.nchannels ;
-    int ninp = ( args.itp == 1 ) ? 3 : 9 ;
+    int ninp = ( args.twine == 1 ) ? 3 : 9 ;
     projection_t prj = args.projection ;
 
     // now call the ISA-specific rendering code via the dispatch_base

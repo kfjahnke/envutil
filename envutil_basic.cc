@@ -224,3 +224,98 @@ extent_type get_extent ( projection_t projection ,
   }
   return { x0 , x1 , y0 , y1 } ;
 }
+
+// polygon filling code gleaned from:
+// http://alienryderflex.com/polygon_fill/
+// where a C version is available in the public domain.
+// thanks :D
+// I modified the code to take the winding order into account and produce
+// polygon filling behaviour like panotools: if the polygon self-intersects,
+// the intersections are also filled.
+
+void fill_polygon ( const std::vector<float> & px ,
+                    const std::vector<float> & py ,
+                    int IMAGE_LEFT , int IMAGE_TOP ,
+                    int IMAGE_RIGHT , int IMAGE_BOT ,
+                    std::function < void ( int , int ) > fillPixel )
+{
+  int N = px.size() ;
+  assert ( px.size() == py.size() ) ;
+
+  int  nodes, nodeX[N], dir[N] ,pixelX, pixelY, i, j, swap ;
+
+//  Loop through the rows of the image.
+  for (int pixelY=IMAGE_TOP; pixelY<IMAGE_BOT; pixelY++)
+  {
+
+    //  Build a list of nodes.
+    nodes=0; j=N-1;
+    for (i=0; i<N; i++)
+    {
+      // in addition to testing for the crossing, we also take note
+      // of the direction of the crossing: are we passing into the
+      // edge 'from the left' or 'from the right'?
+      int cross = 0 ;
+      if ( py[i]<(float) pixelY && py[j]>=(float) pixelY )
+        cross = 1 ;
+      else if ( py[j]<(float) pixelY && py[i]>=(float) pixelY)
+        cross = -1 ;
+      if ( cross )
+      {
+        nodeX[nodes]=(int) (px[i]+(pixelY-py[i])/(py[j]-py[i])
+        *(px[j]-px[i]));
+        dir[nodes++] = cross ;
+      }
+      j=i;
+    }
+
+    // Sort the nodes, via a simple “Bubble” sort.
+    // extended to also sort the crossing information
+
+    i=0 ;
+
+    while (i<nodes-1)
+    {
+      if (nodeX[i]>nodeX[i+1])
+      {
+        swap=nodeX[i]; nodeX[i]=nodeX[i+1]; nodeX[i+1]=swap;
+        swap=dir[i]; dir[i]=dir[i+1]; dir[i+1]=swap;
+        if (i) i--;
+      }
+      else
+      {
+        i++;
+      }
+    }
+
+    // Fill the pixels between node pairs if the winding order isn't zero.
+    // We obtain the winding order by cumulating the 'cross' values.
+    int w_ord = 0 ;
+    for (i=0; i<nodes; i++)
+    {
+      w_ord += dir[i] ;
+      // if the winding order is zero, skip to the next segment
+      if ( ! w_ord )
+        continue ;
+
+      // otherwise, the algorithm progresses as in the variant using
+      // 'alternate filling'
+
+      if   ( nodeX[i] >= IMAGE_RIGHT )
+        break ;
+      if   ( nodeX[i+1] > IMAGE_LEFT )
+      {
+        if ( nodeX[i] < IMAGE_LEFT )
+          nodeX[i] = IMAGE_LEFT ;
+
+        if ( nodeX[i+1] > IMAGE_RIGHT )
+          nodeX[i+1] = IMAGE_RIGHT ;
+
+        for ( pixelX = nodeX[i] ; pixelX < nodeX[i+1] ; pixelX++)
+          fillPixel(pixelX,pixelY);
+        
+      }
+    }
+  }
+}
+

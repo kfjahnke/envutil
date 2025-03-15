@@ -49,6 +49,7 @@
 #include "zimt/prefilter.h"
 #include "zimt/bspline.h"
 #include "zimt/eval.h"
+#include "zimt/convolve.h"
 
 #include "twining.h"
 #include "geometry.h"
@@ -918,6 +919,7 @@ struct _environment
   typedef zimt::xel_t < T , 3 > ray_t ;
   typedef simdized_type < ray_t , L > ray_v ;
   typedef zimt::xel_t < U , C > px_t ;
+  typedef simdized_type < px_t , L > px_v ;
   typedef zimt::xel_t < std::size_t , 2 > shape_type ;
   typedef zimt::xel_t < float , C > in_px_t ;
 
@@ -999,13 +1001,17 @@ struct _environment
         // image data are valuable assets, so we keep track of
         // images we load in 'spl_map' and reuse the data in RAM
         // if we already have them.
+        // Note: for cubemaps, masking and cropping are not available,
+        // we assume that cubemaps always have complete, opaque data.
+        // So we reuse cubemap image data if the name matches. Normal
+        // facets arealways reloaded if they have cropping or masking. 
 
-        auto it = spl_map.find ( fct.filename ) ;
+        auto it = spl_map.find ( fct.asset_key ) ;
 
-        if ( it == spl_map.end() )
+        if ( ( it == spl_map.end() ) )
         {
           if ( args.verbose )
-            std::cout << "cubemap " << fct.filename
+            std::cout << "cubemap " << fct.asset_key
                       << " is now loaded from disk" << std::endl ;
 
           // The b-spline used inside a cubemap_t object is not simply
@@ -1023,7 +1029,7 @@ struct _environment
                                             args.tile_size ) ;
             cbm.load ( fct.filename ) ;
             p_bspl = cbm.p_bsp ;
-            spl_map [ fct.filename ] = p_bspl ;
+            spl_map [ fct.asset_key ] = p_bspl ;
           }
           else
           {
@@ -1032,7 +1038,7 @@ struct _environment
                                             args.tile_size ) ;
             cbm.load ( fct.filename ) ;
             p_bspl = cbm.p_bsp ;
-            spl_map [ fct.filename ] = p_bspl ;
+            spl_map [ fct.asset_key ] = p_bspl ;
           }
         }
         else
@@ -1105,15 +1111,24 @@ struct _environment
 
     if ( fct.masked == -1 || ( C == 2 || C == 4 ) )
     {
-      auto it = spl_map.find ( fct.filename ) ;
+      // if the facet is subject to masking or cropping, it's
+      // alpha channel was created if it wasn't already present,
+      // and the masking/cropping information is encoded in the
+      // alpha channel. So we can't reuse the image data, because
+      // then we'd only get the masking/cropping of the first facet
+      // using this image file, which is wrong. hence:
 
-      if ( it != spl_map.end() )
+      // bool alpha_modified = fct.have_pto_mask || fct.have_crop ;
+
+      auto it = spl_map.find ( fct.asset_key ) ;
+
+      if ( it != spl_map.end() ) // && alpha_modified == false )
       {
         // we're in luck - this image file was already loaded
         // into a b-spline previously.
 
         if ( args.verbose )
-          std::cout << "image " << fct.filename
+          std::cout << "asset " << fct.asset_key
                     << " is already present in RAM" << std::endl ;
 
         p_bspl = it->second ;
@@ -1123,7 +1138,7 @@ struct _environment
         // no luck - we need to load the image data from disk
 
         if ( args.verbose )
-          std::cout << "image " << fct.filename
+          std::cout << "asset " << fct.asset_key
                     << " is now loaded from disk" << std::endl ;
 
         // currently building with raw::user_flip set to zero, to load
@@ -1133,6 +1148,8 @@ struct _environment
         ImageSpec config;
         config [ "raw:user_flip" ] = 0 ;
         auto inp = ImageInput::open ( fct.filename , &config ) ;
+
+        const ImageSpec &spec = inp->spec() ;
 
         p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
                                     { bc0 , zimt::REFLECT } ) ) ;
@@ -1147,10 +1164,256 @@ struct _environment
 
         inp->close() ;
 
+        int native_nchannels = spec.nchannels ;
+
+        if ( native_nchannels != fct.nchannels )
+        {
+          // this occurs only when cropping or masking affect the facet,
+          // in which case the facet's 'nchannels' value is raised from
+          // one to two or from three to four, to make room for an alpha
+          // channel if that isn't already present.
+
+          assert ( fct.have_crop || fct.have_pto_mask ) ;
+
+          // we initialize the alpha channel to 1.0f
+
+          auto p_alpha_data = (float*) ( p_bspl->container.data() ) ;
+          p_alpha_data += ( C - 1 ) ;
+
+          view_t < 2 , float > alpha_view
+                        ( p_alpha_data ,
+                          p_bspl->container.strides * C ,
+                          p_bspl->container.shape ) ;
+
+          alpha_view.set_data ( 1.0f ) ;
+        }
+
+        // now we process masking and cropping information
+
+        if ( fct.have_crop || fct.have_pto_mask )
+        {
+          assert ( C == 2 || C == 4 ) ;
+
+          array_t < 2 , float > alpha ( p_bspl->core.shape ) ;
+          alpha.set_data ( 1.0f ) ;
+
+          int w = alpha.shape[0] ;
+          int h = alpha.shape[1] ;
+
+          if ( fct.have_pto_mask )
+          {
+            auto clear = [&] ( int x , int y )
+            {
+              alpha [ { x , y } ] = 0.0f ;
+            } ;
+
+            for ( const auto & mask : fct.pto_mask_v )
+            {
+              if ( mask.variant == 0 )
+              {
+                fill_polygon ( mask.vx , mask.vy ,
+                               0 , 0 , w , h , clear ) ;
+              }
+            }
+          }
+  
+          if ( fct.have_crop )
+          {
+            float a = fabs ( fct.crop_x1 - fct.crop_x0 ) / 2.0 ;
+            float b = fabs ( fct.crop_y1 - fct.crop_y0 ) / 2.0 ;
+
+            int w = p_bspl->core.shape [ 0 ] ;
+            int h = p_bspl->core.shape [ 1 ] ;
+
+            if ( fct.projection == FISHEYE )
+            {
+              std::cout << "elliptic crop" << std::endl ;
+              float mx = ( fct.crop_x0 + fct.crop_x1 ) / 2.0 ;
+              float my = ( fct.crop_y0 + fct.crop_y1 ) / 2.0 ;
+
+              // with the four limits given, we can create an elliptic
+              // crop with the vertical extent y1-y0 and the horizontal
+              // extent x1-x0.
+              // TODO: we might fade the ellipse out by assigning semi
+              // transparent alpha to points near the margin.
+
+              // if ( source.crop_fade > 0.0 )
+              // {
+              //   auto ts = 1.0 / std::min ( a , b ) ;
+              //   auto ri = 1.0 - source.crop_fade * ts ;
+              //   auto ro = 1.0 ;
+              // 
+              //   for ( int y = 0 ; y < masking.shape(1) ; y++ )
+              //   {
+              //     auto dy = fabs ( y - my ) ;
+              // 
+              //     for ( int x = 0 ; x < masking.shape(0) ; x++ )  
+              //     {
+              //       auto dx = fabs ( x - mx ) ;
+              // 
+              //       auto r = ( dx * dx ) / ( a * a ) + ( dy * dy ) / ( b * b ) ;
+              //       if ( r > ro )
+              //         masking [ { x , y } ] = 0 ;
+              //       else if ( r > ri )
+              //       {
+              //         auto xs = 1.0 - ( r - ri ) / ( source.crop_fade * ts ) ;
+              //         masking [ { x , y } ] *= xs ;
+              //       }
+              //     }
+              //   }
+              // }
+              // else
+              {
+                for ( int y = 0 ; y < h ; y++ )
+                {
+                  auto dy = fabs ( y - my ) ;
+                  // if the y coordinate is outside the ellipse, mask out
+                  // the entire line
+                  if ( dy > b )
+                  {
+                    for ( int x = 0 ; x < w ; x++ )  
+                    {
+                      alpha [ { x , y } ] = 0 ;
+                    }
+                    continue ;
+                  }
+                  // else, find the half width of the ellipse at given y and
+                  // mask out points with x outside
+                  // for the ellipse, we have x*x / a*a + y*y / b*b = 1, hence
+
+                  float xmargin = sqrt ( ( a * a ) * ( 1.0 - ( dy * dy ) / ( b * b ) ) ) ;
+                  for ( int x = 0 ; x < w ; x++ )
+            
+                  {
+                    auto dx = fabs ( x - mx ) ;
+                    if ( dx > xmargin )
+                      alpha [ { x , y } ] = 0 ;
+                  }
+                }
+              }
+            }
+            else
+            {
+              std::cout << "rectangular crop" << std::endl ;
+              // if ( source.crop_fade > 0.0 )
+              // {
+              //   for ( int y = 0 ; y < masking.shape(1) ; y++ )
+              //   {
+              //     for ( int x = 0 ; x < masking.shape(0) ; x++ )  
+              //     {
+              //       if (   ( x < source.crop_x0 )
+              //           || ( x >= source.crop_x1 )
+              //           || ( y < source.crop_y0 )
+              //           || ( y >= source.crop_y1 ) )
+              //         masking [ { x , y } ] = 0 ;
+              //       else if (    ( x >= source.crop_x0 + source.crop_fade )
+              //                 && ( x <= source.crop_x1 - source.crop_fade )
+              //                 && ( y >= source.crop_y0 + source.crop_fade )
+              //                 && ( y <= source.crop_y1 - source.crop_fade ) )
+              //         continue ;
+              //       float alpha = 1.0 ;
+              //       auto dx = x - source.crop_x0 ;
+              //       if ( dx < source.crop_fade )
+              //         alpha = std::min ( alpha , dx / source.crop_fade ) ;
+              //       dx = source.crop_x1 - x ;
+              //       if ( dx < source.crop_fade )
+              //         alpha = std::min ( alpha , dx / source.crop_fade ) ;
+              //       auto dy = y - source.crop_y0 ;
+              //       if ( dy < source.crop_fade )
+              //         alpha = std::min ( alpha , dy / source.crop_fade ) ;
+              //       dy = source.crop_y1 - y ;
+              //       if ( dy < source.crop_fade )
+              //         alpha = std::min ( alpha , dy / source.crop_fade ) ;
+              //       masking [ { x , y } ] *= alpha ;
+              //     }
+              //   }
+              // }
+              // else
+              {
+                for ( int y = 0 ; y < h ; y++ )
+                {
+                  for ( int x = 0 ; x < w ; x++ )
+                  {
+                    if (    ( x < fct.crop_x0 )
+                        || ( x >= fct.crop_x1 )
+                        || ( y < fct.crop_y0 )
+                        || ( y >= fct.crop_y1 ) )
+                      alpha [ { x , y } ] = 0 ;
+                  }
+                }
+              }
+            }
+          }
+
+          // finally, apply a low pass filter to the masking alpha channel
+          // this mitigates the issue of the hard mask boundaries, but it
+          // will 'pull in' a bit of masked-out content, so if the mask is
+          // cut very close to unwanted features, they may bleed in. The
+          // large-ish binomial is tentative, but seems to work quite well.
+
+          convolve
+          ( alpha ,
+            alpha ,
+            { REFLECT , REFLECT } ,
+            { 1.0 / 16.0 ,
+              4.0 / 16.0 ,
+              6.0 / 16.0 ,
+              4.0 / 16.0 ,
+              1.0 / 16.0
+            } ,
+            2 ) ;
+
+          // we might use a loop to apply the alpha mask, like this:
+
+          // for ( std::size_t y = 0 ; y < h ; y++ )
+          // {
+          //   for ( std::size_t x = 0 ; x < w ; x++ )
+          //   {
+          //     p_bspl->core [ { x , y } ] *= alpha [ { x , y } ] ;
+          //   }
+          // }
+
+          // but we can do better and do the job in multithreaded
+          // SIMD code using zimt:
+
+          // we set up two loaders, one for the image data in the
+          // b-spline's core, one for the alpha mask we've just made.
+          
+          loader < float , C , 2 , LANES > ldpx ( p_bspl->core ) ;
+          loader < float , 1 , 2 , LANES > lda ( alpha ) ;
+          
+          // we use a synopsis-forming lambda which produces the
+          // product of it's two inputs
+          
+          auto syn = [] ( const px_v & v1 , const f_v & v2 ,
+                          px_v & v3 , std::size_t cap = LANES )
+          {
+            v3 = v1 * v2 ;
+          } ;
+          
+          // and set up a zip_t wiring the two loaders and the
+          // synopsis object to produce the masked image data
+          
+          zip_t < float , C , 2 , LANES , decltype ( syn ) ,
+                  float , 1 , float , C > zip ( ldpx , lda , syn ) ;
+          
+          // the act functor is not used
+          
+          pass_through < float , C , LANES > pass ;
+          
+          // the masked image data go back into the b-spline's core
+          
+          storer < float , C , 2 , LANES > store ( p_bspl->core ) ;
+          
+          // showtime
+          
+          process ( alpha.shape , zip , pass , store ) ;
+        }
+
         // we save the shared_ptr to the newly made b-spline in
         // spl_map, to make it available for reuse if needed.
 
-        spl_map [ fct.filename ] = p_bspl ;
+        spl_map [ fct.asset_key ] = p_bspl ;
 
         // the spline needs to be prefiltered appropriately.
 
@@ -1552,29 +1815,22 @@ struct environment9
 
   environment9 ( env_t * p_env )
   {
-    if ( args.itp == -2 )
+    // wrap the 'environment' object in a twine_t object and assign
+    // to 'act' - this 'groks' the twine_t object to act's type.
+    // Note how this object is re-created for every run: the twining
+    // parameters may change due to changing hfov from one invocation
+    // of 'work' to the next.
+
+    if ( args.twine_precise )
     {
-      // with itp -2, we expect a non-nullptr p_env argument
-
-      assert ( p_env != nullptr ) ;
-
-      // wrap the 'environment' object in a twine_t object and assign
-      // to 'act' - this 'groks' the twine_t object to act's type.
-      // Note how this object is re-created for every run: the twining
-      // parameters may change due to changing hfov from one invocation
-      // of 'work' to the next.
-
-      if ( args.twine_precise )
-      {
-        // TODO: I think this is futile.
-        act = twine_t < nchannels , L , true >
-          ( *p_env , args.twine_spread ) ;
-      }
-      else
-      {
-        act = twine_t < nchannels , L , false >
-          ( *p_env , args.twine_spread ) ;
-      }
+      // TODO: I think this is futile.
+      act = twine_t < nchannels , L , true >
+        ( *p_env , args.twine_spread ) ;
+    }
+    else
+    {
+      act = twine_t < nchannels , L , false >
+        ( *p_env , args.twine_spread ) ;
     }
   }
 

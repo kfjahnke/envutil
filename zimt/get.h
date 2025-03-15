@@ -88,7 +88,7 @@ struct get_crd
 
   // get_crd's c'tor receives the processing axis
 
-  get_crd ( const zimt::bill_t & bill )
+  get_crd ( const zimt::bill_t & bill = zimt::bill_t() )
   : d ( bill.axis )
   { }
 
@@ -204,7 +204,7 @@ struct loader
   // 'hot' axis. It extracts the strides from the source view.
 
   loader ( const zimt::view_t < D , value_t > & _src ,
-           const zimt::bill_t & bill )
+           const zimt::bill_t & bill = zimt::bill_t() )
   : src ( _src ) ,
     d ( bill.axis ) ,
     stride ( _src.strides [ bill.axis ] )
@@ -216,7 +216,7 @@ struct loader
 
   template < typename = std::enable_if < N == 1 > >
   loader ( const zimt::view_t < D , T > & _src ,
-           const zimt::bill_t & bill  )
+           const zimt::bill_t & bill = zimt::bill_t() )
   : src ( reinterpret_cast
            < const zimt::view_t < D , value_t > & > ( _src ) ) ,
     d ( bill.axis ) ,
@@ -1238,6 +1238,100 @@ struct fusion_t
       get_v[i].increase ( src_v[i] , cap , _stuff ) ;
     }
     synopsis ( src_v , trg , cap ) ;
+  }
+} ;
+
+// class zip_t 'harnesses' two get_t in sync to produce their
+// respective results. These results are passed to the synopsis
+// functor, which in turn produces a result which constitutes
+// the output of the zip_t object. Thy synopsis functor only
+// needs to provide a single (vector) function - a specific
+// type is not enforced, and a good choice is a lambda. An
+// alternative would be to use a std::function which would
+// allow for more restrictive parameterization.
+// The first four template arguments are 'standard fare',
+// followed by the synopsis object's type (use decltype to
+// specify a lambda's type). The remaining template arguments
+// fix fundamental type and channel count of the second get_t
+// and result, in case they differ.
+// Note that the SYN object should provide a call signature
+// with a trailing 'cap' argument with a default value, like:
+//   auto syn = [] ( const x_v & v1 , const y_v & v2 ,
+//                   z_v & v3 , std::size_t cap = LANES )
+
+template < typename T1 ,    // fundamental type of first get_t
+           std::size_t N1 , // channel count of of first get_t
+           std::size_t D ,  // dimensions
+           std::size_t L ,  // lane count
+           typename SYN ,   // class of synopsis-forming object
+           typename T2 = T1 , // fundamental type of second get_t
+           std::size_t N2 = N1 , // channel count of second get_t
+           typename T3 = T1 , // fundamental type of result
+           std::size_t N3 = N1 > // channel count of result
+struct zip_t
+{
+  typedef zimt::xel_t < T1 , N1 > value1_t ;
+  typedef simdized_type < value1_t , L > value1_v ;
+  typedef zimt::xel_t < T2 , N2 > value2_t ;
+  typedef simdized_type < value2_t , L > value2_v ;
+  typedef zimt::xel_t < T3 , N3 > value3_t ;
+  typedef simdized_type < value3_t , L > value3_v ;
+
+  typedef zimt::xel_t < long , D > crd_t ;
+
+  typedef grok_get_t < T1 , N1 , D , L > gg1_t ;
+  typedef grok_get_t < T2 , N2 , D , L > gg2_t ;
+  
+  gg1_t get1 ;
+  gg2_t get2 ;
+  SYN synopsis ;
+
+  zip_t ( const gg1_t & _get1 ,
+          const gg2_t & _get2 ,
+          const SYN & _synopsis )
+  : get1 ( _get1 ) ,
+    get2 ( _get2 ) ,
+    synopsis ( _synopsis )
+  { }
+
+  void init ( value3_v & trg , const crd_t & crd )
+  {
+    value1_v v1 ;
+    value2_v v2 ;
+    get1.init ( v1 , crd ) ;
+    get2.init ( v2 , crd ) ;
+    synopsis ( v1 , v2 , trg ) ;
+  }
+
+  void init ( value3_v & trg ,
+              const crd_t & crd ,
+              std::size_t cap )
+  {
+    value1_v v1 ;
+    value2_v v2 ;
+    get1.init ( v1 , crd , cap ) ;
+    get2.init ( v2 , crd , cap ) ;
+    synopsis ( v1 , v2 , trg , cap ) ;
+  }
+
+  void increase ( value3_v & trg )
+  {
+    value1_v v1 ;
+    value2_v v2 ;
+    get1.increase ( v1 ) ;
+    get2.increase ( v2 ) ;
+    synopsis ( v1 , v2 , trg ) ;
+  }
+
+  void increase ( value3_v & trg ,
+                  std::size_t cap ,
+                  bool _stuff = true )
+  {
+    value1_v v1 ;
+    value2_v v2 ;
+    get1.increase ( v1 , cap , _stuff ) ;
+    get2.increase ( v2 , cap , _stuff ) ;
+    synopsis ( v1 , v2 , trg , cap ) ;
   }
 } ;
 

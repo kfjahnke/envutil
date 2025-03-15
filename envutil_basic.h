@@ -350,6 +350,38 @@ typename U::value_type angle ( const U & a , const U & b )
 
 #include "zimt/array.h"
 
+struct pto_mask_type
+{
+  int image ;
+  int variant ;
+  std::string vertex_list ;
+  std::vector < float > vx ;
+  std::vector < float > vy ;
+
+  pto_mask_type()
+  : image ( -1 ) ,
+    variant ( -1 )
+    { }
+
+  friend std::ostream & operator<< ( std::ostream & osr ,
+                                     const pto_mask_type & mask )
+  {
+    std::cout << "type " << mask.variant
+              << " mask for facet " << mask.image
+              << std::endl ;
+    for ( int i = 0 ; i < mask.vx.size() ; i++ )
+      std::cout << "  ( " << mask.vx[i] << ", "
+                << mask.vy[i] << ")" << std::endl ;
+    return osr ;
+  }
+} ;
+
+void fill_polygon ( const std::vector<float> & px ,
+                    const std::vector<float> & py ,
+                    int IMAGE_LEFT , int IMAGE_TOP ,
+                    int IMAGE_RIGHT , int IMAGE_BOT ,
+                    std::function < void ( int , int ) > fillPixel ) ;
+
 struct facet_spec
 {
   int masked ;
@@ -370,6 +402,11 @@ struct facet_spec
   double s, a, b, c, d, h, v, cap_radius ;
   bool lens_correction_active ;
   bool shift_only ;
+  bool have_crop ;
+  int crop_x0 , crop_x1 , crop_y0 , crop_y1 ;
+  bool have_pto_mask ;
+  std::vector < pto_mask_type > pto_mask_v ;
+  std::string asset_key ;
 
   bool init ( int argc , const char ** argv ) ;
 
@@ -440,7 +477,6 @@ struct arguments
   float mbps ;
   int fps ;
 
-  int itp ;
   int prefilter_degree ;
   int spline_degree ;
   int twine  ;
@@ -473,6 +509,11 @@ struct arguments
   std::vector < std::string > facet_pitch_v ;
   std::vector < std::string > facet_roll_v ;
   std::vector < facet_spec > facet_spec_v ;
+
+  std::vector < pto_mask_type > pto_mask_v ;
+
+  bool have_crop ;
+  int p_crop_x0 , p_crop_x1 , p_crop_y0 , p_crop_y1 ;
 
   int solo ;
   int mask_for ;

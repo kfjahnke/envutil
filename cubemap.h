@@ -708,7 +708,8 @@ private:
     // TODO: when specializing with 1, invocation with
     // --spline_degree 0 crashes.
 
-    zimt::evaluator < crd2_t , px_t , LANES , 1 > ev ;
+    // zimt::evaluator < crd2_t , px_t , LANES , 1 > ev ;
+    zimt::grok_type < crd2_t , px_t , LANES > ev ;
 
     // note the factor of two in the initialization of 'ithird':
     // incoming coordinates are doubled (!) for the purpose at hand.
@@ -718,10 +719,11 @@ private:
     : sf ( _cubemap ) ,
       face ( _face ) ,
       ithird ( _cubemap.model_to_px * 2 ) ,
-      ev ( * _cubemap.p_bsp )
+      ev ( make_safe_evaluator ( * _cubemap.p_bsp , 0 ,
+                                 1 - _cubemap.p_bsp->spline_degree ) )
     { }
 
-    void eval ( const v2i_v & crd2 , px_v & px ) const
+    void eval ( const v2i_v & crd2 , px_v & px ) // const
     {
       crd3_v crd3 ;
 

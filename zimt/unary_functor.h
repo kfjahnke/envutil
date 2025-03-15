@@ -504,9 +504,12 @@ operator+ ( const T1 & t1 , const T2 & t2 )
   return chain ( t1 , t2 ) ;
 }
 
-// do_nothing does: nothing.
+// do_nothing does: nothing. Note that this leaves the output
+// in an undefined state, this functor really does nothing at all.
+// If you want to pass the input through to the output unchanged,
+// use a pass_through object instead!
 
-template < typename T , std::size_t N , typename U , std::size_t M ,
+template < typename T , std::size_t N , typename U = T , std::size_t M = N ,
            std::size_t L = vector_traits < T > :: vsize >
 struct do_nothing
 : public unary_functor < zimt::xel_t < T , N > ,
