@@ -1668,6 +1668,7 @@ struct environment
   typedef std::function < mask_t ( const in_v & ) > mask_f ;
   mask_f get_mask ;
   const float recip_step ;
+  const float brighten ;
 
   grok_type < zimt::xel_t < T , 3 > ,
               zimt::xel_t < U , C > ,
@@ -1676,10 +1677,29 @@ struct environment
   void eval ( const in_v & in , out_v & out )
   {
     env.eval ( in , out ) ;
+
+    if ( brighten != 1.0f )
+    {
+      if constexpr ( C == 1 || C == 3 )
+      {
+        out *= brighten ;
+      }
+      else if constexpr ( C == 2 )
+      {
+        out[0] *= brighten ;
+      }
+      else if constexpr ( C == 4 )
+      {
+        out[0] *= brighten ;
+        out[1] *= brighten ;
+        out[2] *= brighten ;
+      }
+    }
   }
 
   environment ( const facet_spec & fct )
-  : recip_step ( 1.0 / fct.step )
+  : recip_step ( 1.0 / fct.step ) ,
+    brighten ( fct.brighten )
   {
     if ( fct.nchannels == C )
     {

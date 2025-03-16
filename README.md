@@ -788,7 +788,14 @@ become visible. If you only pass 'degree', the spline will be set up as an
 interpolating spline, meaning it will yield precisely the same pixel values
 as the input when evaluated at discrete coordinates. This requires prefiltering
 of the spline coefficients with a prefilter of the same degree as the spline,
-which is done by default.
+which is done by default. All rendering arithmetic in envutil is done in
+single-precision float, so you can't use very high spline degrees, which is
+futile anyway. If you go up to degrees in the twenties, the dynamic range of
+single precision is exceeded and you'll first get artifacts in the output,
+then, with even higher degrees, errors which render the output unusable.
+For the purpose at hand, 'ground truth' with bilinear interpolation is
+usually perfectly good enough. If you don't use twining (--twine 1) and
+your view is magnifying, pick a small degree like two or three.
 
 If you pass a different prefilter degree, the coefficients are prefiltered
 *as if* the spline degree were so, whereas the evaluation is done with the

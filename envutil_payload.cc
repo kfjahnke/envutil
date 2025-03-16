@@ -252,7 +252,7 @@ void work ( get_t & get , act_t & act )
 
   std::chrono::system_clock::time_point start
     = std::chrono::system_clock::now() ;
-  
+
   zimt::process ( trg.shape , get , act , cstor , bill ) ;
   
   std::chrono::system_clock::time_point end
@@ -1103,7 +1103,7 @@ struct reproject9_t
 
 template < int NCH ,
            template < typename , std::size_t , bool > class STP ,
-           typename synopsis_t >
+           typename SYN >
 void fuse ( int ninputs )
 {
   typedef zimt::xel_t < float , NCH > px_t ;
@@ -1114,8 +1114,8 @@ void fuse ( int ninputs )
 
   typedef environment < float , float , NCH , 16 > env_t ;
 
-  typedef fusion_t < float , NCH , 2 , 16 , float , 3 , synopsis_t > fs_t ;
-  typedef fusion_t < float , NCH , 2 , 16 , float , 9 , synopsis_t > fs9_t ;
+  typedef fusion_t < float , NCH , 2 , 16 , float , 3 , SYN > fs_t ;
+  typedef fusion_t < float , NCH , 2 , 16 , float , 9 , SYN > fs9_t ;
 
   typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
   std::vector < basis_t > basis_v ;
@@ -1133,22 +1133,6 @@ void fuse ( int ninputs )
   // objects at these coordinates and provide a single pixel result.
   // It's up to the synopsis object to decide how to compose the
   // result.
-  // We don't automatically create an environment object for each
-  // facet - special uses like caleidoscopic images may use the same
-  // facet image several times. And once we implement switching to
-  // a different image during a session, keeping images opened as
-  // environments will stop the program from futilely re-opening an
-  // image which was used before. For now, we don't use a mechanism
-  // to flush images which are no longer needed, because we set up
-  // the 'content map' as a static variable local to 'fuse', so when
-  // the program teminates, the the environment objects held via the
-  // shared_ptrs are destructed. Holding the map static keeps the
-  // environments alive for image sequences as well.
-  // Note that currently facets with the same filename but differing
-  // hfov or projection will be re-loaded and don't share the same
-  // environment object.
-
-  // static std::map < std::string , std::shared_ptr<env_t> > content_map ;
 
   std::vector < env_t > env_v ;
   std::vector < xel_t < double , 3 > > trxyzv ( args.nfacets ) ;
@@ -1407,7 +1391,7 @@ void fuse ( int ninputs )
 
       // for now, we use a hard-coded synopsis-forming object
 
-      synopsis_t vs ( env_v ) ;
+      SYN vs ( env_v ) ;
 
       // now we can create the fusion_t object
 
@@ -1527,7 +1511,7 @@ void fuse ( int ninputs )
       // the fusion_t object - which is now used via it's ninepack-
       // processing member function.
 
-      synopsis_t vs ( env_v ) ;
+      SYN vs ( env_v ) ;
 
       fs9_t fs ( get_v , vs ) ;
 

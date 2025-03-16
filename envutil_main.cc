@@ -63,7 +63,7 @@
 // up automatically. Additional/ parameters can change the amount of
 // oversampling and add gaussian weights to the filter parameters.
 // To switch twining off and use direct interpolation from the source
-// image data, pass --twine 1. 'twining' is quite fast (if the number
+// image data, pass --twine 0. 'twining' is quite fast (if the number
 // of filter taps isn't very large. When down-scaling, the parameter
 // 'twine' should be at least the same as the scaling factor to avoid
 // aliasing. When upscaling, larger twining values will slighly soften
@@ -209,6 +209,8 @@ bool facet_spec::init ( int argc , const char ** argv )
   nchannels = spec.nchannels ;
   inp->close() ;
 
+  brighten = 1.0f ;
+
   return true ;
 }
 
@@ -216,159 +218,6 @@ bool facet_spec::init ( int argc , const char ** argv )
 // 'args' object (declared extern in basic.h)
 
 arguments args ;
-
-void make_spread ( std::vector < zimt::xel_t < float , 3 > > & trg ,
-                   int w = 2 ,
-                   int h = 0 ,
-                   float d = 1.0f ,
-                   float sigma = 0.0f ,
-                   float threshold = 0.0f )
-{
-  if ( w <= 2 )
-    w = 2 ;
-  if ( h <= 0 )
-    h = w ;
-  float wgt = 1.0 / ( w * h ) ;
-  double x0 = - ( w - 1.0 ) / ( 2.0 * w ) ;
-  double dx = 1.0 / w ;
-  double y0 = - ( h - 1.0 ) / ( 2.0 * h ) ;
-  double dy = 1.0 / h ;
-  trg.clear() ;
-  sigma *= - x0 ;
-  double sum = 0.0 ;
-
-  for ( int y = 0 ; y < h ; y++ )
-  {
-    for ( int x = 0 ; x < w ; x++ )
-    {
-      float wf = 1.0 ;
-      if ( sigma > 0.0 )
-      {
-        double wx = ( x0 + x * dx ) / sigma ;
-        double wy = ( y0 + y * dy ) / sigma ;
-        wf = exp ( - sqrt ( wx * wx + wy * wy ) ) ;
-      }
-      zimt::xel_t < float , 3 >
-        v { float ( d * ( x0 + x * dx ) ) ,
-            float ( d * ( y0 + y * dy ) ) ,
-            wf * wgt } ;
-      trg.push_back ( v ) ;
-      sum += wf * wgt ;
-    }
-  }
-
-  double th_sum = 0.0 ;
-  bool renormalize = false ;
-
-  if ( sigma != 0.0 )
-  {
-    for ( auto & v : trg )
-    {
-      v[2] /= sum ;
-      if ( v[2] >= threshold )
-      {        
-        th_sum += v[2] ;
-      }
-      else
-      {
-        renormalize = true ;
-        v[2] = 0.0f ;
-      }
-    }
-    if ( renormalize )
-    {
-      for ( auto & v : trg )
-      {
-        v[2] /= th_sum ;
-      }
-    }
-  }
-
-  if ( args.verbose )
-  {
-    if ( sigma != 0.0 )
-    {
-      std::cout << "using this twining filter kernel:" << std::endl ;
-      for ( int y = 0 ; y < h ; y++ )
-      {
-        for ( int x = 0 ; x < w ; x++ )
-        {
-          std::cout << '\t' << trg [ y * h + x ] [ 2 ] ;
-        }
-        std::cout << std::endl ;
-      }
-    }
-    else
-    {
-      std::cout << "using box filter for twining" << std::endl ;
-    }
-  }
-
-  if ( renormalize )
-  {
-    auto help = trg ;
-    trg.clear() ;
-    for ( auto v : help )
-    {
-      if ( v[2] > 0.0f )
-        trg.push_back ( v ) ;
-    }
-    if ( args.verbose )
-    {
-      std::cout << "twining filter taps after after thresholding: "
-                << trg.size() << std::endl ;
-    }
-  }
-}
-
-// read the twining filter from a twf-file.
-
-void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
-{
-  zimt::xel_t < float , 3 > c ;
-
-  std::ifstream ifs ( args.twf_file ) ;
-  assert ( ifs.good() ) ;
-
-  double sum = 0.0 ;
-
-  while ( ifs.good() )
-  {
-    ifs >> c[0] >> c[1] >> c[2] ;
-    if ( ifs.eof() )
-      break ;
-    trg.push_back ( c ) ;
-    sum += c[2] ;
-  }
-
-  for ( auto & c : trg )
-  {
-    c[0] *= args.twine_width ;
-    c[1] *= args.twine_width ;
-    if ( args.twine_normalize )
-      c[2] /= sum ;
-  }
-
-  if ( args.verbose )
-  {
-    std::cout << args.twf_file << " yields twining filter kernel:"
-              << std::endl ;
-    for ( const auto & c : trg )
-    {
-       std::cout << "x: " << c[0] << " y: " << c[1]
-                 << " w: " << c[2] << std::endl ;
-    }
-    if ( args.twine_normalize )
-    {
-      std::cout << "twining filter weights sum: 1.0" << std::endl ;
-    }
-    else
-    {
-      std::cout << "twining filter weights sum: " << sum << std::endl ;
-    }
-  }
-  ifs.close() ;
-}
 
 void arguments::init ( int argc , const char ** argv )
 {
@@ -489,7 +338,7 @@ void arguments::init ( int argc , const char ** argv )
 
   // parameters for twining
 
-  ap.separator("  parameters for twining (--twine 1 switches twining off)");
+  ap.separator("  parameters for twining (--twine 0 switches twining off)");
 
   ap.arg("--twine TWINE")
     .help("use twine*twine oversampling - omit this arg for automatic twining")
@@ -566,7 +415,7 @@ void arguments::init ( int argc , const char ** argv )
   fps = ap["fps"].get<int>(60);
   prefilter_degree = ap["prefilter"].get<int>(-1);
   spline_degree = ap["degree"].get<int>(1);
-  twine = ap["twine"].get<int>(0);
+  twine = ap["twine"].get<int>(-1);
   twine_width = ap["twine_width"].get<float>(1.0);
   twine_density = ap["twine_density"].get<float>(1.0);
   twine_sigma = ap["twine_sigma"].get<float>(0.0);
@@ -664,6 +513,8 @@ void arguments::init ( int argc , const char ** argv )
   std::size_t p_line_width ;
   std::size_t p_line_height ;
   double p_line_hfov ;
+  float eev_sum = 0.0f ;
+  int eev_count = 0 ;
 
   if ( pto_file != std::string() )
   {
@@ -815,6 +666,12 @@ void arguments::init ( int argc , const char ** argv )
       f.h = glean ( dir [ "d" ] ) ;
       f.v = glean ( dir [ "e" ] ) ;
       f.process_lc() ;
+      f.brighten = glean ( dir [ "Eev" ] ) ;
+      if ( f.brighten != 0.0f )
+      {
+        eev_sum += f.brighten ;
+        eev_count++ ;
+      }
       std::string crop_str = dir [ "S" ] ;
       if ( crop_str != std::string() )
       {
@@ -938,8 +795,41 @@ void arguments::init ( int argc , const char ** argv )
   nchannels = 1 ;
   bool alpha_seen = false ;
 
+  if ( eev_count > 0 )
+  {
+    eev_sum /= eev_count ;
+  }
+
   for ( auto & m : facet_spec_v )
   {
+    // we calculate the facet's 'brighten' value from Eev values in
+    // the PTO file (if present) - this is correct for linear light
+    // only!
+
+    if ( eev_count )
+    {
+      if ( m.brighten == 0.0 )
+      {
+        m.brighten = 1.0f ;
+      }
+      else
+      {
+        // m.brighten initially holds the Eev value. now we set it
+        // to hold a multiplicative parameter to adapt brightness
+        // when this facet is used for rendering. Note: higher Eev
+        // means less light, one step Eev is doubling/halving the
+        // brightness. hence:
+
+        m.brighten = pow ( 2.0 , m.brighten - eev_sum ) ;
+      }
+    }
+    else
+    {
+      // if there were no Eev values, brightnes won't be modified.
+
+      m.brighten = 1.0f ;
+    }
+
     if ( m.have_pto_mask || m.have_crop )
     {
       if ( m.nchannels == 1 || m.nchannels == 3 )
@@ -990,7 +880,8 @@ void arguments::init ( int argc , const char ** argv )
                 << " tp_r:" << m.tp_r * 180.0 / M_PI << std::endl
                 << "shear g: " << m.shear_g
                 << " shear t: " << m.shear_t << " (in texture units)"
-                << std::endl ;
+                << std::endl
+                << "brighten: " << m.brighten << std::endl ;
       if ( m.masked != -1 )
         std::cout << "  b/w mask only: " << ( m.masked == 0
                                               ? "black"
@@ -1107,139 +998,337 @@ void arguments::init ( int argc , const char ** argv )
       std::cout << "step: " << step << std::endl ;
     }
   }
+}
 
-  if ( twf_file != std::string() )
-  {
-    // if user passes a twf-file, it's used to set up the twining
-    // filter, and all the other twining-related arguments apart
-    // from twine_width and twine_normalize are ignored.
+void make_spread ( std::vector < zimt::xel_t < float , 3 > > & trg ,
+                   int w = 2 ,
+                   int h = 0 ,
+                   float d = 1.0f ,
+                   float sigma = 0.0f ,
+                   float threshold = 0.0f )
+{
+  if ( w <= 2 )
+    w = 2 ;
+  if ( h <= 0 )
+    h = w ;
+  float wgt = 1.0 / ( w * h ) ;
+  double x0 = - ( w - 1.0 ) / ( 2.0 * w ) ;
+  double dx = 1.0 / w ;
+  double y0 = - ( h - 1.0 ) / ( 2.0 * h ) ;
+  double dy = 1.0 / h ;
+  trg.clear() ;
+  sigma *= - x0 ;
+  double sum = 0.0 ;
 
-    read_twf_file ( twine_spread ) ;
-    assert ( twine_spread.size() ) ;
-  }
-  else if ( twine != 1 )
+  for ( int y = 0 ; y < h ; y++ )
   {
-    if ( twine == 0 )
+    for ( int x = 0 ; x < w ; x++ )
     {
-      // user has passed twine 0, or not passed anything. We set
-      // up the twining with automatically generated parameters.
-
-      // figure out the magnification in the image center.
-      // To make sure that the twine value is sufficiently large
-      // for all contributing facets, we look for the smallest
-      // 'step' value in the facet population and calculate
-      // 'twine' accordingly. A single hi-res facet can therefore
-      // result in a high twining factor which is overkill for
-      // most of the result, so this detection and method is
-      // conservative but potentially computationally expensive.
-
-      double smallest_step = std::numeric_limits < double > :: max() ;
-      
-      if ( nfacets == 1 || solo > 0 )
+      float wf = 1.0 ;
+      if ( sigma > 0.0 )
       {
-        // in solo mode, we calculate the twining factor to be suitable
-        // for the single facet we're processing. This is debatable:
-        // the result will differ slightly from what this facet's image
-        // will be in a synopsis. The difference should be sub-pixel
-        // only, though, and we avoid overkill for facets which have
-        // lower resolution.
-
-        smallest_step = args.facet_spec_v[solo].step ;
+        double wx = ( x0 + x * dx ) / sigma ;
+        double wy = ( y0 + y * dy ) / sigma ;
+        wf = exp ( - sqrt ( wx * wx + wy * wy ) ) ;
       }
-      else
-      { 
-        for ( const auto & fspec : args.facet_spec_v )
-        {
-          smallest_step = std::min ( fspec.step , smallest_step ) ;
-        }
-      }
+      zimt::xel_t < float , 3 >
+        v { float ( d * ( x0 + x * dx ) ) ,
+            float ( d * ( y0 + y * dy ) ) ,
+            wf * wgt } ;
+      trg.push_back ( v ) ;
+      sum += wf * wgt ;
+    }
+  }
 
-      double mag = smallest_step / step ;
+  double th_sum = 0.0 ;
+  bool renormalize = false ;
 
-      if ( mag > 1.0 )
-      {
-        // if the transformation magnifies, we use a moderate twine
-        // size and a twine_width equal to the magnification, to
-        // avoid the star-shaped artifacts from the bilinear
-        // interpolation used for the lookup of the contributing
-        // rays. If mag is small, the star-shaped artifacts aren't
-        // really an issue, and twine values beyond, say, five
-        // do little to improve the filter response, so we cap
-        // the twine value at five, but lower it when approaching
-        // mag 1, down to two - where the next case down starts.
-
-        if ( args.spline_degree > 1 )
-        {
-          // if the substrate is a spline with a degree greater than
-          // one, we only use moderate twining if there are several
-          // facets, to soften potential collisions. For single-facet
-          // operation, a b-spline is already smooth, so we don't twine.
-          // TODO: consider tapering - the abrupt change to twine 1 if
-          // mag > 1.0 may be problematic.
-
-          if ( args.nfacets > 1 )
-            twine = 3 ;
-          else if ( mag < 2.0 ) // << tapering
-            twine = 2 ;
-          else
-            twine = 1 ;
-        }
-        else
-        {
-          // we're using binlinear interpolation. since this is a
-          // magnifying view, there may be star-shaped artifacts in the
-          // 'ground truth' rendition, so we use twining.
-
-          twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
-
-          // the twine width is set equal to the magnification: We want
-          // to form the weighted sum over a field of as many pixels in
-          // the source signal as correspond to a single pixel in the
-          // target.
-
-          twine_width = mag ;
-        }
+  if ( sigma != 0.0 )
+  {
+    for ( auto & v : trg )
+    {
+      v[2] /= sum ;
+      if ( v[2] >= threshold )
+      {        
+        th_sum += v[2] ;
       }
       else
       {
-        // for down-scaling, we use a twine size which depends on the
-        // downscaling factor (reciprocal of 'mag') and a twine_width
-        // of 1.0: we only want anti-aliasing. picking a sufficiently
-        // large twine value guarantees that we're not skipping any
-        // pixels in the source (due to undersampling).
-
-        twine = int ( 1.0 + 1.0 / mag ) ;
-        twine_width = 1.0 ;
+        renormalize = true ;
+        v[2] = 0.0f ;
       }
-
-      if ( twine_density != 1.0f )
+    }
+    if ( renormalize )
+    {
+      for ( auto & v : trg )
       {
-        // if the user has passed twine_density, we use it as a
-        // multiplicative factor to change twine - typically
-        // twine_density will be larger than one, so we'll get
-        // more filter taps.
-
-        twine = std::round ( twine * twine_density ) ;
+        v[2] /= th_sum ;
       }
+    }
+  }
 
-      if ( verbose )
+  if ( args.verbose )
+  {
+    if ( sigma != 0.0 )
+    {
+      std::cout << "using this twining filter kernel:" << std::endl ;
+      for ( int y = 0 ; y < h ; y++ )
       {
-        std::cout << "automatic twining for magnification " << mag
-                  << ":" << std::endl ;
-        std::cout << "twine: " << twine
-                  << " twine_width: " << twine_width
-                  << std::endl ;
+        for ( int x = 0 ; x < w ; x++ )
+        {
+          std::cout << '\t' << trg [ y * h + x ] [ 2 ] ;
+        }
+        std::cout << std::endl ;
       }
     }
     else
     {
-      if ( verbose )
+      std::cout << "using box filter for twining" << std::endl ;
+    }
+  }
+
+  if ( renormalize )
+  {
+    auto help = trg ;
+    trg.clear() ;
+    for ( auto v : help )
+    {
+      if ( v[2] > 0.0f )
+        trg.push_back ( v ) ;
+    }
+    if ( args.verbose )
+    {
+      std::cout << "twining filter taps after after thresholding: "
+                << trg.size() << std::endl ;
+    }
+  }
+}
+
+// read the twining filter from a twf-file.
+
+void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
+{
+  zimt::xel_t < float , 3 > c ;
+
+  std::ifstream ifs ( args.twf_file ) ;
+  assert ( ifs.good() ) ;
+
+  double sum = 0.0 ;
+  trg.clear() ;
+
+  while ( ifs.good() )
+  {
+    ifs >> c[0] >> c[1] >> c[2] ;
+    if ( ifs.eof() )
+      break ;
+    trg.push_back ( c ) ;
+    sum += c[2] ;
+  }
+
+  for ( auto & c : trg )
+  {
+    c[0] *= args.twine_width ;
+    c[1] *= args.twine_width ;
+    if ( args.twine_normalize )
+      c[2] /= sum ;
+  }
+
+  if ( args.verbose )
+  {
+    std::cout << args.twf_file << " yields twining filter kernel:"
+              << std::endl ;
+    for ( const auto & c : trg )
+    {
+       std::cout << "x: " << c[0] << " y: " << c[1]
+                 << " w: " << c[2] << std::endl ;
+    }
+    if ( args.twine_normalize )
+    {
+      std::cout << "twining filter weights sum: 1.0" << std::endl ;
+    }
+    else
+    {
+      std::cout << "twining filter weights sum: " << sum << std::endl ;
+    }
+  }
+  ifs.close() ;
+}
+
+void arguments::twine_setup()
+{
+  // first, we initialize the twining parameters.
+
+  if ( twine != -1 )
+  {
+    // the user has passed a --twine argument other than -1,
+    // which is the default value if no --twine argument is
+    // passed on the command line. If the value is
+    // zero, we take this to mean 'no twining'. Other values
+    // result in twining - even a value of --twine 1, which
+    // still produces a result where the pickup location is
+    // modified by the single twining coefficient. Negative
+    // values are set to zero.
+
+    if ( twine < 0 )
+      twine = 0 ;
+
+    if ( twine > 0 )
+    {
+      assert ( twine_width > 0.0f ) ;
+    }
+  }
+  else
+  {
+    // the twine argument was not passed, or passed -1 explicitly
+    // to trigger automatic twining, which is the default anyway.
+    // so we set up twining parameters to fit the job at hand.
+
+    // first, figure out the magnification in the image center.
+    // To make sure that the twine value is sufficiently large
+    // for all contributing facets, we look for the smallest
+    // 'step' value in the facet population and calculate
+    // 'twine' accordingly. A single hi-res facet can therefore
+    // result in a high twining factor which is overkill for
+    // most of the result, so this detection and method is
+    // conservative but potentially computationally expensive.
+
+    double smallest_step = std::numeric_limits < double > :: max() ;
+    
+    if ( nfacets == 1 || solo > 0 )
+    {
+      // in solo mode, we calculate the twining factor to be suitable
+      // for the single facet we're processing. This is debatable:
+      // the result will differ slightly from what this facet's image
+      // will be in a synopsis. The difference should be sub-pixel
+      // only, though, and we avoid overkill for facets which have
+      // lower resolution.
+
+      smallest_step = args.facet_spec_v[solo].step ;
+    }
+    else
+    { 
+      for ( const auto & fspec : args.facet_spec_v )
       {
-        std::cout << "using fixed twine: " << twine
-                  << " twine_width: " << twine_width
-                  << std::endl ;
+        smallest_step = std::min ( fspec.step , smallest_step ) ;
       }
     }
+
+    double mag = smallest_step / step ;
+
+    if ( mag > 1.0 )
+    {
+      // if the transformation magnifies, we use a moderate twine
+      // size and a twine_width equal to the magnification, to
+      // avoid the star-shaped artifacts from the bilinear
+      // interpolation used for the lookup of the contributing
+      // rays. If mag is small, the star-shaped artifacts aren't
+      // really an issue, and twine values beyond, say, five
+      // do little to improve the filter response, so we cap
+      // the twine value at five, but lower it when approaching
+      // mag 1, down to two - where the next case down starts.
+
+      if ( args.spline_degree > 1 )
+      {
+        // if the substrate is a spline with a degree greater than
+        // one, we only use moderate twining if there are several
+        // facets, to soften potential collisions. For single-facet
+        // operation, a b-spline is already smooth, so we don't twine.
+        // TODO: consider tapering - the abrupt change to twine 1 if
+        // mag > 1.0 may be problematic.
+
+        if ( args.nfacets > 1 )
+          twine = 3 ;
+        else if ( mag < 2.0 ) // << tapering
+          twine = 2 ;
+        else
+          twine = 1 ;
+      }
+      else
+      {
+        // we're using binlinear interpolation. since this is a
+        // magnifying view, there may be star-shaped artifacts in the
+        // 'ground truth' rendition, so we use twining.
+
+        twine = std::min ( 5 , int ( 1.0 + mag ) ) ;
+
+        // the twine width is set equal to the magnification: We want
+        // to form the weighted sum over a field of as many pixels in
+        // the 'ground truth' signal as correspond to a single pixel
+        // in the target. Note that we're looking at the 'ground truth'
+        // signal here, not the 'raw' image data! In a magnifying view,
+        // the ground truth signal is the magnified version of the
+        // image data - we only use twining here to avoid shortcomings
+        // of the bilinear interpolation.
+
+        twine_width = mag ;
+      }
+    }
+    else
+    {
+      // for down-scaling, we use a twine size which depends on the
+      // downscaling factor (reciprocal of 'mag') and a twine_width
+      // of 1.0: we only want anti-aliasing. picking a sufficiently
+      // large twine value guarantees that we're not skipping any
+      // pixels in the ground truth signal due to undersampling.
+
+      twine = int ( 1.0 + 1.0 / mag ) ;
+      twine_width = 1.0 ;
+    }
+
+    if ( verbose )
+    {
+      std::cout << "automatic twining for magnification " << mag
+                << ":" << std::endl ;
+      std::cout << "twine: " << twine
+                << " twine_width: " << twine_width
+                << std::endl ;
+    }
+  }
+
+  // we now have values for twine and twine_width, either passed
+  // explicitly by the user or set automatically in the code above.
+
+  if ( twine_density != 1.0f )
+  {
+    // if the user has passed twine_density, we use it as a
+    // multiplicative factor to change twine - typically
+    // twine_density will be larger than one, so we'll get
+    // more filter taps.
+  
+    twine = std::round ( twine * twine_density ) ;
+
+    if ( verbose )
+    {
+      std::cout << "applied twine_density " << twine_density
+                << ": twine is now " << twine << std::endl ;
+    }
+  }
+
+  // now we can make the 'spread' by calculating the twining
+  // coefficients or by reading thw twf file.
+
+  if ( args.twf_file == std::string() )
+  {
+    make_spread ( args.twine_spread , args.twine , args.twine ,
+                  args.twine_width , args.twine_sigma ,
+                  args.twine_threshold ) ;
+  }
+  else
+  {
+    // why only read this file now? because automatic twining may
+    // have recalculated twine_width, which modulates the values
+    // taken from the twf file. One might consider buffering the
+    // file's original content.
+
+    read_twf_file ( args.twine_spread ) ;
+  }
+
+
+  if ( twine )
+  {
+    // if twining is active, we should have a 'spread' by now.
+
+    assert ( twine_spread.size() ) ;
   }
 }
 
@@ -1277,6 +1366,8 @@ int main ( int argc , const char ** argv )
   // If we're not running a sequence, there will only be one
   // iteration.
 
+  int twine_as_passed = args.twine ;
+
   std::size_t frames = 0 ;
   do
   {
@@ -1307,27 +1398,16 @@ int main ( int argc , const char ** argv )
       assert ( args.x0 < args.x1 ) ;
       assert ( args.y0 < args.y1 ) ;
       args.step = ( args.x1 - args.x0 ) / args.width ;
-      args.twine = 0 ;
+
+      // (re-) set 'twine' to the value which was passed to envutil
+      // initially. This is to trigger recalculation of the twining
+      // parameters to adapt to possible changes in the course of
+      // the sequence.
+
+      args.twine = twine_as_passed ;
     }
 
-    // only now we calculate a twining 'spread' - if we run a sequence
-    // file, the twining parameters need to be recalculated for every
-    // output image to adapt to changes of the output hfov. A spread is
-    // the generalized equivalent of a filter kernel. While a 'standard'
-    // convolution kernel has pre-determined geometry (it's a matrix of
-    // coefficients meant to be applied to an equally-shaped matrix of
-    // data) - here we have three values for each coefficient: the
-    // first two define the position of the look-up relative to the
-    // 'central' position, and the third is the weight and corresponds
-    // to a 'normal' convolution coefficient. We only calculate a spread
-    // if no twf-file was given - a twf file takes precedence, and the
-    // spread is then already present - it is created during argument
-    // processing.
-
-    if ( args.twf_file == std::string() )
-      make_spread ( args.twine_spread , args.twine , args.twine ,
-                    args.twine_width , args.twine_sigma ,
-                    args.twine_threshold ) ;
+    args.twine_setup() ;
 
     // find the parameters which are type-relevant to route to
     // the specialized code above. There are several stages of
@@ -1335,7 +1415,7 @@ int main ( int argc , const char ** argv )
     // arguments into type information.
 
     int nch = args.nchannels ;
-    int ninp = ( args.twine == 1 ) ? 3 : 9 ;
+    int ninp = ( args.twine == 0 ) ? 3 : 9 ;
     projection_t prj = args.projection ;
 
     // now call the ISA-specific rendering code via the dispatch_base

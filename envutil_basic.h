@@ -407,6 +407,7 @@ struct facet_spec
   bool have_pto_mask ;
   std::vector < pto_mask_type > pto_mask_v ;
   std::string asset_key ;
+  float brighten ;
 
   bool init ( int argc , const char ** argv ) ;
 
@@ -496,11 +497,6 @@ struct arguments
   std::string metamatch ;
   std::regex field_re ;
 
-  // the 'arguments' object's 'init' takes the main program's argc
-  // and argv.
-
-  void init ( int argc , const char ** argv ) ;
-
   std::size_t nfacets ;
   std::vector < std::string > facet_name_v ;
   std::vector < std::string > facet_projection_v ;
@@ -517,6 +513,15 @@ struct arguments
 
   int solo ;
   int mask_for ;
+
+  // the 'arguments' object's 'init' takes the main program's argc
+  // and argv.
+
+  void init ( int argc , const char ** argv ) ;
+
+  // twine_setup initializes the twining coefficients
+
+  void twine_setup() ;
 } ;
 
 extern arguments args ;
