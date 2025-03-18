@@ -316,6 +316,12 @@ struct vs_adapter
   : inner_type ( _inner )
   { } ;
 
+  // we're also passing through the inner type's eval function(s).
+  // what we're aiming at is not to enforce the signature of 'eval'
+  // below, but to provide it if inner_type doesn't.
+
+  using inner_type::eval ;
+
   void eval ( const in_v & in ,
                    out_v & out )
   {

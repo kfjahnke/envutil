@@ -1147,6 +1147,8 @@ struct _environment
 
         ImageSpec config;
         config [ "raw:user_flip" ] = 0 ;
+        config [ "raw:ColorSpace" ] = "sRGB-linear" ;
+
         auto inp = ImageInput::open ( fct.filename , &config ) ;
 
         const ImageSpec &spec = inp->spec() ;

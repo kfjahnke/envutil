@@ -198,7 +198,7 @@ envutil --help gives a summary of command line options:
       --output OUTPUT                output file name (mandatory)
 
     parameters for mounted (facet) image input:
-      --pto PTOFILE            panotools script in higin PTO dialect (optional)
+      --pto PTOFILE            panotools script in hugin PTO dialect (optional)
       --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
                               load oriented non-environment source image
       --solo FACET_INDEX      show only this facet (indexes starting from zero)
@@ -360,7 +360,7 @@ collision lines will be hard discontinuities. This is correct - the blending
 due to twining only affects tilted collision lines, unless the twining kernel
 is widened, which introduces overall blur as well.
 
-## --pto PTO-FILE       panotools script in higin PTO dialect (optional)
+## --pto PTO-FILE       panotools script in hugin PTO dialect (optional)
 
 envutil can process a growing subset of the PTO standard. Currently, the
 i-lines in a PTO file are scanned for file name, projection, hfov, yaw,

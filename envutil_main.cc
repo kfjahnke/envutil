@@ -373,7 +373,7 @@ void arguments::init ( int argc , const char ** argv )
   ap.separator("  parameters for mounted (facet) image input:");
   
   ap.arg("--pto PTOFILE")
-    .help("panotools script in higin PTO dialect (optional)")
+    .help("panotools script in hugin PTO dialect (optional)")
     .metavar("PTOFILE");
 
   ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL",

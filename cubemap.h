@@ -705,10 +705,15 @@ private:
 
     // we use a degree-1 b-spline (bilinear interpolation) to
     // fill the support frame
+
     // TODO: when specializing with 1, invocation with
     // --spline_degree 0 crashes.
 
     // zimt::evaluator < crd2_t , px_t , LANES , 1 > ev ;
+
+    // seems we have out-of-bounds access then, this fixes it:
+    // (initialized in the c'tor with make_safe_evaluator)
+
     zimt::grok_type < crd2_t , px_t , LANES > ev ;
 
     // note the factor of two in the initialization of 'ithird':
