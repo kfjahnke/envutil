@@ -43,7 +43,10 @@
     #define ENVUTIL_LENS_CORRECTION_H
   #endif
 
-#include "../zimt/eval.h"
+#include "zimt/eval.h"
+
+HWY_BEFORE_NAMESPACE() ;
+BEGIN_ZIMT_SIMD_NAMESPACE(project)
 
 // class eu_polynomial encodes a polynomial of degree DEGREE and
 // provides member functions to evaluate the polynomial, it's
@@ -94,19 +97,34 @@ struct eu_polynomial
     return sum ;
   }
 
+  // we use Newton's method to find the inverse. We trust that
+  // within the interval we're looking at, the polynomial is
+  // rising monotonously.
+
   template < typename T >
   bool inverse ( const T & desired_output ,
                  T & required_input ,
-                 const T & tolerance = .0000000001 )
+                 const T & tolerance
+                   = 100 * std::numeric_limits<T>::epsilon() )
   {
     T current = required_input ;
+    T result , difference ;
+    // we'll try to get really close:
+    T aim = 3 * std::numeric_limits<T>::epsilon() ;
 
-    for ( int count = 0 ; count < 100 ; count++ )
+    for ( int count = 0 ; count < 10 ; count++ )
     {
-      auto result = function ( current ) ;
-      auto difference = desired_output - result ;
+      result = function ( current ) ;
+      difference = desired_output - result ;
 
-      if ( fabs ( difference ) <= tolerance )
+      // std::cout << "current: " << current
+      //           << " deriv: " << derivative ( current )
+      //           << " result: " << result
+      //           << " diff: " << difference
+      //           << " tol " << tolerance
+      //           << std::endl ;
+
+      if ( fabs ( difference ) <= aim )
       {
         required_input = current ;
         return true ;
@@ -114,6 +132,9 @@ struct eu_polynomial
 
       current = current + difference / derivative ( current ) ;
     }
+    if ( fabs ( difference ) < tolerance )
+      return true ;
+
     return false ;
   }
 
@@ -219,31 +240,52 @@ struct inverse_lcp
 
   double coefficients[5] ;
 
+  // The scaling factor scales incoming radii in [0...r_max] to
+  // [0...16], to be used to evaluate the b-spline
+
+  double r_max ;
+  double scale ;
+
   // b-spline and evaluator use type T - usually float - because they
   // are employed in rendering jobs. When working CPs, use double as T.
 
   zimt::bspline < T , 1 > inv_model ;
   zimt::grok_type < T , T , LANES > fev ;
 
-  // note how we create a b-spline which has half of it's control points
+  // note how we create a b-spline which has several control points
   // outside of the area in which we'll evaluate it: this is to avoid
   // margin effects. We use a cubic spline, which combines good precision
   // and reasonable processing times.
 
-  inverse_lcp ( double _a , double _b , double _c )
+  inverse_lcp ( double _a , double _b , double _c , double _r_max )
   : coefficients { _a , _b , _c , 1.0 - ( _a + _b + _c ) , 0.0 } ,
-    inv_model ( 32 , 3 , zimt::NATURAL )
+    inv_model ( 16 , 3 , zimt::NATURAL ) ,
+    r_max ( _r_max ) ,
+    scale ( 16.0 / _r_max )
   {
     eu_polynomial < double , 4 , LANES > p ( coefficients ) ;
-    for ( std::size_t i = 0 ; i < 32 ; i++ )
+    for ( std::size_t i = 0 ; i < inv_model.core.shape[0] ; i++ )
     {
-      // now we set the spline's control points, starting at -0.5 and
-      // ending at 1.5 - evaluation will be limited to [0:1].
+      // now we set the spline's control points, starting further
+      // to the left to avoid margin effects, and proceeding
+      // some steps beyond the coefficient corresponding to the
+      // radius at the corner of the image
 
-      double notch = i / 15.0 - 0.5 ;
-      double out ;
-      p.reval ( notch , out ) ;
-      inv_model.core [ i ] = ( notch == 0.0 ? 0.0 : out / notch ) ;
+      double notch = i / scale ;
+      double out = notch ; // reasonable starting point of iteration
+      p.reval ( notch , out ) ; // will throw if inverse isn't found
+
+      // as the b-spline's knot points, we don't store the radius
+      // but rather the factor we need to apply to the incoming radius
+      // to obtain the outgoing radius.
+
+      inv_model.core [ i ] = (    notch == 0.0
+                                ? 1.0 / p.derivative ( 0.0 )
+                                : out / notch ) ;
+
+      std::cout << "notch " << i << " rr " << notch
+                << " r " << out << " f " << inv_model.core [ i ]
+                << std::endl ;
     }
     // new we set up an evaluator for the spline.
 
@@ -252,14 +294,14 @@ struct inverse_lcp
   }
 
   // the eval function scales and shifts incoming radius values, which
-  // sould be in [0,1], to evaluate in the central half of the spline.
+  // sould be in [0,r_max], to evaluate in the central half of the spline.
   // output is the desired scaling factor, which can be used directly
   // to scale centered 2D coordinates.
 
   template < typename I , typename O >
   void eval ( const I & in , O & out )
   {
-    fev.eval ( in * T(15.0) + T(7.5) , out ) ;
+    fev.eval ( in * scale , out ) ;
   }
 } ;
 
