@@ -825,7 +825,7 @@ struct gridspace_t
   // start is a single N-dimensional value, whereas step has one
   // value for the increase for a step in each of the canonical
   // directions. This way, it can produce grids which are not
-  // perpendicular to the cononical directions.
+  // perpendicular to the canonical directions.
 
   gridspace_t ( const value_t & _start ,
                 const std::array < value_t , D > & _step ,

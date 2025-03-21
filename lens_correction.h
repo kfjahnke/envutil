@@ -55,7 +55,11 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 // to succeed - but in the context here where we're working with
 // quite 'tame' polynomials used for lens correction, failures
 // should not occur - we have an assertion in place which will
-// throw an exception if this assumption fails.
+// throw an exception if this assumption fails. The iteration is
+// is done with Newton's method, which succeeds without fail if
+// the polynomial's derivative does not change sign, and if we
+// take the radius transformation as the polynomial, this should
+// certainly be the case for the interval we're looking at.
 // With the given three member functions, we add two more with
 // 'standard' eval semantics, providing the evaluation of the
 // polynomial and the inverse.
@@ -68,6 +72,8 @@ struct eu_polynomial
   value_type coefficients [ DEGREE + 1 ] ;
   value_type derivative_coefficients [ DEGREE + 1 ] ;
   eu_polynomial() = default ;
+
+  // evaluation of the poynomial and it's derivative is trivial:
 
   template < typename T >
   T function ( const T & x )
@@ -99,7 +105,11 @@ struct eu_polynomial
 
   // we use Newton's method to find the inverse. We trust that
   // within the interval we're looking at, the polynomial is
-  // rising monotonously.
+  // rising monotonously. If the result is within the required
+  // tolerance, we return true, false otherwise. We're aiming
+  // at very high precision; the result we get is usually
+  // precise to ca. 2*std::numeric_limits<T>::epsilon(). The
+  // iteration tends to find the solution quite quickly.
 
   template < typename T >
   bool inverse ( const T & desired_output ,
@@ -109,20 +119,15 @@ struct eu_polynomial
   {
     T current = required_input ;
     T result , difference ;
+
     // we'll try to get really close:
+
     T aim = 3 * std::numeric_limits<T>::epsilon() ;
 
     for ( int count = 0 ; count < 10 ; count++ )
     {
       result = function ( current ) ;
       difference = desired_output - result ;
-
-      // std::cout << "current: " << current
-      //           << " deriv: " << derivative ( current )
-      //           << " result: " << result
-      //           << " diff: " << difference
-      //           << " tol " << tolerance
-      //           << std::endl ;
 
       if ( fabs ( difference ) <= aim )
       {
@@ -133,10 +138,16 @@ struct eu_polynomial
       current = current + difference / derivative ( current ) ;
     }
     if ( fabs ( difference ) < tolerance )
+    {
+      required_input = current ;
       return true ;
+    }
 
     return false ;
   }
+
+  // standard eval-semantic member functions for evaluation and
+  // inverse
 
   template < typename T >
   void eval ( const T & x , T & y )
@@ -185,14 +196,30 @@ struct lcp
 {
   typedef eu_polynomial < T , 3 , LANES > pl_t ;
 
-  lcp ( T _a , T _b , T _c )
+  lcp ( T _a , T _b , T _c , T r_max )
   : pl_t ( { _a , _b , _c , T(1) - ( _a + _b + _c ) } )
-  { }
+  {
+    // test whether rr(r) rises over the intended knot point interval
+    // not entirely safe - there might be a very small wiggle we don't
+    // catch.
+    double scale = r_max / 31.0 ;
+    double y0 = 0.0 ;
+    for ( int i = 1 ; i < 36 ; i++ )
+    {
+      double x = i * scale ;
+      double y ;
+      eval ( x , y ) ;
+      y *= x ;
+      // std::cout << "sample: " << x << " -> " << y << std::endl ;
+      assert ( y > y0 ) ;
+      y0 = y ;
+    }
+  }
 
   using pl_t::eval ; 
 } ;
 
-// struct inverse_lcp calculates the radial scaling factor to convert
+// struct inverse_lcp calculates the radial scaling factor to scale
 // a radius value (or a centered 2D coordinate) with lens control
 // polynimial applied to a radius value without lcp applied. It's
 // used to build the inverse coordinate transformation - inverse to
@@ -232,7 +259,7 @@ struct inverse_lcp
 : public zimt::unary_functor < T , T , LANES >
 {
   // even though there are only three coefficients a, b, and c for
-  // the mens correction polynomial, the function to yield an
+  // the lens correction polynomial, the function to yield an
   // appropriately scaled radius for an unscaled one is a fourth-degree
   // polynomial. The fourth coefficient is one minus the sum of the
   // other coefficients, to make the polynomial evaluate to 1.0 at
@@ -252,16 +279,24 @@ struct inverse_lcp
   zimt::bspline < T , 1 > inv_model ;
   zimt::grok_type < T , T , LANES > fev ;
 
-  // note how we create a b-spline which has several control points
-  // outside of the area in which we'll evaluate it: this is to avoid
-  // margin effects. We use a cubic spline, which combines good precision
-  // and reasonable processing times.
+  // We use a cubic spline, which combines good precision and reasonable
+  // processing times. I was unsure initially whether using only control
+  // points starting at zero would be okay, but since the lcp is a
+  // polynomial through the origin without DC and predominant linear
+  // component, the curve is pretty much a straight line near zero,
+  // so using NATURAL BCs is fine - putting a zero into the second
+  // derivative at origin is close to the actual curve, which has next
+  // to no curvature at the origin anyway. At the right end of the spline,
+  // there is curvature, and putting a zero into the second derivative
+  // there is not safe - that's why it makes sense to add a few
+  // extra control points at the tail end - we're silently assuming
+  // that for the four extra CPs here the polynomial is still rising. 
 
   inverse_lcp ( double _a , double _b , double _c , double _r_max )
   : coefficients { _a , _b , _c , 1.0 - ( _a + _b + _c ) , 0.0 } ,
-    inv_model ( 16 , 3 , zimt::NATURAL ) ,
+    inv_model ( 36 , 3 , zimt::NATURAL ) ,
     r_max ( _r_max ) ,
-    scale ( 16.0 / _r_max )
+    scale ( 31.0 / _r_max )
   {
     eu_polynomial < double , 4 , LANES > p ( coefficients ) ;
     for ( std::size_t i = 0 ; i < inv_model.core.shape[0] ; i++ )
@@ -290,7 +325,8 @@ struct inverse_lcp
     // new we set up an evaluator for the spline.
 
     inv_model.prefilter() ;
-    fev = zimt::make_safe_evaluator ( inv_model ) ;
+    fev = zimt::make_safe_evaluator < decltype ( inv_model ) , T , LANES >
+      ( inv_model ) ;
   }
 
   // the eval function scales and shifts incoming radius values, which
