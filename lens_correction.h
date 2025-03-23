@@ -36,6 +36,21 @@
 /*                                                                      */
 /************************************************************************/
 
+// this header implements use of a panotools-compatible lens correction
+// polynomial, using the same semantics as the original. The polynomial
+// itself is a trivial thing, what's trickier to implement is the inverse
+// of the polynomial, which is desirable to make to geometrical
+// transformations in the rendering process fully invertible. Instead
+// of even trying to provide a formula for the inverse polynomial, I
+// only sample it, using Newton's method, and then set up a b-spline
+// over the samples. The result is a functor which performs well enough
+// for mass coordinate transformations needed in rendering images
+// in contrast to the iteration to find the inverse in a given point which
+// is quite slow. The process should be applicable for all 'naturally
+// occuring' lens correction polynomials - these should be monotonously
+// rising over the range covered, anything else wouldn't make sense
+// in the given context.
+
 #if defined(ENVUTIL_LENS_CORRECTION_H) == defined(HWY_TARGET_TOGGLE)
   #ifdef ENVUTIL_LENS_CORRECTION_H
     #undef ENVUTIL_LENS_CORRECTION_H
@@ -109,7 +124,14 @@ struct eu_polynomial
   // tolerance, we return true, false otherwise. We're aiming
   // at very high precision; the result we get is usually
   // precise to ca. 2*std::numeric_limits<T>::epsilon(). The
-  // iteration tends to find the solution quite quickly.
+  // iteration tends to find the solution quite quickly. It's
+  // essantial to provide a good guess for the start of the
+  // iteration (passed in as required_input - see the code in
+  // inverse_lcp, where 'inverse' is invoked repeatedly to find
+  // knot point values for a b-spline. With a good starting point,
+  // we avoid the problem that the iteration might 'drift off'
+  // to some other point on the polynomial with the same y value,
+  // in case that the entire polynomial is not monotonously rising.
 
   template < typename T >
   bool inverse ( const T & desired_output ,
@@ -118,25 +140,34 @@ struct eu_polynomial
                    = 100 * std::numeric_limits<T>::epsilon() )
   {
     T current = required_input ;
-    T result , difference ;
+    T result , difference , last_difference ;
 
-    // we'll try to get really close:
+    last_difference = std::numeric_limits<T>::max() ;
 
-    T aim = 3 * std::numeric_limits<T>::epsilon() ;
-
-    for ( int count = 0 ; count < 10 ; count++ )
+    for ( int count = 0 ; count < 16 ; count++ )
     {
       result = function ( current ) ;
       difference = desired_output - result ;
 
-      if ( fabs ( difference ) <= aim )
-      {
-        required_input = current ;
-        return true ;
-      }
+      std::cout << "*** " << count
+                << " current: " << current
+                << " result " << result
+                << " difference " << difference << std::endl ;
+
+      // we iterate until the difference does not change anymore. This
+      // usually takes only a few iterations.
+
+      if ( last_difference == difference )
+        break ;
+
+      if ( fabs ( difference ) <= tolerance )
+        break ;
+
+      last_difference = difference ;
 
       current = current + difference / derivative ( current ) ;
     }
+
     if ( fabs ( difference ) < tolerance )
     {
       required_input = current ;
@@ -267,15 +298,21 @@ struct inverse_lcp
 
   double coefficients[5] ;
 
-  // The scaling factor scales incoming radii in [0...r_max] to
-  // [0...16], to be used to evaluate the b-spline
+  // both radii are chosen slightly higher than the incoming argument
+  // to have a few extra knot points towards the end of the spline.
+  // if the lens correction polynomial yealing the scaled radius is
+  // p(x) = a xxxx + b xxx + c xx + ( 1 - a - b - c ) x
+  // we have
+  // rr_max = p ( r_max )
 
-  double r_max ;
-  double scale ;
+  double rr_max ;  // maximal incoming radius to transform back
+  double r_max ;   // maximal original radius
 
   // b-spline and evaluator use type T - usually float - because they
   // are employed in rendering jobs. When working CPs, use double as T.
+  // We take note of the knot point count as 'nk'
 
+  int nk ;
   zimt::bspline < T , 1 > inv_model ;
   zimt::grok_type < T , T , LANES > fev ;
 
@@ -290,24 +327,50 @@ struct inverse_lcp
   // there is curvature, and putting a zero into the second derivative
   // there is not safe - that's why it makes sense to add a few
   // extra control points at the tail end - we're silently assuming
-  // that for the four extra CPs here the polynomial is still rising. 
+  // that for the extra CPs here the polynomial is still rising.
+  // I found that near the origin the resolution which results from
+  // linear steps in the radius as knot point positions for the spline
+  // is often insufficient unless the number of knot points is increased
+  // drastically. So I add a nonlinear transformation to the stepping
+  // function, resulting in ever smaller steps near the origin, at the
+  // cost of larger ones near the upper end of the spline.
 
-  inverse_lcp ( double _a , double _b , double _c , double _r_max )
+  inverse_lcp ( double _a , double _b , double _c ,
+                double _r_max , int sz = 32 )
   : coefficients { _a , _b , _c , 1.0 - ( _a + _b + _c ) , 0.0 } ,
-    inv_model ( 36 , 3 , zimt::NATURAL ) ,
-    r_max ( _r_max ) ,
-    scale ( 31.0 / _r_max )
+    inv_model ( sz + 4 , 3 , zimt::NATURAL ) ,
+    r_max ( _r_max * ( ( sz + 3.0 ) / sz ) )
   {
     eu_polynomial < double , 4 , LANES > p ( coefficients ) ;
-    for ( std::size_t i = 0 ; i < inv_model.core.shape[0] ; i++ )
-    {
-      // now we set the spline's control points, starting further
-      // to the left to avoid margin effects, and proceeding
-      // some steps beyond the coefficient corresponding to the
-      // radius at the corner of the image
+    rr_max = p.function ( r_max ) ;
+    nk = inv_model.core.shape[0] ; // == sz + 4
 
-      double notch = i / scale ;
-      double out = notch ; // reasonable starting point of iteration
+    for ( std::size_t i = 0 ; i < nk ; i++ )
+    {
+      // now we set the spline's control points, proceeding
+      // some steps beyond the coefficient corresponding to the
+      // radius at the corner of the image.
+
+      // first we calculate 'notches' from zero to 1.0
+
+      double notch = double(i) / ( nk - 1 ) ;
+
+      // now we use a nonlinear scaling function. The resulting
+      // range of notches is still [0...1]
+
+      notch *= notch ;
+
+      // now we extend the range to [0...rr_max]
+
+      notch *= rr_max ;
+
+      // we want a good starting point for the iteration. A reasonable
+      // approximation is to form a straight line from the origin to
+      // end of the covered interval and intersect it with the desired
+      // y value
+
+      double out = i * r_max / sz ;
+
       p.reval ( notch , out ) ; // will throw if inverse isn't found
 
       // as the b-spline's knot points, we don't store the radius
@@ -317,27 +380,36 @@ struct inverse_lcp
       inv_model.core [ i ] = (    notch == 0.0
                                 ? 1.0 / p.derivative ( 0.0 )
                                 : out / notch ) ;
-
-      std::cout << "notch " << i << " rr " << notch
-                << " r " << out << " f " << inv_model.core [ i ]
-                << std::endl ;
     }
-    // new we set up an evaluator for the spline.
+
+    // new we prefilter and set up an evaluator for the spline.
 
     inv_model.prefilter() ;
+
     fev = zimt::make_safe_evaluator < decltype ( inv_model ) , T , LANES >
       ( inv_model ) ;
   }
 
-  // the eval function scales and shifts incoming radius values, which
-  // sould be in [0,r_max], to evaluate in the central half of the spline.
-  // output is the desired scaling factor, which can be used directly
-  // to scale centered 2D coordinates.
+  // the eval function first scales the incoming radius value (for which
+  // we seek the scaling factor to transform it back to the 'original'
+  // radius value) to the interval [0...1], then applies the inverse of
+  // the nonlinear sampling function we used to set up the spline's knot
+  // points, and finally moves from [0...1] to the spline's range to
+  // evaluate. output is the desired scaling factor, which can be used
+  // directly to scale a radius or centered 2D coordinates.
+  // The square root in the evaluation is annoying (costly to compute)
+  // but the nonlinear sampling reduces the spline's knot point count
+  // by a fair deal. An alternative is to omit the nonlinear sampling
+  // and increase the knot point count considerably.
 
   template < typename I , typename O >
-  void eval ( const I & in , O & out )
+  void eval ( const I & _in , O & out )
   {
-    fev.eval ( in * scale , out ) ;
+    auto in = _in / rr_max ; // move to [0...1]
+    in = sqrt ( in ) ;       // apply inverse of nonlinear stepping
+    in *= ( nk - 1 ) ;       // move to spline coordinates
+
+    fev.eval ( in , out ) ;  // evaluate the spline
   }
 } ;
 
