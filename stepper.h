@@ -55,7 +55,14 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 // to populate a given 2D image in a specific projection.
 // The steppers only produce the coordinates - providing pixel values
 // to populate the image has to be done in a second step, with the
-// 'act' functor of zimt::process.
+// 'act' functor of zimt::process - or by 'suffixing' the stepper with
+// further processing steps. The latter method 'pulls' functionality
+// into the stepper. There's ready-made code for the purpose in
+// zimt/get.h, class suffixed_t: this class suffixes a get_t type
+// object with an act type functor and produces a get_t type object
+// as result. Steppers are regular get_t type objects, so they can
+// be 'suffixed' like any other get_t type.
+
 // The steppers have the added feature of arbitrary orientation. Their
 // c'tors take three unit vectors for the three axes of the stepper's
 // orientation - if you want no rotation, pass (1,0,0), (0,1,0) and
@@ -106,10 +113,10 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 // axis (y axis in lux convention). Rather than thinking along the
 // lines of a rotated camera, we can operate in the target image's
 // coordinate system and 'pull data' from a rotated environment.
-// This is the reverse transformation typically used for gemetrical
+// This is the reverse transformation typically used for geometrical
 // transformations in a panorama stitching and viewing context:
 // we start out with a planar discrete coordinate pertaining to
-// a pixel in the target image and ask: "which source image pixels
+// a pixel in the target image and ask: "which source image pixel(s)
 // should affect this target pixel?" the location of the source
 // pixel(s) is obtained by appropriate geometrical transformation,
 // and how the source pixels in the vicinity of this location are
@@ -124,7 +131,7 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 // of the 2D archetype in question. An alternative would be to use
 // texture coordinates, but to work with texture coordinates, we'd
 // have to move to model space units for the internal caclculations,
-// so 'feeding' model space units is more efficient. extract.cc
+// so 'feeding' model space units is more efficient. envutil
 // can accept a horizontal field of view on the command line and
 // calculates the extent's limits from it. This should be the most
 // common way to go - the extent values produced in this way are
@@ -134,7 +141,7 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 // Steppers as such do not have a 'notion' of an image which they
 // might be used for - beyond the limits, which can be passed to
 // their c'tor. Within these limits, they will provide a uniform
-// sampling over the 2D manifold, but emit rays which coincide
+// sampling over the 2D manifold, but emit 3D rays which coincide
 // with the 2D sample points. Note that the sampling is uniform
 // in relation to a 'flattened-out' 2D manifold. If we're using
 // a spherical_stepper, the 'archetypal form' is a spherical
@@ -168,7 +175,7 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 // require more calculation (e.g. triangulations) and/or do not map
 // to a uniform grid. A disadvantage of the 1X6 stripe representation
 // are the discontinuities between the six partial images, which
-// can't be avoided: there is no way to arrange the six partial
+// can't be avoided: there is no way to form a stripe of six partial
 // images without unrelated edges 'colliding'. This is the reason
 // for using 'padding': if the padding is sufficiently wide (so that
 // the interpolator's support remains within a single padded image)
@@ -180,7 +187,13 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 // as masks to avoid unnecessary calculations e.g. for 'void' areas.
 // With the underlying rectangular structure, such schemes can be
 // used together with tiling schemes, marking which tiles will be
-// used in an intended manipulation.
+// used in an intended manipulation. There is a variant of class
+// cubemap_stepper which uses a planar trasformation on the in-face
+// coordinates to mitigate the shortcomings of the rectilinear
+// projection which is normally used for cubemaps, using atan/tan
+// and a linear factor. This is quite close to an optimal compromise
+// between resolution, computability and capacity: biatan6_stepper.
+// See there for more comments.
 
 // we set up a base class for 'steppers' which encodes the '2D part'
 // of setting up a sampling: We have a horizontal and a vertical
@@ -196,7 +209,7 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 // points on the 2D manifold taken as a plane.
 // stepper_base is very similar to zimt's linspace_t, which might
 // be used instead. The focus here is on precision and parameterization
-// which fits the intended use - lux has the 'extent' of 2D manifolds
+// which fits the intended use - envutil has the 'extent' of 2D manifolds
 // readily at hand and uses 'edge-to-edge' semantics for the extent.
 
 template < typename T ,     // fundamental type
@@ -242,6 +255,7 @@ struct stepper_base
   const T fx0 , fx1 , fy0 , fy1 ;
 
   // this is a SIMD constant holding values 0, 2, 4, ...
+  // so, twice what the ordinary 'iota' would provide, hence the name.
 
   const crd_ele_v iota2 ;
 
@@ -1325,8 +1339,8 @@ public:
     // center of a vertical near a horizontal edge (or vice versa)
     // due to the scaling factor used both ways.
 
-    p1 = tan ( p1 * float ( M_PI / 4.0 ) ) ;
-    p0 = tan ( p0 * float ( M_PI / 4.0 ) ) ;
+    p1 = tan ( p1 * T ( M_PI / 4.0 ) ) ;
+    p0 = tan ( p0 * T ( M_PI / 4.0 ) ) ;
 
     // now we set up two vectors: ccc for the part which remains
     // constant throughout the segment, and vvv, which is in the
@@ -1384,7 +1398,7 @@ public:
 
     increase() ;
 
-    trg = ccc + ( tan ( planar[0] * float ( M_PI / 4.0 ) ) ) * vvv ;
+    trg = ccc + ( tan ( planar[0] * T ( M_PI / 4.0 ) ) ) * vvv ;
 
     if constexpr ( normalize )
     {
@@ -1422,7 +1436,8 @@ public:
 // the rays, but 'texture' needs the difference between the
 // 2D texture coordinates used for pick-up, so we can't do the
 // differencing here and simply pass the rays as they are,
-// as a 'ninepack'.
+// as a 'ninepack'. envutil uses the same format of 'ninepack'
+// to implement it's 'twining' interpolation.
 
 template < typename T ,     // fundamental type
            std::size_t L ,  // lane count
@@ -1552,6 +1567,152 @@ struct deriv_stepper
       trg.stuff ( cap ) ;
   }
 } ;
+
+// this 2D 'stepper' class does not actually produce 3D ray
+// coordinates, but rather 2D planar coordinates. This is used if
+// planar reprojections need to be applied before the 3D ray
+// coordinate is formed. This class is pretty much 'just the base
+// type', with the complete set of four member functions needed
+// to produce a get_t type object usable by zimt::process. Note
+// again that this class provides 2D coordinates!
+// We can build the functionality of the other steppers by starting
+// out with a planar_stepper object and 'suffixing' the formation
+// of ray coordinates. This is 'just as good' arithmetically, but
+// the code resulting from the use of the 3D steppers above is more
+// efficient, because it is more specific and can use some invariants.
+
+template < typename T ,     // fundamental type
+           std::size_t L >  // lane count
+struct planar_stepper
+: public stepper_base < T , L >
+{
+  typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
+  using typename base_t::crd_t ;
+  using typename base_t::crd2_t ;
+  using typename base_t::crd2_v ;
+  using typename base_t::f_v ;
+  using base_t::planar ;
+  using base_t::init ;
+  using base_t::increase ;
+
+  // without the 3D part, we only initialize the base type.
+
+  planar_stepper ( int _width ,
+                   int _height ,
+                   T _a0 ,
+                   T _a1 ,
+                   T _b0 ,
+                   T _b1 )
+  : base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 )
+  { }
+
+  void init ( crd2_v & trg , const crd_t & crd )
+  {
+    init ( crd ) ;
+    trg = planar ;
+  }
+
+  void init ( crd2_v & trg ,
+              const crd_t & crd ,
+              const std::size_t & cap )
+  {
+    init ( trg , crd ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+
+  void increase ( crd2_v & trg )
+  {
+    increase() ;
+    trg = planar ;
+  }
+
+  void increase ( crd2_v & trg ,
+                  const std::size_t & cap ,
+                  const bool & _stuff = true )
+  {
+    increase ( trg ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+} ;
+
+/*
+// planar_tf2_stepper works like planar_stepper, but additionally holds
+// an eval-type std::function performing a 2D->2D transformation.
+// The initial planar coordinates are transformed with this function
+// to produce the output. This could also be implemented by 'suffixing'
+// a planar_stepper with a zimt::unary_functor - I leave this variant
+// in for now.
+
+template < typename T ,     // fundamental type
+           std::size_t L >  // lane count
+struct planar_tf2_stepper
+: public stepper_base < T , L >
+{
+  typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
+  using typename base_t::crd_t ;
+  using typename base_t::crd2_t ;
+  using typename base_t::crd2_v ;
+  using typename base_t::f_v ;
+  using base_t::planar ;
+  using base_t::init ;
+  using base_t::increase ;
+
+  // eval-type std::function transforming a 2D planar coordinate
+
+  typedef std::function < void ( const crd2_v & , crd2_v ) > pf_t ;
+
+  pf_t pf ;
+
+  // without the 3D part, we only initialize the base type.
+
+  planar_tf2_stepper ( int _width ,
+                       int _height ,
+                       T _a0 ,
+                       T _a1 ,
+                       T _b0 ,
+                       T _b1 ,
+                       const pf_t & _pf )
+  : base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ) ,
+    pf ( _pf )
+  { }
+
+  void init ( crd2_v & trg , const crd_t & crd )
+  {
+    init ( crd ) ;
+    pf ( planar , target ) ;
+  }
+
+  void init ( crd2_v & trg ,
+              const crd_t & crd ,
+              const std::size_t & cap )
+  {
+    init ( trg , crd ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+
+  void increase ( crd2_v & trg )
+  {
+    increase() ;
+    pf ( planar , target ) ;
+  }
+
+  void increase ( crd2_v & trg ,
+                  const std::size_t & cap ,
+                  const bool & _stuff = true )
+  {
+    increase ( trg ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+} ;
+*/
 
 END_ZIMT_SIMD_NAMESPACE
 HWY_AFTER_NAMESPACE() ;

@@ -36,10 +36,7 @@
 /*                                                                      */
 /************************************************************************/
 
-// This is a test program for zimt's recently acquired b-spline
-// processing capabilites and also serves to measure performance of the
-// b-spline evaluation code with splines of various degrees and boundary
-// conditions and varying SIMD back-ends/ISAs.
+// This is a test program for the geometry code used in envutil.
 
 // There are two different ways of compiling it. The first is to create 
 // a single-ISA binary, fixing the SIMD ISA at compile time by passing
@@ -53,19 +50,20 @@
 // Note also the -I. directive to tell the compiler to find files to
 // #include in the current folder as well.
 
-//   clang++ -mavx2 bsp_eval.ccc -O3 -I. -DUSE_HWY -lhwy
-//   clang++ -mavx2 bsp_eval.ccc -O3 -I. -DUSE_VC -lVc
-//   clang++ -mavx2 bsp_eval.ccc -O3 -I. -DUSE_STDSIMD
-//   clang++ -mavx2 bsp_eval.ccc -O3 -I.
+//   clang++ -mavx2 geometry.cc -O3 -I. -DUSE_HWY -lhwy
+//   clang++ -mavx2 geometry.cc -O3 -I. -DUSE_VC -lVc
+//   clang++ -mavx2 geometry.cc -O3 -I. -DUSE_STDSIMD
+//   clang++ -mavx2 geometry.cc -O3 -I.
 
 // The second way is to use highway's automatic dispatch to embedded
 // variants of the code running with different ISAs. This requires the
-// definition of MULTI_SIMD_ISA and linkage to libhwy and can only
-// be used for the highway and the 'goading' back-end. Here, no
+// definition of MULTI_SIMD_ISA and linkage to libhwy. Here, no
 // architecture flags are passed to the compiler:
 
-//   clang++ bsp_eval.ccc -O3 -I. -DMULTI_SIMD_ISA -DUSE_HWY -lhwy
-//   clang++ bsp_eval.ccc -O3 -I. -DMULTI_SIMD_ISA -lhwy
+//   clang++ geometry.cc -O3 -I. -DMULTI_SIMD_ISA -DUSE_HWY -lhwy
+//   clang++ geometry.cc -O3 -I. -DMULTI_SIMD_ISA -DUSE_STDSIMD -lhwy
+//   clang++ geometry.cc -O3 -I. -DMULTI_SIMD_ISA -DUSE_VC -lhwy -lVc
+//   clang++ geometry.cc -O3 -I. -DMULTI_SIMD_ISA -lhwy
 
 // binaries made with the second method will dispatch to what is deemd
 // the best SIMD ISA available on the CPU on which the binary is run.
@@ -81,35 +79,6 @@
 // fixed-ISA build can be used to evolve the code with fast turn-around
 // times, adding dispatch capability later on by passing the relevant
 // compiler flags.
-
-// This particular program - evaluating b-splines - shows quite some
-// variation between builds with different back-ends. While, in general,
-// using better SIMD ISAs tend to speed things up, the differences
-// arising from using different back-ends are harder to explain. For
-// example, std::simd comes out surprisingly well for larger spline
-// degrees. My conclusion is that, depending on the given program,
-// there is no ready answer to the question which back-end will produce
-// the best result and that it pays to experiment. Please note that
-// the code to interface with the libraries I employ for the back-ends
-// is entirely mine, so the performance measurements do reflect my
-// use of these libraries, rather than qualities of these libraries.
-// I hope to tweak the interface code to get as much performance out
-// of the back-ends as possible, but this is difficult territory.
-
-// I'll mark code sections which will differ from one example to the
-// next, prefixing with ////////... and postfixing with //-------...
-// You'll notice that there are three four places where you have to
-// change stuff to set up your own program, and all the additions
-// are simple (except for your 'client code', which may be complex).
-
-// if the code is compiled to use the Vc or std::simd back-ends, we
-// can't (yet) use highway's foreach_target mechanism, so we #undef
-// MULTI_SIMD_ISA, which is zimt's way of activating that mechanism.
-
-#if defined MULTI_SIMD_ISA && ( defined USE_VC || defined USE_STDSIMD )
-#warning "un-defining MULTI_SIMD_ISA due to use of Vc or std::simd"
-#undef MULTI_SIMD_ISA
-#endif
 
 // we define a dispatch base class. All the 'payload' code is called
 // through virtual member functions of this class. In this example,
@@ -389,6 +358,9 @@ d3_t route2 ( projection_t pb ,
     case CUBEMAP:
       result = work < pa , ir_to_ray_t < double > > ( c3 ) ;
       break ;
+    case BIATAN6:
+      result = work < pa , ba6_to_ray_t < double > > ( c3 ) ;
+      break ;
     default:
       break ;
   }
@@ -425,6 +397,9 @@ d3_t route ( projection_t pa ,
     case CUBEMAP:
       result = route2 < ray_to_ir_t < double > > ( pb , c3 ) ;
       break ;
+    case BIATAN6:
+      result = route2 < ray_to_ba6_t < double > > ( pb , c3 ) ;
+      break ;
     default:
       break ;
   }
@@ -442,12 +417,13 @@ void test_r2r ( d3_t d3 )
   // the direction of the transformation (3D->2D vs. 2D->3D)
   // is opposite.
 
-  for ( int pa = SPHERICAL ; pa <= CUBEMAP ; pa++ )
+  for ( int pa = SPHERICAL ; pa <= BIATAN6 ; pa++ )
   {
     int pb = pa ;
     {
       result = route ( projection_t(pa) ,
-                          projection_t(pb) , d3 ) ;
+                       projection_t(pb) ,
+                       d3 ) ;
     }
   }
 }
@@ -601,7 +577,7 @@ int _payload ( int argc , char * argv[] )
   // highway's foreach_target mechanism, so including the Imath headers
   // for the first time instantiates the Imath types finally, and this
   // happens with a low-grade ISA. Subsequent re-compilations with the
-  // foreach_target mechanism can't reinstatiate the templates, because
+  // foreach_target mechanism can't reinstantiate the templates, because
   // the sentinels in the Imath headers blank out the code - Imath
   // 'thinks' they have already been dealt with. This results in
   // quaternion code which is hobbled to use only the instantiations
@@ -659,7 +635,7 @@ int _payload ( int argc , char * argv[] )
 
   // we repeat the process for all projections.
 
-  cylindrical_stepper < double , LANES >
+  cylindrical_stepper < double , LANES , false >
     cyls ( { 1.0 , 0.0 , 0.0 } ,
            { 0.0 , 1.0 , 0.0 } ,
            { 0.0 , 0.0 , 1.0 } ,
@@ -690,7 +666,7 @@ int _payload ( int argc , char * argv[] )
     }
   }
 
-  cylindrical_stepper < double , LANES >
+  cylindrical_stepper < double , LANES , false >
     rcyls ( ex , ey , ez , 1000 , 500 ,
             -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
 
@@ -710,7 +686,7 @@ int _payload ( int argc , char * argv[] )
     }
   }
 
-  rectilinear_stepper < double , LANES >
+  rectilinear_stepper < double , LANES , false >
     rects ( { 1.0 , 0.0 , 0.0 } ,
             { 0.0 , 1.0 , 0.0 } ,
             { 0.0 , 0.0 , 1.0 } ,
@@ -741,7 +717,7 @@ int _payload ( int argc , char * argv[] )
     }
   }
 
-  rectilinear_stepper < double , LANES >
+  rectilinear_stepper < double , LANES , false >
     rrects ( ex , ey , ez , 1000 , 500 ,
             -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
 
@@ -761,7 +737,7 @@ int _payload ( int argc , char * argv[] )
     }
   }
 
-  fisheye_stepper < double , LANES >
+  fisheye_stepper < double , LANES , false >
     fishs ( { 1.0 , 0.0 , 0.0 } ,
             { 0.0 , 1.0 , 0.0 } ,
             { 0.0 , 0.0 , 1.0 } ,
@@ -792,7 +768,7 @@ int _payload ( int argc , char * argv[] )
     }
   }
 
-  fisheye_stepper < double , LANES >
+  fisheye_stepper < double , LANES , false >
     rfishs ( ex , ey , ez , 1000 , 500 ,
             -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
 
@@ -812,7 +788,7 @@ int _payload ( int argc , char * argv[] )
     }
   }
 
-  stereographic_stepper < double , LANES >
+  stereographic_stepper < double , LANES , false >
     sters ( { 1.0 , 0.0 , 0.0 } ,
             { 0.0 , 1.0 , 0.0 } ,
             { 0.0 , 0.0 , 1.0 } ,
@@ -843,7 +819,7 @@ int _payload ( int argc , char * argv[] )
     }
   }
 
-  stereographic_stepper < double , LANES >
+  stereographic_stepper < double , LANES , false >
     rsters ( ex , ey , ez , 1000 , 500 ,
             -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
 
@@ -872,7 +848,7 @@ int _payload ( int argc , char * argv[] )
   zimt::array_t < 2 , d3_t > a6 ( { 500 , 3000 } ) ;
   zimt::array_t < 2 , d3_t > b6 ( { 500 , 3000 } ) ;
 
-  cubemap_stepper < double , LANES >
+  cubemap_stepper < double , LANES , false >
     cbms ( { 1.0 , 0.0 , 0.0 } ,
            { 0.0 , 1.0 , 0.0 } ,
            { 0.0 , 0.0 , 1.0 } ,
@@ -925,7 +901,7 @@ int _payload ( int argc , char * argv[] )
     }
   }
 
-  cubemap_stepper < double , LANES >
+  cubemap_stepper < double , LANES , false >
     rcbms ( ex , ey , ez , 500 , 3000 ,
            -1.0 , 1.0 , -6.0 , 6.0 ) ;
 
@@ -934,6 +910,66 @@ int _payload ( int argc , char * argv[] )
                   zimt::storer < double , 3 , 2 , LANES > ( a6 ) ) ;
 
   zimt::process ( b6.shape , ls2 , ir_to_ray + r3 ,
+                  zimt::storer < double , 3 , 2 , LANES > ( b6 ) ) ;
+
+  for ( std::size_t y = 0 ; y < a6.shape[1] ; y++ )
+  {
+    for ( std::size_t x = 0 ; x < a6.shape[0] ; x++ )
+    {
+      auto d = abs ( a6 [ { x , y } ] - b6 [ { x , y } ] ) . sum() ;
+      assert ( d < .0000000000001 ) ;
+    }
+  }
+
+  // for biatan6 projection, we use the same data as for cubemap.
+
+  biatan6_stepper < double , LANES , false >
+    ba6s ( { 1.0 , 0.0 , 0.0 } ,
+           { 0.0 , 1.0 , 0.0 } ,
+           { 0.0 , 0.0 , 1.0 } ,
+           500 , 3000 ,
+           -1.0 , 1.0 , -6.0 , 6.0 ) ;
+
+  zimt::process ( a6.shape , ba6s ,
+                  zimt::pass_through < double , 3 , LANES > () ,
+                  zimt::storer < double , 3 , 2 , LANES > ( a6 ) ) ;
+
+  ba6_to_ray_t < double , LANES > ba6_to_ray ;
+
+  x0 = ( a6.shape[0] - 1 ) / -2.0 ;
+  y0 = ( a6.shape[1] - 1 ) / -2.0 ;
+  dx = 2.0 / a6.shape[0] ;
+  dy = 12.0 / a6.shape[1] ;
+  x0 *= dx ;
+  y0 *= dy ;
+
+  zimt::process ( b6.shape , ls2 ,
+                  ba6_to_ray ,
+                  zimt::storer < double , 3 , 2 , LANES > ( b6 ) ) ;
+
+  for ( std::size_t y = 0 ; y < a6.shape[1] ; y++ )
+  {
+    for ( std::size_t x = 0 ; x < a6.shape[0] ; x++ )
+    {
+      auto crd2 = to_md2 ( x , y ) ;
+      zimt::xel_t < double , 3 > crd3 ;
+      ba6_to_ray.eval ( crd2 , crd3 ) ;
+      auto d = abs ( crd3 - a6 [ { x , y } ] ) . sum() ;
+      assert ( d < .0000000000001 ) ;
+      d = abs ( crd3 - b6 [ { x , y } ] ) . sum() ;
+      assert ( d < .0000000000001 ) ;
+    }
+  }
+
+  biatan6_stepper < double , LANES , false >
+    rba6s ( ex , ey , ez , 500 , 3000 ,
+           -1.0 , 1.0 , -6.0 , 6.0 ) ;
+
+  zimt::process ( a6.shape , rba6s ,
+                  zimt::pass_through < double , 3 , LANES > () ,
+                  zimt::storer < double , 3 , 2 , LANES > ( a6 ) ) ;
+
+  zimt::process ( b6.shape , ls2 , ba6_to_ray + r3 ,
                   zimt::storer < double , 3 , 2 , LANES > ( b6 ) ) ;
 
   for ( std::size_t y = 0 ; y < a6.shape[1] ; y++ )

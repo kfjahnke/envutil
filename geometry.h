@@ -594,8 +594,8 @@ struct in_face_to_ray
 // and holds cube face images of precisely ninety degrees fov,
 // the value would be 2.0 precisely. With added support, it's
 // slightly larger. The second argument is the distance, in model
-// space units, from the upper left corner of a section to the
-// cube face image's center. If the cube face image has even width,
+// space units, from the left margin of a section to the cube
+// face image's center. If the cube face image has even width,
 // this is precisely half the section size, but with odd width,
 // this isn't possible, hence the extra argument.
 // To accept UL-base coordinates, instantiate with
@@ -737,6 +737,211 @@ struct ir_to_ray_t
 
     crd2[1] -= section * section_md ;
     crd2    -= refc_md ;
+
+    // the section number can also yield the 'dominant' axis
+    // by dividing the value by two (another property which is
+    // deliberate):
+
+    int dom ( section >> 1 ) ;
+
+    // again we use a conditional to avoid lengthy calculations
+    // when there aren't any populated lanes for the given predicate
+
+    if ( dom == 0 )
+    {
+      if ( section == CM_RIGHT )
+      {
+        crd3[RIGHT] =     1.0f ;
+        crd3[DOWN] =      crd2[DOWN] ;
+        crd3[FORWARD] = - crd2[RIGHT] ;
+      }
+      else
+      {
+        crd3[RIGHT] =   - 1.0f ;
+        crd3[DOWN] =      crd2[DOWN] ;
+        crd3[FORWARD] =   crd2[RIGHT] ;
+      }
+    }
+    else if ( dom == 1 )
+    {
+      if ( section == CM_BOTTOM )
+      {
+        crd3[RIGHT] =   - crd2[RIGHT] ;
+        crd3[DOWN] =      1.0f ;
+        crd3[FORWARD] =   crd2[DOWN] ;
+      }
+      else
+      {
+        crd3[RIGHT] =   - crd2[RIGHT] ;
+        crd3[DOWN] =    - 1.0f ;
+        crd3[FORWARD] = - crd2[DOWN] ;
+      }
+    }
+    else
+    {
+      if ( section == CM_FRONT )
+      {
+        crd3[RIGHT]   =   crd2[RIGHT] ;
+        crd3[DOWN]    =   crd2[DOWN] ;
+        crd3[FORWARD] =   1.0f ;
+      }
+      else
+      {
+        crd3[RIGHT]   = - crd2[RIGHT] ;
+        crd3[DOWN]    =   crd2[DOWN] ;
+        crd3[FORWARD] = - 1.0f ;
+      }
+    }
+  }
+} ;
+
+// same for biatan6 - done by copy-and-paste. the only difference
+// to the class above is the in-plane transformation.
+
+template < typename T = float ,
+           std::size_t L = LANES ,
+           bool use_centered_coordinates = true >
+struct ba6_to_ray_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L >
+{
+  typedef zimt::unary_functor
+    < zimt::xel_t < T , 2 > , zimt::xel_t < T , 3 > , L > base_t ;
+
+  using typename base_t::in_type ;
+  using typename base_t::in_ele_v ;
+  using typename base_t::in_v ;
+
+  using typename base_t::out_type ;
+  using typename base_t::out_v ;
+
+  const double section_md ;
+  const double refc_md ;
+  const zimt::xel_t < T , 2 > ul2c ;
+
+  ba6_to_ray_t ( double _section_md = 2.0 , double _refc_md = 1.0 )
+  : section_md ( _section_md ) ,
+    refc_md ( _refc_md ) ,
+    ul2c { _refc_md , 3 * _section_md }
+  { }
+
+  // incoming, we have 2D model space coordinates.
+  // This functor takes centered planar cordinates - note the
+  // addition of ul2c at the beginning of the eval functions, which
+  // converts the coordinates from to center-based to ul-based for
+  // processing.
+
+  void eval ( const in_v & _crd2 , out_v & crd3 ) const
+  {
+    in_v crd2 ( _crd2 ) ;
+
+    if constexpr ( use_centered_coordinates )
+      crd2 += ul2c ;
+
+    // The numerical constants for the cube faces/sections are set
+    // up so that a simple division of the y coordinate yields the
+    // corresponding section index.
+
+    i_v section ( crd2[1] / section_md ) ;
+
+    // The incoming coordinates are relative to the upper left
+    // corner of the IR image. Now we move to in-face coordinates,
+    // which are centered on the cube face we're dealing with.
+
+    crd2[1] -= section * section_md ;
+    crd2    -= refc_md ;
+
+    // apply the in-plane biatan6 transformation
+
+    crd2 = tan ( crd2 * T ( M_PI / 4.0 ) ) ;
+
+    // the section number can also yield the 'dominant' axis
+    // by dividing the value by two (another property which is
+    // deliberate):
+
+    i_v dom ( section >> 1 ) ;
+
+    // again we use a conditional to avoid lengthy calculations
+    // when there aren't any populated lanes for the given predicate
+
+    if ( any_of ( dom == 0 ) )
+    {
+      auto m = ( section == CM_RIGHT ) ;
+      if ( any_of ( m ) )
+      {
+        crd3[RIGHT](m) =     1.0f ;
+        crd3[DOWN](m) =      crd2[DOWN] ;
+        crd3[FORWARD](m) = - crd2[RIGHT] ;
+      }
+      m = ( section == CM_LEFT ) ;
+      if ( any_of ( m ) )
+      {
+        crd3[RIGHT](m) =   - 1.0f ;
+        crd3[DOWN](m) =      crd2[DOWN] ;
+        crd3[FORWARD](m) =   crd2[RIGHT] ;
+      }
+    }
+    if ( any_of ( dom == 1 ) )
+    {
+      auto m = ( section == CM_BOTTOM ) ;
+      if ( any_of ( m ) )
+      {
+        crd3[RIGHT](m) =   - crd2[RIGHT] ;
+        crd3[DOWN](m) =      1.0f ;
+        crd3[FORWARD](m) =   crd2[DOWN] ;
+      }
+      m = ( section == CM_TOP ) ;
+      if ( any_of ( m ) )
+      {
+        crd3[RIGHT](m) =   - crd2[RIGHT] ;
+        crd3[DOWN](m) =    - 1.0f ;
+        crd3[FORWARD](m) = - crd2[DOWN] ;
+      }
+    }
+    if ( any_of ( dom == 2 ) )
+    {
+      auto m = ( section == CM_FRONT ) ;
+      if ( any_of ( m ) )
+      {
+        crd3[RIGHT](m)   =   crd2[RIGHT] ;
+        crd3[DOWN](m)    =   crd2[DOWN] ;
+        crd3[FORWARD](m) =   1.0f ;
+      }
+      m = ( section == CM_BACK ) ;
+      if ( any_of ( m ) )
+      {
+        crd3[RIGHT](m)   = - crd2[RIGHT] ;
+        crd3[DOWN](m)    =   crd2[DOWN] ;
+        crd3[FORWARD](m) = - 1.0f ;
+      }
+    }
+  }
+
+  // for completeness' sake, the scalar eval
+
+  void eval ( const in_type & _crd2 , out_type & crd3 ) const
+  {
+    in_type crd2 ( _crd2 ) ;
+
+    if constexpr ( use_centered_coordinates )
+      crd2 += ul2c ;
+
+    // The numerical constants for the cube faces/sections are set
+    // up so that a simple division of the y coordinate yields the
+    // corresponding section index.
+
+    int section ( crd2[1] / section_md ) ;
+
+    // The incoming coordinates are relative to the upper left
+    // corner of the IR image. Now we move to in-face coordinates,
+    // which are centered on the cube face we're dealing with.
+
+    crd2[1] -= section * section_md ;
+    crd2    -= refc_md ;
+
+    // apply the in-plane biatan6 transformation
+
+    crd2 = tan ( crd2 * T ( M_PI / 4.0 ) ) ;
 
     // the section number can also yield the 'dominant' axis
     // by dividing the value by two (another property which is
@@ -1266,6 +1471,86 @@ struct ray_to_ir_t
   }
 } ;
 
+template < typename T = float , std::size_t L = LANES ,
+           bool use_centered_coordinates = true >
+struct ray_to_ba6_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L >
+{
+  typedef zimt::unary_functor
+    < zimt::xel_t < T , 3 > , zimt::xel_t < T , 2 > , L > base_t ;
+
+  using typename base_t::in_type ;
+  using typename base_t::in_ele_v ;
+  using typename base_t::in_v ;
+
+  using typename base_t::out_type ;
+  using typename base_t::out_v ;
+
+  using typename base_t::ic_v ;
+
+  // to obtain IR coordinates, we need the width of a 'section'
+  // of the IR image in model space units and the distance to
+  // the center of the cube face images from the left/top margin:
+
+  const T section_md ;
+  const T refc_md ;
+  const zimt::xel_t < T , 2 > ul2c ;
+
+  ray_to_ba6_t ( const T & _section_md = 2.0 ,
+                 const T & _refc_md = 1.0 )
+  : section_md ( _section_md ) ,
+    refc_md ( _refc_md ) ,
+    ul2c { _refc_md , 3 * _section_md }
+  { }
+
+  void eval ( const in_type & c , out_type & ir_c ) const
+  {
+    // first, we glean the face indices and in-face coordinates
+
+    int face ;
+
+    ray_to_cubeface < T > ( c , face , ir_c ) ;
+
+    // perform the biatan6 in-plane transformation
+
+    ir_c = T( 4.0 / M_PI ) * atan ( ir_c ) ;
+
+    ir_c += refc_md ;
+
+    // for the vertical, we add the face index times the section
+    // size (in model space units)
+
+    ir_c[1] += face * section_md ;
+
+    if constexpr ( use_centered_coordinates )
+      ir_c -= ul2c ;
+  }
+
+  void eval ( const in_v & c , out_v & ir_c ) const
+  {
+    // first, we glean the face indices and in-face coordinates
+
+    ic_v face ;
+
+    ray_to_cubeface < T , L > ( c , face , ir_c ) ;
+
+    // perform the biatan6 in-plane transformation
+
+    ir_c = T ( 4.0 / M_PI ) * atan ( ir_c ) ;
+
+    ir_c += refc_md ;
+
+    // for the vertical, we add the face index times the section
+    // size (in model space units)
+
+    ir_c[1] += face * section_md ;
+
+    if constexpr ( use_centered_coordinates )
+      ir_c -= ul2c ;
+  }
+} ;
+
 // when doing geometrical transformations of images, the coordinate
 // transformations can often be expressed as the chaining of two
 // functors: one transforming the incoming coordinate to a 3D ray,
@@ -1403,6 +1688,89 @@ struct ray_to_ray
     tfv ( in , out ) ;
   }
 } ;
+
+// helper functions to obtain a functor for a plane-to-ray or
+// ray-to-plane transformation, given the projection of the
+// planar representation. The specific functor is 'grokked'
+// to return a uniform type. This is handy to quickly set up
+// 'transform stacks' in a type-safe manner - e.g. chaining
+// a planar stepper with a to_ray_t, then an operation in ray
+// space and finally a to_plane_t for a complete plane-to-plane
+// transformation. TODO: what about out-of-bounds access?
+
+typedef xel_t < float , 2 > crd2_t ;
+typedef xel_t < float , 3 > crd3_t ;
+
+typedef zimt::grok_type < crd2_t , crd3_t , LANES > to_ray_t ;
+typedef zimt::grok_type < crd3_t , crd2_t , LANES > to_plane_t ;
+
+to_plane_t roll_out_32 ( projection_t projection )
+{
+  to_plane_t result ;
+  switch ( projection )
+  {
+    case SPHERICAL:
+      result = ray_to_ll_t() ;
+      break ;
+    case CYLINDRICAL:
+      result = ray_to_cyl_t() ;
+      break ;
+    case RECTILINEAR:
+      result = ray_to_rect_t() ;
+      break ;
+    case FISHEYE:
+      result = ray_to_fish_t() ;
+      break ;
+    case STEREOGRAPHIC:
+      result = ray_to_ster_t() ;
+      break ;
+    case CUBEMAP:
+      result = ray_to_ir_t() ;
+      break ;
+    case BIATAN6:
+      result = ray_to_ba6_t() ;
+      break ;
+    default:
+      std::cerr << "unhandled projection # " << int(projection)
+                << std::endl ;
+      break ;
+  }
+  return result ;
+}
+
+to_ray_t roll_out_23 ( projection_t projection )
+{
+  to_ray_t result ;
+  switch ( projection )
+  {
+    case SPHERICAL:
+      result = ll_to_ray_t() ;
+      break ;
+    case CYLINDRICAL:
+      result = cyl_to_ray_t() ;
+      break ;
+    case RECTILINEAR:
+      result = rect_to_ray_t() ;
+      break ;
+    case FISHEYE:
+      result = fish_to_ray_t() ;
+      break ;
+    case STEREOGRAPHIC:
+      result = ster_to_ray_t() ;
+      break ;
+    case CUBEMAP:
+      result = ir_to_ray_t() ;
+      break ;
+    case BIATAN6:
+      result = ba6_to_ray_t() ;
+      break ;
+    default:
+      std::cerr << "unhandled projection # " << int(projection)
+                << std::endl ;
+      break ;
+  }
+  return result ;
+}
 
 END_ZIMT_SIMD_NAMESPACE
 HWY_AFTER_NAMESPACE() ;
