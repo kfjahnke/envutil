@@ -141,6 +141,7 @@ struct dispatch_base
 #include <chrono>
 #include "geometry.h"
 #include "stepper.h"
+#include "lens_correction.h"
 
 // to make highway's use of #pragma directives to the compiler
 // effective, we surround the SIMD-ISA-specific code with
@@ -978,6 +979,30 @@ int _payload ( int argc , char * argv[] )
     {
       auto d = abs ( a6 [ { x , y } ] - b6 [ { x , y } ] ) . sum() ;
       assert ( d < .0000000000001 ) ;
+    }
+  }
+
+  // simple test of class pto_planar TODO: elaborate
+
+  pto_planar < double , LANES , false >
+    pto_fwd ( .17 , .21 , -.13 , 1.5 , 0.03 , 0.07 , -0.04 , 0.01 ) ;
+
+  pto_planar < double , LANES , true >
+    pto_bkw ( .17 , .21 , -.13 , 1.5 , 0.03 , 0.07 , -0.04 , 0.01 ) ;
+
+  for ( double y = -1.0 ; y <= 1.01 ; y += .31 )
+  {
+    for ( double x = -1.0 ; x <= 1.05 ; x += .33 )
+    {
+      xel_t < double , 2 > initial { x , y } ;
+      xel_t < double , 2 > intermed ;
+      xel_t < double , 2 > recovered ;
+      pto_fwd.eval ( initial , intermed ) ;
+      pto_bkw.eval ( intermed , recovered ) ;
+      std::cout << initial << " -> " << intermed
+                << " -> " << recovered
+                << " delta " << recovered - initial
+                << std::endl ;
     }
   }
 

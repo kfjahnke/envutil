@@ -81,7 +81,7 @@ BEGIN_ZIMT_SIMD_NAMESPACE(project)
 
 template < typename value_type ,
            std::size_t DEGREE ,
-           std::size_t LANES >
+           std::size_t L >
 struct eu_polynomial
 {
   value_type coefficients [ DEGREE + 1 ] ;
@@ -149,10 +149,10 @@ struct eu_polynomial
       result = function ( current ) ;
       difference = desired_output - result ;
 
-      std::cout << "*** " << count
-                << " current: " << current
-                << " result " << result
-                << " difference " << difference << std::endl ;
+      // std::cout << "*** " << count
+      //           << " current: " << current
+      //           << " result " << result
+      //           << " difference " << difference << std::endl ;
 
       // we iterate until the difference does not change anymore. This
       // usually takes only a few iterations.
@@ -220,12 +220,12 @@ struct eu_polynomial
 // rather than to scale the radius, which would only be useful when
 // using polar coordinates.
 
-template < typename T , std::size_t LANES >
+template < typename T , std::size_t L >
 struct lcp
-: public zimt::unary_functor < T , T , LANES > ,
-  public eu_polynomial < T , 3 , LANES >
+: public zimt::unary_functor < T , T , L > ,
+  public eu_polynomial < T , 3 , L >
 {
-  typedef eu_polynomial < T , 3 , LANES > pl_t ;
+  typedef eu_polynomial < T , 3 , L > pl_t ;
 
   lcp ( T _a , T _b , T _c , T r_max )
   : pl_t ( { _a , _b , _c , T(1) - ( _a + _b + _c ) } )
@@ -285,9 +285,9 @@ struct lcp
 // and the division is no longer needed on the receiving end - the
 // 2D coordinate can simply be multiplied with the interpolated factor.
 
-template < typename T , std::size_t LANES >
+template < typename T , std::size_t L >
 struct inverse_lcp
-: public zimt::unary_functor < T , T , LANES >
+: public zimt::unary_functor < T , T , L >
 {
   // even though there are only three coefficients a, b, and c for
   // the lens correction polynomial, the function to yield an
@@ -314,7 +314,7 @@ struct inverse_lcp
 
   int nk ;
   zimt::bspline < T , 1 > inv_model ;
-  zimt::grok_type < T , T , LANES > fev ;
+  zimt::grok_type < T , T , L > fev ;
 
   // We use a cubic spline, which combines good precision and reasonable
   // processing times. I was unsure initially whether using only control
@@ -341,7 +341,7 @@ struct inverse_lcp
     inv_model ( sz + 4 , 3 , zimt::NATURAL ) ,
     r_max ( _r_max * ( ( sz + 3.0 ) / sz ) )
   {
-    eu_polynomial < double , 4 , LANES > p ( coefficients ) ;
+    eu_polynomial < double , 4 , L > p ( coefficients ) ;
     rr_max = p.function ( r_max ) ;
     nk = inv_model.core.shape[0] ; // == sz + 4
 
@@ -386,7 +386,7 @@ struct inverse_lcp
 
     inv_model.prefilter() ;
 
-    fev = zimt::make_safe_evaluator < decltype ( inv_model ) , T , LANES >
+    fev = zimt::make_safe_evaluator < decltype ( inv_model ) , T , L >
       ( inv_model ) ;
   }
 
@@ -410,6 +410,82 @@ struct inverse_lcp
     in *= ( nk - 1 ) ;       // move to spline coordinates
 
     fev.eval ( in , out ) ;  // evaluate the spline
+  }
+} ;
+
+// a class for the entire planar transformations occuring in PTO.
+// with 'invert' false, we have the 'normal' operation from target
+// to source coordinates. 'invert' true yields the inverse of that
+// transformation - it should be needed less frequently, e.g. for
+// the inspection of control points or creation of synthetic images
+// with the same geometrical flaws as given input facets from an
+// already-stitched panorama. Note the terminological ambiguity:
+// 'normal' operation is actually an inverse transformation - namely
+// from target to source coordinates. Here the template parameter
+// 'inverse' refers to the inverse of the 'normal' operation.
+
+template < typename T , std::size_t L , bool invert = false >
+struct pto_planar
+: public zimt::unary_functor < xel_t<T,2> , xel_t<T,2> , L >
+{
+  lcp < T , L > polynomial ;
+  inverse_lcp < T , L > inv_polynomial ;
+  const T h , v , g , t ;
+
+  pto_planar ( double _a , double _b , double _c , double r_max ,
+               double _d = 0.0 , double _e = 0.0 ,
+               double _g = 0.0 , double _t = 0.0 )
+  : polynomial ( _a , _b , _c , r_max ) ,
+    inv_polynomial ( _a , _b , _c , r_max , 57 ) ,
+    h ( _d ) ,
+    v ( _e ) ,
+    g ( _g ) ,
+    t ( _t )
+  { }
+
+  template < typename I , typename O >
+  void eval ( const I & _in , O & out )
+  {
+    if constexpr ( invert == false )
+    {
+      // the transformaion is from target image coordinates
+      // to source image coordinates - both in model space units.
+
+      T factor ;
+      polynomial.eval ( norm(_in) , factor ) ;
+      out = _in * factor ;
+      if ( h != 0.0 || v != 0.0 )
+      {
+        out[0] += h ;
+        out[1] += v ;
+      }
+      if ( g != 0.0 || t != 0.0 )
+      {
+        out = { out[0] + ( out[1] * g ) ,
+                out[1] + ( out[0] * t ) } ;
+      }
+    }
+    else
+    {
+      // the transformaion is from source image coordinates
+      // to target image coordinates - both in model space units.
+
+      out = _in ;
+      if ( g != 0.0 || t != 0.0 )
+      {
+        // I adapted this formula from panotools' math.c (see shearInv):
+        out[1]  = (_in[1] - t * _in[0]) / (1 - t * g);
+        out[0]  = (_in[0] - g * out[1]);
+      }
+      if ( h != 0.0 || v != 0.0 )
+      {
+        out[0] -= h ;
+        out[1] -= v ;
+      }
+      T factor ;
+      inv_polynomial.eval ( norm(out) , factor ) ;
+      out *= factor ;
+    }
   }
 } ;
 
