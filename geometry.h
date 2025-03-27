@@ -69,6 +69,43 @@ typedef zimt::xel_t < int , 2 > shape_type ;
 typedef zimt::xel_t < float , 2 > v2_t ;
 typedef zimt::xel_t < float , 3 > v3_t ;
 
+// our 'own brand' of rotation matrix
+
+template < typename T = double >
+using r3_t = zimt::xel_t < xel_t < T , 3 > , 3 > ;
+
+// rotate a 3D vector 'lhs' with the rotation matrix 'rhs'
+
+template < typename T = double >
+xel_t<T,3> rotate ( const xel_t<T,3> & lhs ,
+                    const r3_t<T> & rhs )
+{
+  return { lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2] } ;
+}
+
+// rotate a rotation matrix 'lhs' with the rotation matrix 'rhs'
+// this is a concatenation of the two rotations.
+
+template < typename T = double >
+r3_t<T> rotate ( const r3_t<T> & lhs , const r3_t<T> & rhs )
+{
+  return { rotate ( lhs[0] , rhs ) ,
+           rotate ( lhs[1] , rhs ) ,
+           rotate ( lhs[2] , rhs ) } ;
+}
+
+// transpose the rotation matrix. rotating with this matrix undoes
+// a previous rotation with r. Note that transposition swaps rows
+// and columns.
+
+template < typename T = float >
+r3_t<T> transpose ( const r3_t<T> & r )
+{
+  return { xel_t<T,3> ( { r[0][0] , r[1][0] , r[2][0] } ) ,
+           xel_t<T,3> ( { r[0][1] , r[1][1] , r[2][1] } ) ,
+           xel_t<T,3> ( { r[0][2] , r[1][2] , r[2][2] } ) } ;
+}
+
 // some SIMDized types we'll use. I use 16 SIMD lanes for now,
 // which is also the lane count currently supported by OIIO.
 
@@ -1771,6 +1808,105 @@ to_ray_t roll_out_23 ( projection_t projection )
   }
   return result ;
 }
+
+// ray-to-ray transformation moving from target image coordinates
+// to source image coordinates, and it's inverse. This is a two-step
+// rotation, first rotating to model space, then from model space
+// onwards. The idea is to be able to 'slot in' more code working
+// on the vector in model space - like a shift, or more rotations.
+// It doesn't have to be model space - some other intermediate will
+// work just as well - e.g. the orientation where the reprojection
+// plane of a facet with translation parameters is at (0,0,1). When
+// the CS is changed to that CS in a first step, the shift due to the
+// positioning of the virtual cameras can be applied, then the second
+// rotation moves on to source coordinates. And the inversion simply
+// proceeds through the series backwards, using the transposed
+// rotations, and the shift with inverted sign.
+
+template < typename T , std::size_t L , bool invert = false >
+struct tf3d_t
+: public zimt::unary_functor < xel_t<T,3> , xel_t<T,3> , L >
+{
+  const r3_t<T> trg_to_md ;
+  const r3_t<T> md_to_trg ;
+  const r3_t<T> md_to_src ;
+  const r3_t<T> src_to_md ;
+  const r3_t<T> trg_to_src ;
+  const r3_t<T> src_to_trg ;
+  const xel_t<T,3> shift ;
+  bool has_shift ;
+
+  // the standard c'tor takes the two rotations and an optional shift.
+
+  tf3d_t ( const r3_t<T> & _trg_to_md ,
+           const r3_t<T> & _md_to_src ,
+           const xel_t<T,3> & _shift = xel_t<T,3> ( 0 ) )
+  : trg_to_md ( _trg_to_md ) ,
+    md_to_trg ( transpose ( _trg_to_md ) ) ,
+    md_to_src ( _md_to_src ) ,
+    src_to_md ( transpose ( _md_to_src ) ) ,
+    trg_to_src ( rotate ( _trg_to_md , _md_to_src ) ) ,
+    src_to_trg ( transpose ( rotate ( _trg_to_md , _md_to_src ) ) ) ,
+    shift ( _shift ) ,
+    has_shift ( _shift != 0 )
+  { }
+
+  // this c'tor is for convenience. the first two rotations are to
+  // model space and onwards, the third is the rotation from model
+  // space to the reprojection plane. Here, passing the shift is
+  // mandatory - it would be pointless without.
+
+  tf3d_t ( const r3_t<T> & _trg_to_md ,
+           const r3_t<T> & _md_to_src ,
+           const r3_t<T> & _md_to_tp ,
+           const xel_t<T,3> & _shift )
+  : tf3d_t ( rotate ( _trg_to_md , _md_to_tp ) ,
+             rotate ( transpose ( _md_to_tp ) , _md_to_src ) ,
+             shift )
+  { }
+
+  template < typename I , typename O >
+  void eval ( const I & in , O & out )
+  {
+    if constexpr ( invert == false )
+    {
+      // the transformation is from target image coordinates
+      // to source image coordinates - both in model space units.
+      // the first case uses two separate rotations and 'slots in'
+      // a shift. the second case does it in one go, which is faster.
+
+      if ( has_shift )
+      {
+        out = rotate ( in , trg_to_md ) ;
+        out += shift ;
+        out = rotate ( out , md_to_src ) ;
+      }
+      else
+      {
+        out = rotate ( in , trg_to_src ) ;
+      }
+    }
+    else
+    {
+      // the transformation is from source image coordinates
+      // to target image coordinates - both in model space units.
+      // the first case uses two separate rotations and 'slots in'
+      // a shift. the second case does it in one go, which is faster.
+      // note the inverted sign of the shift application.
+
+      if ( has_shift )
+      {
+        out = rotate ( in , src_to_md ) ;
+        out -= shift ;
+        out = rotate ( out , md_to_trg ) ;
+      }
+      else
+      {
+        out = rotate ( in , src_to_trg ) ;
+      }
+    }
+  }
+} ;
 
 END_ZIMT_SIMD_NAMESPACE
 HWY_AFTER_NAMESPACE() ;

@@ -210,7 +210,7 @@ struct rotate_3d
     }
   }
 
-  // for the actual rotation (the 'multiplication' with teh rotational
+  // for the actual rotation (the 'multiplication' with the rotational
   // quaternion), we don't use Imath code. See comments in 'eval'.
 
   // calculate the cross product of two vectors
@@ -990,6 +990,33 @@ int _payload ( int argc , char * argv[] )
   pto_planar < double , LANES , true >
     pto_bkw ( .17 , .21 , -.13 , 1.5 , 0.03 , 0.07 , -0.04 , 0.01 ) ;
 
+  // let's set up two sample quaternion rotations
+
+  rotate_3d < double , LANES > r1 ( .1 , .2 , .3 ) ;
+  rotate_3d < double , LANES > r2 ( -.2 , .1 , .15 ) ;
+  rotate_3d < double , LANES > rp ( -.02 , .17 , -.15 ) ;
+
+  // set of three orthonormal 3D unit vectors
+
+  r3_t<double> e3 { xel_t<double,3> ( { 1.0 , 0.0 , 0.0 } ) ,
+                    xel_t<double,3> ( { 0.0 , 1.0 , 0.0 } ) ,
+                    xel_t<double,3> ( { 0.0 , 0.0 , 1.0 } ) } ;
+
+  // create two rotation matrices by applying the quaternions
+  // to the unit vectors
+
+  r3_t e1a { r1 ( e3[0] ) , r1 ( e3[1] ) , r1 ( e3[2] ) } ;
+  r3_t e1b { r2 ( e3[0] ) , r2 ( e3[1] ) , r2 ( e3[2] ) } ;
+  r3_t e1c { rp ( e3[0] ) , rp ( e3[1] ) , rp ( e3[2] ) } ;
+
+  // set up tf3d_t transformations implementing a concatenation
+  // of these two rotations - and their inversion
+
+  xel_t<double,3> shift { .22 , .11 , .33 } ;
+
+  tf3d_t < double , LANES , false > tf3d ( e1a , e1b , e1c , shift ) ;
+  tf3d_t < double , LANES , true > tf3di ( e1a , e1b , e1c , shift ) ;
+
   for ( double y = -1.0 ; y <= 1.01 ; y += .31 )
   {
     for ( double x = -1.0 ; x <= 1.05 ; x += .33 )
@@ -999,10 +1026,22 @@ int _payload ( int argc , char * argv[] )
       xel_t < double , 2 > recovered ;
       pto_fwd.eval ( initial , intermed ) ;
       pto_bkw.eval ( intermed , recovered ) ;
-      std::cout << initial << " -> " << intermed
-                << " -> " << recovered
-                << " delta " << recovered - initial
-                << std::endl ;
+      // std::cout << initial << " -> " << intermed
+      //           << " -> " << recovered
+      //           << " delta " << recovered - initial
+                // << std::endl ;
+      assert ( abs ( recovered - initial ) . sum() < 1e-6 ) ;
+      for ( double z = -1.0 ; z <= 1.05 ; z += .33 )
+      {
+        // test the tf3d_t objects with a few 3D vectors
+        xel_t<double,3> crd3 { x , y , z } ;
+        xel_t<double,3> result , result2 ;
+        tf3d.eval ( crd3 , result ) ;
+        tf3di.eval ( result , result2 ) ;
+        // std::cout << crd3 << " -> " << result
+        //           << " -> " << result2 << std::endl ;
+        assert ( abs ( result2 - crd3 ) . sum() < 1e-7 ) ;
+      }
     }
   }
 

@@ -448,7 +448,7 @@ struct pto_planar
   {
     if constexpr ( invert == false )
     {
-      // the transformaion is from target image coordinates
+      // the transformation is from target image coordinates
       // to source image coordinates - both in model space units.
 
       T factor ;
@@ -467,7 +467,7 @@ struct pto_planar
     }
     else
     {
-      // the transformaion is from source image coordinates
+      // the transformation is from source image coordinates
       // to target image coordinates - both in model space units.
 
       out = _in ;
