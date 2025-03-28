@@ -109,8 +109,7 @@ struct source_t
   {
     if ( masked == -1 )
     {
-      bsp_ev = zimt::make_safe_evaluator
-                      < spl_t , float , L > ( *p_bspl ) ;
+      bsp_ev = make_safe_evaluator < spl_t , float , L > ( *p_bspl ) ;
     }
     else if ( nchannels == 1 || nchannels == 3 )
     {
@@ -843,7 +842,7 @@ struct cubemap_view_t
     else
     {
       // std::cout << "making an evaluator from " << p_bsp << std::endl ;
-      ev = make_safe_evaluator ( * p_bsp ) ;
+      ev = make_safe_evaluator < spl_t , float , LANES > ( * p_bsp ) ;
     }
   }
 
@@ -1232,116 +1231,45 @@ struct _environment
               std::cout << "elliptic crop" << std::endl ;
               float mx = ( fct.crop_x0 + fct.crop_x1 ) / 2.0 ;
               float my = ( fct.crop_y0 + fct.crop_y1 ) / 2.0 ;
-
-              // with the four limits given, we can create an elliptic
-              // crop with the vertical extent y1-y0 and the horizontal
-              // extent x1-x0.
-              // TODO: we might fade the ellipse out by assigning semi
-              // transparent alpha to points near the margin.
-
-              // if ( source.crop_fade > 0.0 )
-              // {
-              //   auto ts = 1.0 / std::min ( a , b ) ;
-              //   auto ri = 1.0 - source.crop_fade * ts ;
-              //   auto ro = 1.0 ;
-              // 
-              //   for ( int y = 0 ; y < masking.shape(1) ; y++ )
-              //   {
-              //     auto dy = fabs ( y - my ) ;
-              // 
-              //     for ( int x = 0 ; x < masking.shape(0) ; x++ )  
-              //     {
-              //       auto dx = fabs ( x - mx ) ;
-              // 
-              //       auto r = ( dx * dx ) / ( a * a ) + ( dy * dy ) / ( b * b ) ;
-              //       if ( r > ro )
-              //         masking [ { x , y } ] = 0 ;
-              //       else if ( r > ri )
-              //       {
-              //         auto xs = 1.0 - ( r - ri ) / ( source.crop_fade * ts ) ;
-              //         masking [ { x , y } ] *= xs ;
-              //       }
-              //     }
-              //   }
-              // }
-              // else
+              for ( int y = 0 ; y < h ; y++ )
               {
-                for ( int y = 0 ; y < h ; y++ )
+                auto dy = fabs ( y - my ) ;
+                // if the y coordinate is outside the ellipse, mask out
+                // the entire line
+                if ( dy > b )
                 {
-                  auto dy = fabs ( y - my ) ;
-                  // if the y coordinate is outside the ellipse, mask out
-                  // the entire line
-                  if ( dy > b )
+                  for ( int x = 0 ; x < w ; x++ )  
                   {
-                    for ( int x = 0 ; x < w ; x++ )  
-                    {
-                      alpha [ { x , y } ] = 0 ;
-                    }
-                    continue ;
+                    alpha [ { x , y } ] = 0 ;
                   }
-                  // else, find the half width of the ellipse at given y and
-                  // mask out points with x outside
-                  // for the ellipse, we have x*x / a*a + y*y / b*b = 1, hence
+                  continue ;
+                }
+                // else, find the half width of the ellipse at given y and
+                // mask out points with x outside
+                // for the ellipse, we have x*x / a*a + y*y / b*b = 1, hence
 
-                  float xmargin = sqrt ( ( a * a ) * ( 1.0 - ( dy * dy ) / ( b * b ) ) ) ;
-                  for ( int x = 0 ; x < w ; x++ )
-            
-                  {
-                    auto dx = fabs ( x - mx ) ;
-                    if ( dx > xmargin )
-                      alpha [ { x , y } ] = 0 ;
-                  }
+                float xmargin = sqrt ( ( a * a ) * ( 1.0 - ( dy * dy ) / ( b * b ) ) ) ;
+                for ( int x = 0 ; x < w ; x++ )
+          
+                {
+                  auto dx = fabs ( x - mx ) ;
+                  if ( dx > xmargin )
+                    alpha [ { x , y } ] = 0 ;
                 }
               }
             }
             else
             {
               std::cout << "rectangular crop" << std::endl ;
-              // if ( source.crop_fade > 0.0 )
-              // {
-              //   for ( int y = 0 ; y < masking.shape(1) ; y++ )
-              //   {
-              //     for ( int x = 0 ; x < masking.shape(0) ; x++ )  
-              //     {
-              //       if (   ( x < source.crop_x0 )
-              //           || ( x >= source.crop_x1 )
-              //           || ( y < source.crop_y0 )
-              //           || ( y >= source.crop_y1 ) )
-              //         masking [ { x , y } ] = 0 ;
-              //       else if (    ( x >= source.crop_x0 + source.crop_fade )
-              //                 && ( x <= source.crop_x1 - source.crop_fade )
-              //                 && ( y >= source.crop_y0 + source.crop_fade )
-              //                 && ( y <= source.crop_y1 - source.crop_fade ) )
-              //         continue ;
-              //       float alpha = 1.0 ;
-              //       auto dx = x - source.crop_x0 ;
-              //       if ( dx < source.crop_fade )
-              //         alpha = std::min ( alpha , dx / source.crop_fade ) ;
-              //       dx = source.crop_x1 - x ;
-              //       if ( dx < source.crop_fade )
-              //         alpha = std::min ( alpha , dx / source.crop_fade ) ;
-              //       auto dy = y - source.crop_y0 ;
-              //       if ( dy < source.crop_fade )
-              //         alpha = std::min ( alpha , dy / source.crop_fade ) ;
-              //       dy = source.crop_y1 - y ;
-              //       if ( dy < source.crop_fade )
-              //         alpha = std::min ( alpha , dy / source.crop_fade ) ;
-              //       masking [ { x , y } ] *= alpha ;
-              //     }
-              //   }
-              // }
-              // else
+              for ( int y = 0 ; y < h ; y++ )
               {
-                for ( int y = 0 ; y < h ; y++ )
+                for ( int x = 0 ; x < w ; x++ )
                 {
-                  for ( int x = 0 ; x < w ; x++ )
-                  {
-                    if (    ( x < fct.crop_x0 )
-                        || ( x >= fct.crop_x1 )
-                        || ( y < fct.crop_y0 )
-                        || ( y >= fct.crop_y1 ) )
-                      alpha [ { x , y } ] = 0 ;
-                  }
+                  if (   ( x < fct.crop_x0 )
+                      || ( x >= fct.crop_x1 )
+                      || ( y < fct.crop_y0 )
+                      || ( y >= fct.crop_y1 ) )
+                    alpha [ { x , y } ] = 0 ;
                 }
               }
             }

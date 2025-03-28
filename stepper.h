@@ -252,7 +252,7 @@ struct stepper_base
   // is half a sampling step further out than the marginal pixels,
   // and the center of even-shaped images is at a half unit as well.
 
-  const T fx0 , fx1 , fy0 , fy1 ;
+  const T fx0 , fx1 , fy0 , fy1 , bias_x , bias_y ;
 
   // this is a SIMD constant holding values 0, 2, 4, ...
   // so, twice what the ordinary 'iota' would provide, hence the name.
@@ -274,15 +274,34 @@ struct stepper_base
   // horizontal, then in vertical direction. Note that we use
   // edge-to-edge semantics to place the planar coordinates
   // inside the extent.
+  // Note the two recently added parameters '_bias_x' and '_bias_y':
+  // These are used for twining. They are small offsets in the
+  // horizontal/vertical which are added to the planar coordinate
+  // to produce slightly offsetted rays. In the first implementation
+  // I used an offset of one 'canonical' step, but this can 'land'
+  // the planar coordinate in the domain of another pixel, which,
+  // for some steppers, may correspond with a completely different
+  // ray. The bias values I use now are chosen to keep the offsetted
+  // steppers in the same pixel's domain (so the step is not 1, but
+  // the bias value instead, which is chosen smaller than .5 - I
+  // use .25. When the resulting rays are used to form the derivatives,
+  // The 'raw' value obtained from differencing needs to be pulled up
+  // to correspond with a canonical step, so after the differencing,
+  // the reciprocal of the bias used here is applied. Note that this
+  // does not produce additional computations on this side apart from
+  // in the initialization of the planar coordinate in 'init'.
 
   stepper_base ( int _width , int _height ,
-                 T _a0 , T _a1 , T _b0 , T _b1 )
+                 T _a0 , T _a1 , T _b0 , T _b1 ,
+                 T _bias_x = 0 , T _bias_y = 0 )
   : width ( _width ) ,
     height ( _height) ,
     fx1 ( _a1 / ( 2.0 * _width ) ) ,
     fx0 ( _a0 / ( 2.0 * _width ) ) ,
     fy1 ( _b1 / ( 2.0 * _height ) ) ,
     fy0 ( _b0 / ( 2.0 * _height ) ) ,
+    bias_x ( _bias_x * ( _a1 - _a0 ) / T ( _width ) ) ,
+    bias_y ( _bias_y * ( _b1 - _b0 ) / T ( _height ) ) ,
     delta ( L * ( _a1 - _a0 ) / T ( _width ) ) ,
     iota2 ( 2 * crd_ele_v::iota() )
   { }
@@ -306,11 +325,11 @@ struct stepper_base
   {
     auto ll0 = iota2 + T ( crd[0] * 2 + 1 ) ;
 
-    planar[0] = ll0 * fx1 + ( T ( 2 * width ) - ll0 ) * fx0 ;
+    planar[0] = bias_x + ll0 * fx1 + ( T ( 2 * width ) - ll0 ) * fx0 ;
 
     auto ll1 = crd[1] * 2 + 1 ;
 
-    planar[1] = ll1 * fy1 + T ( 2 * height - ll1 ) * fy0 ;
+    planar[1] = bias_y + ll1 * fy1 + T ( 2 * height - ll1 ) * fy0 ;
   }
 
   // increase modifies it's argument to contain the next value
@@ -425,15 +444,18 @@ public:
   spherical_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
                       int _width ,
                       int _height ,
-                      T _a0 = - M_PI ,
-                      T _a1 = M_PI ,
-                      T _b0 = - M_PI_2 ,
-                      T _b1 = M_PI_2 ,
-                      int _dy = 0 )
+                      T _a0 ,
+                      T _a1 ,
+                      T _b0 ,
+                      T _b1 ,
+                      T _bias_x = 0 ,
+                      T _bias_y = 0
+                     )
   : xx ( _xx ) ,
     yy ( _yy ) ,
     zz ( _zz ) ,
-    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 )
+    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+             _bias_x , _bias_y )
   { }
 
   // init is used to initialize the vectorized value to the value
@@ -580,12 +602,15 @@ public:
                         T _a1 ,
                         T _b0 ,
                         T _b1 ,
-                        int _dy = 0 
+                        T _bias_x = 0 ,
+                        T _bias_y = 0
                        )
   : xx ( _xx ) ,
     yy ( _yy ) ,
     zz ( _zz ) ,
-    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 )
+    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+             _bias_x , _bias_y )
+
   { }
 
   // init is used to initialize the vectorized value to the value
@@ -713,12 +738,14 @@ public:
                         T _a1 ,
                         T _b0 ,
                         T _b1 ,
-                        int _dy = 0 
+                        T _bias_x = 0 ,
+                        T _bias_y = 0 
                        )
   : xx ( _xx ) ,
     yy ( _yy ) ,
     zz ( _zz ) ,
-    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 )
+    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+             _bias_x , _bias_y )
   { }
 
   // init is used to initialize the vectorized value to the value
@@ -836,12 +863,14 @@ struct fisheye_stepper
                     T _a1 ,
                     T _b0 ,
                     T _b1 ,
-                    int _dy = 0 
+                    T _bias_x = 0 ,
+                    T _bias_y = 0 
                   )
   : xx ( _xx ) ,
     yy ( _yy ) ,
     zz ( _zz ) ,
-    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 )
+    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+             _bias_x , _bias_y )
   { }
 
   // for fisheye images, we can't use any handy invariants - each
@@ -961,12 +990,14 @@ struct stereographic_stepper
                     T _a1 ,
                     T _b0 ,
                     T _b1 ,
-                    int _dy = 0 
+                    T _bias_x = 0 ,
+                    T _bias_y = 0 
                   )
   : xx ( _xx ) ,
     yy ( _yy ) ,
     zz ( _zz ) ,
-    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 )
+    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+             _bias_x , _bias_y )
   { }
 
   // for stereographic images, we can't use any handy invariants
@@ -1068,7 +1099,6 @@ struct cubemap_stepper
   const crd3_t xx ; 
   const crd3_t yy ;
   const crd3_t zz ;
-  const int dy ;
   int face ;
 
   // some helper variables, used for efficiency.
@@ -1085,15 +1115,16 @@ public:
                     T _a1 ,
                     T _b0 ,
                     T _b1 ,
-                    int _dy = 0
+                    T _bias_x = 0 ,
+                    T _bias_y = 0
                   )
   : xx ( _xx ) ,
     yy ( _yy ) ,
     zz ( _zz ) ,
-    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ) ,
+    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+             _bias_x , _bias_y ) ,
     section_md ( _a1 - _a0 ) ,
-    refc_md ( ( _a1 - _a0 ) / 2.0 ) ,
-    dy ( _dy )
+    refc_md ( ( _a1 - _a0 ) / 2.0 )
   { }
 
   // init is used to initialize the vectorized value to the value
@@ -1107,18 +1138,6 @@ public:
 
     init ( crd ) ;
 
-    // when using derivative_stepper, two additional steppers are
-    // employed: one where the coordinate is shifted by one to the
-    // right and one where it's shifted by one downwards. In the
-    // cubemap stepper, this would result in the latter value being
-    // calculated with a different face index if
-    // crd[1] % ( width - 1 ) is zero. The 'dy' term is to counteract
-    // this problem. It's passed to the c'tor and the face index is
-    // calculated with the correct crd[1].
-
-    face = ( crd[1] + dy ) / width ;
-    assert ( face >= 0 && face <= 5 ) ;
-
     // when traversing a line of a cubemap image, the cube face
     // remains the same. The variation is along the planar
     // horizontal, which, for the given cube face, is collinear
@@ -1127,6 +1146,8 @@ public:
     // Here we get maximal benefits from the invariants: once set
     // up, the code to produce the rays is as simple as for the
     // rectilinear case. The set-up is quite complex, though.
+
+    face = crd[1] / width ;
 
     // find p1, the in-face coordinate derived from the planar
     // y coordinate in planar[1]
@@ -1253,7 +1274,6 @@ struct biatan6_stepper
   const crd3_t xx ; 
   const crd3_t yy ;
   const crd3_t zz ;
-  const int dy ;
   int face ;
 
   // some helper variables, used for efficiency.
@@ -1270,15 +1290,16 @@ public:
                        T _a1 ,
                        T _b0 ,
                        T _b1 ,
-                       int _dy = 0
+                       T _bias_x = 0 ,
+                       T _bias_y = 0
                      )
   : xx ( _xx ) ,
     yy ( _yy ) ,
     zz ( _zz ) ,
-    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ) ,
+    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+             _bias_x , _bias_y ) ,
     section_md ( _a1 - _a0 ) ,
-    refc_md ( ( _a1 - _a0 ) / 2.0 ) ,
-    dy ( _dy )
+    refc_md ( ( _a1 - _a0 ) / 2.0 )
   { }
 
   // init is used to initialize the vectorized value to the value
@@ -1292,18 +1313,6 @@ public:
 
     init ( crd ) ;
 
-    // when using derivative_stepper, two additional steppers are
-    // employed: one where the coordinate is shifted by one to the
-    // right and one where it's shifted by one downwards. In the
-    // cubemap stepper, this would result in the latter value being
-    // calculated with a different face index if
-    // crd[1] % ( width - 1 ) is zero. The 'dy' term is to counteract
-    // this problem. It's passed to the c'tor and the face index is
-    // calculated with the correct crd[1].
-
-    face = ( crd[1] + dy ) / width ;
-    assert ( face >= 0 && face <= 5 ) ;
-
     // when traversing a line of a cubemap image, the cube face
     // remains the same. The variation is along the planar
     // horizontal, which, for the given cube face, is collinear
@@ -1312,6 +1321,8 @@ public:
     // Here we get maximal benefits from the invariants: once set
     // up, the code to produce the rays is as simple as for the
     // rectilinear case. The set-up is quite complex, though.
+
+    face = crd[1] / width ;
 
     // find p1, the in-face coordinate derived from the planar
     // y coordinate in planar[1]
@@ -1429,15 +1440,10 @@ public:
 
 // variant of stepper which yields the ray coordinate for
 // the pick-up location itself and two more locations, which
-// are one canonical step in x- or y-direction away. The caller
-// can use these additional rays to figure out the derivatives
-// which are needed for OIIO's 'environment' or 'texture'
-// functions. 'environment' actually needs the difference of
-// the rays, but 'texture' needs the difference between the
-// 2D texture coordinates used for pick-up, so we can't do the
-// differencing here and simply pass the rays as they are,
-// as a 'ninepack'. envutil uses the same format of 'ninepack'
-// to implement it's 'twining' interpolation.
+// are one 'bias' step in x- or y-direction away. The caller
+// can use these additional rays to approximate the derivatives,
+// which is needed for 'twining'. The default for 'bias' is
+// .25 - it should be less than .5
 
 template < typename T ,     // fundamental type
            std::size_t L ,  // lane count
@@ -1459,8 +1465,8 @@ struct deriv_stepper
   typedef typename crd_v::value_type crd_ele_v ;
 
   S < T , L , normalize > r00 ; // yields current ray coordinate
-  S < T , L , normalize > r10 ; // yields ray coordinates with x += 1
-  S < T , L , normalize > r01 ; // yields ray coordinates with y -= 1
+  S < T , L , normalize > r10 ; // ray coordinate with x += bias
+  S < T , L , normalize > r01 ; // ray coordinate with y += bias
 
   deriv_stepper ( crd3_t _xx , crd3_t _yy , crd3_t _zz ,
                   int _width ,
@@ -1468,40 +1474,15 @@ struct deriv_stepper
                   T _a0 ,
                   T _a1 ,
                   T _b0 ,
-                  T _b1
+                  T _b1 ,
+                  T bias = .25
                 )
   : r00 ( _xx , _yy , _zz , _width , _height ,
-          _a0 , _a1 , _b0 , _b1 ) ,
+          _a0 , _a1 , _b0 , _b1 , 0 , 0 ) ,
     r10 ( _xx , _yy , _zz , _width , _height ,
-          _a0 , _a1 , _b0 , _b1 ) ,
-
-    // note that we pass a delta of -1. This is needed for the cubemap
-    // stepper only and has no effect for other steppers, the parameter
-    // is in all stepper signatures to make them compatible. The delta
-    // gives the stepper a way to figure out that it's calculating
-    // rays for coordinates which were offsetted by one canonical step
-    // in the vertical, which is essential for the correct function of
-    // the cubemap stepper (to use the same face index for the offsetted
-    // calculation). Other steppers which derive subimages from the
-    // coordinate would follow this pattern (e.g. dual fisheye images
-    // stacked vertically)
-    // A note: in the code using deriv_stepper, we'll produce the
-    // derivatives by simple differencing: we subtract the first set
-    // of three values from the second and third. What this really
-    // represents is a small rotation. When I use the derivatives
-    // for 'twining', I 'misuse' them to form linear combinations
-    // of the two vectors (with weights taken from the 'spread') to
-    // produce the separate pick-up rays. This is not entirely correct:
-    // The two vectors for this production should be orthogonal to the
-    // 'central' pick-up ray, but they aren't. Since the difference is
-    // typically very small because the three vectors are very close
-    // (we're talking sub-pixel OOMs) the difference is minimal, but
-    // an entirely correct calculation would eliminate the small
-    // error by projecting the two offsetted rays to the tangent plane
-    // of the first vector.
-
+          _a0 , _a1 , _b0 , _b1 , bias , 0 ) ,
     r01 ( _xx , _yy , _zz , _width , _height ,
-          _a0 , _a1 , _b0 , _b1 , -1 )
+          _a0 , _a1 , _b0 , _b1 , 0 , bias )
     { }
 
   void init ( crd9_v & trg , const crd_t & crd )
@@ -1509,11 +1490,12 @@ struct deriv_stepper
     crd3_v trg00 , trg10 , trg01 ;
 
     // we initialize the three sub-steppers to the current discrete
-    // coordinate and to it's right and lower neighbour:
+    // coordinate. Note that r10 and r01 have been set up with bias
+    // values to produce slightly offsetted planar coordinates.
 
     r00.init ( trg00 , crd ) ;
-    r10.init ( trg10 , { crd[0] + 1 , crd[1] } ) ;
-    r01.init ( trg01 , { crd[0] , crd[1] + 1 } ) ;
+    r10.init ( trg10 , crd ) ;
+    r01.init ( trg01 , crd ) ;
 
     // now we move the resulting rays to the 'ninepack':
 
@@ -1604,8 +1586,11 @@ struct planar_stepper
                    T _a0 ,
                    T _a1 ,
                    T _b0 ,
-                   T _b1 )
-  : base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 )
+                   T _b1 ,
+                   T _bias_x = 0 ,
+                   T _bias_y = 0 )
+  : base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+             _bias_x , _bias_y )
   { }
 
   void init ( crd2_v & trg , const crd_t & crd )

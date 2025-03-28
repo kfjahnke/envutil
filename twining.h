@@ -256,15 +256,36 @@ struct twine_t
                           > act_t ;
 
   act_t inner ;
-  const std::vector < zimt::xel_t < float , 3 > > spread ;
+  std::vector < zimt::xel_t < float , 3 > > spread ;
 
   using typename base_t::in_ele_v ;
 
+  // new addition: the 'bias' value is a factor which is applied to
+  // the 'derivative' values dx and dy once they have been gleaned
+  // from the ninepack. The ninepack can be calculated with a
+  // distance between the central pickup point and it's neighbours
+  // which is proportionally smaller. This is desirable to keep all
+  // three sub-pickups confined to the area of a single pixel, to
+  // avoid effects due to large ray differences occuring where
+  // neighbouring pixels don't correspond to 'neighbouring' rays,
+  // e.g. when processing cubemap IR images.
+
   twine_t ( const act_t & _inner ,
-            const std::vector < zimt::xel_t < float , 3 > > & _spread )
+            const std::vector < zimt::xel_t < float , 3 > > & _spread ,
+            const float & bias = 4.0 )
   : inner ( _inner ) ,
     spread ( _spread )
-  { }
+  {
+    // we apply the 'bias' value to the twining coefficients, to avoid
+    // the multiplication with the dx/dy value which would be needed
+    // otherwise.
+
+    for ( auto & cf : spread )
+    {
+      cf[0] *= bias ;
+      cf[1] *= bias ;
+    }
+  }
 
   // eval function. incoming, we have 'ninepacks' with the ray data.
   // we form the two differences and evaluate 'inner' in a loop,

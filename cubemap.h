@@ -724,8 +724,9 @@ private:
     : sf ( _cubemap ) ,
       face ( _face ) ,
       ithird ( _cubemap.model_to_px * 2 ) ,
-      ev ( make_safe_evaluator ( * _cubemap.p_bsp , 0 ,
-                                 1 - _cubemap.p_bsp->spline_degree ) )
+      ev ( make_safe_evaluator  < spl_t , float , LANES >
+            ( * _cubemap.p_bsp , 0 , 1 - _cubemap.p_bsp->spline_degree )
+         )
     { }
 
     void eval ( const v2i_v & crd2 , px_v & px ) // const

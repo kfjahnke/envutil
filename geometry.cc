@@ -467,8 +467,8 @@ int _payload ( int argc , char * argv[] )
     sphs ( { 1.0 , 0.0 , 0.0 } ,
            { 0.0 , 1.0 , 0.0 } ,
            { 0.0 , 0.0 , 1.0 } ,
-           1000 ,
-           500 ) ;
+           1000 , 500 ,
+           -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
 
   // use a zimt::process run to fill the first target array with
   // output from the stepper. We use a pass_through act functor
@@ -556,7 +556,8 @@ int _payload ( int argc , char * argv[] )
   r3.eval ( ez , ez ) ;
 
   spherical_stepper < double , LANES >
-    rsphs ( ex , ey , ez , 1000 , 500 ) ;
+    rsphs ( ex , ey , ez , 1000 , 500 ,
+            -M_PI , M_PI , -M_PI_2 , M_PI_2 ) ;
 
   // use a zimt::process run to fill the first target array with
   // output from the rotated stepper. We time this and the subsequent

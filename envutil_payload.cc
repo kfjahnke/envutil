@@ -373,12 +373,30 @@ struct voronoi_syn
   
   std::vector < ray_v > scratch ;
 
+  // we hold a copy of the spread here, which is modified in the c'tor
+  // to incorporate the 'bias' values.
 
-  voronoi_syn ( std::vector < ENV > & _env_v )
+  std::vector < zimt::xel_t < float , 3 > > spread ;
+
+  voronoi_syn ( std::vector < ENV > & _env_v ,
+                float bias = 4.0 )
   : env_v ( _env_v ) ,
     sz ( _env_v.size() ) ,
-    scratch ( _env_v.size() )
-  { }
+    scratch ( _env_v.size() ) ,
+    spread ( args.twine_spread )
+  {
+    // we apply the 'bias' value to the twining coefficients, to avoid
+    // the multiplication with the dx/dy value which would be needed
+    // otherwise. This 'bias' is the reciprocal value of the 'bias_x'
+    // and 'bias_y' values used in steppers to form slightly
+    // offsetted planar coordinates for twining.
+
+    for ( auto & cf : spread )
+    {
+      cf[0] *= bias ;
+      cf[1] *= bias ;
+    }
+  }
 
   // general calculation of the angles between rays:
   //
@@ -590,7 +608,7 @@ struct voronoi_syn
 
     // for each coefficient in the twining 'spread'
 
-    for ( const auto & cf : args.twine_spread )
+    for ( const auto & cf : spread )
     {
       for ( std::size_t facet = 0 ; facet < sz ; facet++ )
       {
@@ -638,12 +656,27 @@ struct voronoi_syn_plus
 
   std::vector < ENV > & env_v ;
   std::vector < ray_v > scratch ;
+  std::vector < zimt::xel_t < float , 3 > > spread ;
 
-  voronoi_syn_plus ( std::vector < ENV > & _env_v )
+  voronoi_syn_plus ( std::vector < ENV > & _env_v ,
+                     float bias = 4.0 )
   : env_v ( _env_v ) ,
     sz ( _env_v.size() ) ,
-    scratch ( _env_v.size() )
-  { }
+    scratch ( _env_v.size() ) ,
+    spread ( args.twine_spread )
+  {
+    // we apply the 'bias' value to the twining coefficients, to avoid
+    // the multiplication with the dx/dy value which would be needed
+    // otherwise. This 'bias' is the reciprocal value of the 'bias_x'
+    // and 'bias_y' values used in steppers to form slightly
+    // offsetted planar coordinates for twining.
+
+    for ( auto & cf : spread )
+    {
+      cf[0] *= bias ;
+      cf[1] *= bias ;
+    }
+  }
 
   // // this helper function calculates the vector of angles between
   // // a vector of rays and (0,0,1) - unit forward in our CS.
@@ -911,7 +944,7 @@ struct voronoi_syn_plus
   {
     trg = 0.0f ;
 
-    for ( const auto & cf : args.twine_spread )
+    for ( const auto & cf : spread )
     {
       for ( std::size_t facet = 0 ; facet < sz ; facet++ )
       {
@@ -1437,7 +1470,8 @@ void fuse ( int ninputs )
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-        twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
+        twine_t < NCH , 16 >
+          twenv ( env_v[f] , args.twine_spread ) ;
         ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
         trxyz = rot_plane[f] ( trxyz ) ;
         reproject9_t rprj ( trxyz , basis2_v[f] ) ;
@@ -1454,7 +1488,8 @@ void fuse ( int ninputs )
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
 
-        twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
+        twine_t < NCH , 16 >
+          twenv ( env_v[f] , args.twine_spread ) ;
 
         work ( get_ray , twenv ) ;
       }
