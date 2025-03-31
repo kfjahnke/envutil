@@ -55,6 +55,7 @@
 #include "geometry.h"
 #include "cubemap.h"
 #include "masking.h"
+#include "lens_correction.h"
 
 HWY_BEFORE_NAMESPACE() ;
 BEGIN_ZIMT_SIMD_NAMESPACE(project)
@@ -1395,98 +1396,25 @@ struct _environment
     // We encode such processing in a std::function modifying the
     // SIMD vector of 2D coordinates:
 
-    typedef std::function < void ( crd_v & ) > planar_f ;
+    std::function < void ( crd_v & ) > pf = [] ( crd_v & ) { } ;
 
-    bool have_shear = false ;
-    planar_f pf_shear = [] ( crd_v & ) { } ;
+    // with lens control active, we can use the handy 'pto_planar'
+    // class which combines lens correction polynomial, lens shift
+    // and shear:
 
-    bool have_lcp = false ;
-    planar_f pf_lcp = [] ( crd_v & ) { } ;
-
-    // first we check for shear - this is quite simple:
-
-    if ( fct.shear_g != 0.0 || fct.shear_t != 0.0 )
+    if ( fct.lens_correction_active )
     {
-      have_shear = true ;
-
-      pf_shear = [=] ( crd_v & crd )
+      pf = pto_planar < float , LANES >
+             ( fct.a , fct.b , fct.c , fct.s , fct.r_max ,
+               fct.h , fct.v , fct.shear_g , fct.shear_t ) ;
+    }
+    else if ( fct.shear_g != 0.0 || fct.shear_t != 0.0 )
+    {
+      pf = [=] ( crd_v & crd )
       {
         crd = {  crd[0] + ( crd[1] * fct.shear_g ) ,
                  crd[1] + ( crd[0] * fct.shear_t ) } ;
       } ;
-    }
-
-    // now for lens correction. This code is more involved; here we
-    // use an adapted version of the lens correction code in lux:
-
-    if ( fct.lens_correction_active )
-    {
-      have_lcp = true ;
-
-      pf_lcp = [=] ( crd_v & crd )
-      {
-        auto x = crd[0] ;
-        auto y = crd[1] ;
-
-        if ( fct.shift_only )
-        {
-          // add h and v to yield the output
-
-          crd[0] = x + fct.h ;
-          crd[1] = y + fct.v ;
-        }
-        else
-        {
-          // r is the distance to the center defined by (h,v)
-
-          auto r = sqrt ( x * x + y * y ) ;
-
-          // we cap the radius to avoid 'warp-back'
-
-          r ( r > fct.cap_radius ) = fct.cap_radius ;
-
-          // this is scaled to multiples of the reference radius
-
-          r /= float ( fct.s ) ;
-
-          // now we can calculate the scaling factor
-
-          auto f =   fct.a * r * r * r
-                   + fct.b * r * r
-                   + fct.c * r
-                   + fct.d ;
-
-          // apply f to x and y, and add h and v to yield the output
-
-          crd[0] = x * f + fct.h ;
-          crd[1] = y * f + fct.v ;
-        }
-      } ;
-    }
-
-    // now we set up 'pf' to use none, one or both in-plane functions:
-
-    planar_f pf = pf_shear ; // pf_shear is no-op if there is no shear
-
-    // with lens control active, that has to be done before shear is
-    // applied - shear is usually from scanning prints, so it's the
-    // last step (we're doing an inverse transform from target to
-    // source)
-
-    if ( have_lcp )
-    {
-      if ( have_shear )
-      {
-        pf = [=] ( crd_v & crd )
-        {
-          pf_lcp ( crd ) ;
-          pf_shear ( crd ) ;
-        } ;
-      }
-      else
-      {
-        pf = pf_lcp ;
-      }
     }
 
     // we fix the projection as a template argument to class mount_t,

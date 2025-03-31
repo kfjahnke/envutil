@@ -112,6 +112,7 @@ static zimt::asset_t current_env ;
 
 #include "environment.h"
 #include "stepper.h"
+#include "lens_correction.h"
 
 // now we invoke HWY_BEFORE_NAMESPACE() for this file, to make code
 // down to HWY_AFTER_NAMESPACE() compile with settings for a specific
@@ -187,7 +188,34 @@ struct rotate_3d
     eval ( in , out ) ;
     return out ;
   }
+
+  template < typename U >
+  void as_matrix ( r3_t < U > & m )
+  {
+    xel_t < double , 3 > ex { 1.0 , 0.0 , 0.0 } ;
+    xel_t < double , 3 > ey { 0.0 , 1.0 , 0.0 } ;
+    xel_t < double , 3 > ez { 0.0 , 0.0 , 1.0 } ;
+    eval ( ex , ex ) ;
+    eval ( ey , ey ) ;
+    eval ( ez , ez ) ;
+    m[0] = ex ;
+    m[1] = ey ;
+    m[2] = ez ;
+  }
 } ;
+
+// directly produce an r3_t from Euler angles. This might also
+// be done directly with a very large formula - this is easier:
+
+template < typename T >
+r3_t < T > make_r3_t ( T r , T p , T y ,
+                       bool inverse = false )
+{
+  rotate_3d < T , 1 > rq3 ( r , p , y , inverse ) ;
+  r3_t < T > r3m ;
+  rq3.as_matrix ( r3m ) ;
+  return r3m ;
+}
 
 // 'work' is the function where the state we've built up in the
 // code below it culminates in the call to zimt::process, which
@@ -252,6 +280,8 @@ void work ( get_t & get , act_t & act )
 
   std::chrono::system_clock::time_point start
     = std::chrono::system_clock::now() ;
+
+  // bill.njobs = 1 ; // to run the rendering single-threaded
 
   zimt::process ( trg.shape , get , act , cstor , bill ) ;
   
@@ -1134,6 +1164,149 @@ struct reproject9_t
   }
 } ;
 
+template < typename T , std::size_t L >
+struct generic_r3
+: public unary_functor < xel_t<T,3> , xel_t<T,3> , L >
+{
+  grok_type < xel_t<T,3> , xel_t<T,3> , L > ev ;
+
+  generic_r3 ( const facet_spec & ft ,
+               const facet_spec & fs )
+  {
+    // here, the facet passed in f is in the 'camera' position
+    // r_camera takes us from target coordinates to model space:
+
+    r3_t r_camera = make_r3_t ( ft.roll , ft.pitch , ft.yaw , false ) ;
+
+    // this rotation takes us to the traget's translation plane
+
+    r3_t rt_tp = make_r3_t ( ft.tp_r , ft.tp_p , ft.tp_y , true ) ;
+
+    // this rotation takes us back to model space
+
+    r3_t rt_tpi = make_r3_t ( ft.tp_r , ft.tp_p , ft.tp_y , false ) ;
+
+    // this rotation takes us from model space to the source facet's
+    // translation plane
+
+    r3_t rs_tp = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , true ) ;
+
+    // this rotation takes us back to model space
+
+    r3_t rs_tpi = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , false ) ;
+
+    // this rotation takes us to the source facet's CS
+
+    r3_t r_facet = make_r3_t ( fs.roll , fs.pitch , fs.yaw , true ) ;
+
+    bool have_ttp = ( ft.tr_x != 0 || ft.tr_y != 0 || ft.tr_z != 0 ) ;
+    bool have_stp = ( fs.tr_x != 0 || fs.tr_y != 0 || fs.tr_z != 0 ) ;
+
+    xel_t<T,3> shift_t { -ft.tr_x , -ft.tr_y , -ft.tr_z } ;
+    xel_t<T,3> shift_s { fs.tr_x , fs.tr_y , fs.tr_z } ;
+
+    if ( have_ttp )
+    {
+      if ( have_stp )
+      {
+        std::cout << "case 1: ttp and stp" << std::endl ;
+        r3_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
+        tf3d_t < T , L > tf3d1 ( r_to_ttp , rt_tpi , shift_t ) ;
+        r3_t md_to_facet = rotate ( rs_tpi , r_facet ) ;
+        tf3d_t < T , L > tf3d2 ( rs_tp , md_to_facet , shift_s ) ;
+        ev = tf3d1 + tf3d2 ;
+      }
+      else
+      {
+        std::cout << "case 2: ttp only" << std::endl ;
+        r3_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
+        r3_t ttp_to_facet = rotate ( rt_tpi , r_facet ) ;
+        tf3d_t < T , L > tf3d1 ( r_to_ttp , ttp_to_facet , shift_t ) ;
+        ev = tf3d1 ;
+      }
+    }
+    else
+    {
+      if ( have_stp )
+      {
+        std::cout << "case 3: stp only" << std::endl ;
+        r3_t r_to_stp = rotate ( r_camera , rs_tp ) ;
+        r3_t stp_to_facet = rotate ( rs_tpi , r_facet ) ;
+        tf3d_t < T , L > tf3d1 ( r_to_stp , stp_to_facet , shift_s ) ;
+        ev = tf3d1 ;
+      }
+      else
+      {
+        // this is the simplest case: no translation in both facets
+        std::cout << "case 4: no translation" << std::endl ;
+        r3_t r_complete = rotate ( r_camera , r_facet ) ;
+        ev = rotate_t < T , L > ( r_complete ) ;
+      }
+    }
+  }
+
+  template < typename I , typename O >
+  void eval ( const I & in , O & out )
+  {
+    ev.eval ( in , out ) ;
+  }
+} ;
+
+// this functor handles the transformation of 2D model space coordinates
+// pertaining to an output image to 3D ray coordinates. The speciality
+// here is that the output is recreating one of the facets, so there
+// is a '--single' argument, or we're looking at control points where
+// we want to figure out ray coordinates for coordinates pertaining to
+// a facet image - which is needed for control point inspection. The
+// functor's argument receives a facet_spec object and gleans the
+// transformation steps from it. So, again, the facet_spec we process
+// here refers to the *target*, and not to the source, for which we
+// normally use facet_spec objects. We want to implement the steps of
+// the transformation which 'ordinary' steppers go through: that's
+// the 'rise' from planar 2D to 3D ray coordinates and a rotation
+// either to the source facet's CS or to the translation plane, if
+// present. What we may have here, additionally, is the inverse of
+// the 'normal' planar transformation due to lens correction, and the
+// inverse of the translation in 3D.
+
+template < typename T , std::size_t L >
+struct tf_ex_facet
+: public unary_functor < xel_t < T , 2 > ,
+                         xel_t < T , 3 > ,
+                         L >
+{
+  // 2D->2D transformation, may contain inverse of lens correction
+
+  pto_planar < T , L , true > tf22 ;
+
+  // 2D->3D transformation as per the facet's projection.
+
+  grok_type < xel_t < T , 2 > , xel_t < T , 3 > , L > tf23 ;
+
+  // 3D->3D transformation, may contain inverse translation
+
+  generic_r3 < T , L > tf33 ;
+
+  tf_ex_facet ( const facet_spec & ft , const facet_spec & fs )
+  : tf22 ( ft.a , ft.b , ft.c , ft.s , ft.r_max ,
+           ft.h , ft.v , ft.shear_g , ft.shear_t ) ,
+    tf23 ( roll_out_23 < T , L > ( ft.projection ) ) ,
+    tf33 ( ft , fs )
+  { }
+
+  // eval puts the three steps together and provised a ray coordinate
+  // in the source facet's CS.
+
+  template < typename I , typename O >
+  void eval ( const I & _in , O & out )
+  {
+    I in ;
+    tf22.eval ( _in , in ) ;
+    tf23.eval ( in , out ) ;
+    tf33.eval ( out , out ) ;
+  }
+} ;
+
 template < int NCH ,
            template < typename , std::size_t , bool > class STP ,
            typename SYN >
@@ -1201,7 +1374,7 @@ void fuse ( int ninputs )
     // all facets need to process two rotations: one due to
     // the viewer's orientation (global yaw, pitch and roll)
     // and one due to the facet's own orientation. The first
-    // one is already set (it's the same throughout: rot_camera)
+    // one is already set (it's the same throughout: r_camera)
     // now we create and save the facet-specific one.
 
     rotate_3d < double , 16 > r_facet ( fct.roll ,
@@ -1323,21 +1496,34 @@ void fuse ( int ninputs )
       int f = args.solo ;
       const auto & fct ( args.facet_spec_v [ f ] ) ; // shorthand
 
+      if ( args.single >= 0 )
+      {
+        if ( args.verbose )
+          std::cout << "re-creating single facet "
+                    << args.single << std::endl ;
+        const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
+        generic_stepper < float , 16 > get_ray
+          ( args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ,
+            0 , 0 , tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
+        work ( get_ray , env_v[f] ) ;
+        return ;
+      }
+
+      // note this setting VVV - we needn't normalize the ray here.
+
+      STP < float , 16 , false > get_ray
+        ( basis1_v[f][0] , basis1_v[f][1] , basis1_v[f][2] ,
+          args.width , args.height ,
+          args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
       if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
            || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
       {
         // there are non-zero translation parameters for this facet,
         // so we have to add code to handle the reprojection of the
         // facet to the one-forward plane and the view of this plane
-        // from the translated camera position. First the stepper:
-
-        // note this setting VVV - we needn't normalize the ray here.
-
-        STP < float , 16 , false > get_ray
-          ( basis1_v[f][0] , basis1_v[f][1] , basis1_v[f][2] ,
-            args.width , args.height ,
-            args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
+        // from the translated camera position.
         // the stepper, which only uses the rotation of the virtual
         // camera (basis1) is suffixed with a functor handling the
         // projection of the facet to the reprojection plane and the
@@ -1359,11 +1545,6 @@ void fuse ( int ninputs )
       {
         // all translation parameters are zero. this is easy:
 
-        STP < float , 16 , false > get_ray
-          ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
-            args.width , args.height ,
-            args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
         work ( get_ray , env_v[f] ) ;
       }
     }
@@ -1381,8 +1562,20 @@ void fuse ( int ninputs )
       {
         const auto & fct ( args.facet_spec_v[i] ) ; // shorthand
 
-        if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
-             || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
+        if ( args.single >= 0 )
+        {
+          if ( args.verbose )
+            std::cout << "re-creating single facet "
+                      << args.single << std::endl ;
+          const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
+          generic_stepper < float , 16 > get_ray
+            ( args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ,
+              0 , 0 , tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
+          get_v.push_back ( get_ray ) ;
+        }
+        else if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
+                  || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
         {
           // if there are translation parameters for this facet,
           // proceed as in the single-facet case: suffix the stepper

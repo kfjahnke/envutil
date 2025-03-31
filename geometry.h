@@ -76,8 +76,8 @@ using r3_t = zimt::xel_t < xel_t < T , 3 > , 3 > ;
 
 // rotate a 3D vector 'lhs' with the rotation matrix 'rhs'
 
-template < typename T = double >
-xel_t<T,3> rotate ( const xel_t<T,3> & lhs ,
+template < typename T = double , typename U = double >
+xel_t<U,3> rotate ( const xel_t<U,3> & lhs ,
                     const r3_t<T> & rhs )
 {
   return { lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2] } ;
@@ -105,6 +105,23 @@ r3_t<T> transpose ( const r3_t<T> & r )
            xel_t<T,3> ( { r[0][1] , r[1][1] , r[2][1] } ) ,
            xel_t<T,3> ( { r[0][2] , r[1][2] , r[2][2] } ) } ;
 }
+
+template < typename T , std::size_t L >
+struct rotate_t
+: public unary_functor < xel_t<T,3> , xel_t<T,3> ,  L >
+{
+  const r3_t < T > r3 ;
+
+  rotate_t ( const r3_t < T > & _r3 )
+  : r3 ( _r3 )
+  { }
+
+  template < typename I , typename O >
+  void eval ( const I & in , O & out )
+  {
+    out = rotate ( in , r3 ) ;
+  }
+} ;
 
 // some SIMDized types we'll use. I use 16 SIMD lanes for now,
 // which is also the lane count currently supported by OIIO.
@@ -1735,37 +1752,40 @@ struct ray_to_ray
 // space and finally a to_plane_t for a complete plane-to-plane
 // transformation. TODO: what about out-of-bounds access?
 
-typedef xel_t < float , 2 > crd2_t ;
-typedef xel_t < float , 3 > crd3_t ;
+// typedef xel_t < float , 2 > crd2_t ;
+// typedef xel_t < float , 3 > crd3_t ;
+// 
+// typedef zimt::grok_type < crd2_t , crd3_t , LANES > to_ray_t ;
+// typedef zimt::grok_type < crd3_t , crd2_t , LANES > to_plane_t ;
 
-typedef zimt::grok_type < crd2_t , crd3_t , LANES > to_ray_t ;
-typedef zimt::grok_type < crd3_t , crd2_t , LANES > to_plane_t ;
-
-to_plane_t roll_out_32 ( projection_t projection )
+template < typename T , std::size_t L >
+grok_type < xel_t < T , 3 > , xel_t < T , 2 > , L >
+roll_out_32 ( projection_t projection )
 {
-  to_plane_t result ;
+  grok_type < xel_t < T , 3 > , xel_t < T , 2 > , L > result ;
+
   switch ( projection )
   {
     case SPHERICAL:
-      result = ray_to_ll_t() ;
+      result = ray_to_ll_t < T , L > () ;
       break ;
     case CYLINDRICAL:
-      result = ray_to_cyl_t() ;
+      result = ray_to_cyl_t < T , L > () ;
       break ;
     case RECTILINEAR:
-      result = ray_to_rect_t() ;
+      result = ray_to_rect_t < T , L > () ;
       break ;
     case FISHEYE:
-      result = ray_to_fish_t() ;
+      result = ray_to_fish_t < T , L > () ;
       break ;
     case STEREOGRAPHIC:
-      result = ray_to_ster_t() ;
+      result = ray_to_ster_t < T , L > () ;
       break ;
     case CUBEMAP:
-      result = ray_to_ir_t() ;
+      result = ray_to_ir_t < T , L > () ;
       break ;
     case BIATAN6:
-      result = ray_to_ba6_t() ;
+      result = ray_to_ba6_t < T , L > () ;
       break ;
     default:
       std::cerr << "unhandled projection # " << int(projection)
@@ -1775,31 +1795,33 @@ to_plane_t roll_out_32 ( projection_t projection )
   return result ;
 }
 
-to_ray_t roll_out_23 ( projection_t projection )
+template < typename T , std::size_t L >
+grok_type < xel_t < T , 2 > , xel_t < T , 3 > , L >
+roll_out_23 ( projection_t projection )
 {
-  to_ray_t result ;
+  grok_type < xel_t < T , 2 > , xel_t < T , 3 > , L > result ;
   switch ( projection )
   {
     case SPHERICAL:
-      result = ll_to_ray_t() ;
+      result = ll_to_ray_t < T , L > () ;
       break ;
     case CYLINDRICAL:
-      result = cyl_to_ray_t() ;
+      result = cyl_to_ray_t < T , L > () ;
       break ;
     case RECTILINEAR:
-      result = rect_to_ray_t() ;
+      result = rect_to_ray_t < T , L > () ;
       break ;
     case FISHEYE:
-      result = fish_to_ray_t() ;
+      result = fish_to_ray_t < T , L > () ;
       break ;
     case STEREOGRAPHIC:
-      result = ster_to_ray_t() ;
+      result = ster_to_ray_t < T , L > () ;
       break ;
     case CUBEMAP:
-      result = ir_to_ray_t() ;
+      result = ir_to_ray_t < T , L > () ;
       break ;
     case BIATAN6:
-      result = ba6_to_ray_t() ;
+      result = ba6_to_ray_t < T , L > () ;
       break ;
     default:
       std::cerr << "unhandled projection # " << int(projection)

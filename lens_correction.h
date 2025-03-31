@@ -91,7 +91,7 @@ struct eu_polynomial
   // evaluation of the poynomial and it's derivative is trivial:
 
   template < typename T >
-  T function ( const T & x )
+  T function ( const T & x ) const
   {
     T sum = 0.0 ;
     T power = 1.0 ;
@@ -105,7 +105,7 @@ struct eu_polynomial
   }
 
   template < typename T >
-  T derivative ( const T & x )
+  T derivative ( const T & x ) const
   {
     T sum = 0.0 ;
     T power = 1.0 ;
@@ -137,7 +137,7 @@ struct eu_polynomial
   bool inverse ( const T & desired_output ,
                  T & required_input ,
                  const T & tolerance
-                   = 100 * std::numeric_limits<T>::epsilon() )
+                   = 100 * std::numeric_limits<T>::epsilon() ) const
   {
     T current = required_input ;
     T result , difference , last_difference ;
@@ -181,13 +181,13 @@ struct eu_polynomial
   // inverse
 
   template < typename T >
-  void eval ( const T & x , T & y )
+  void eval ( const T & x , T & y ) const
   {
     y = function ( x ) ;
   }
 
   template < typename T >
-  void reval ( const T & y , T & x )
+  void reval ( const T & y , T & x ) const
   {
     bool success = inverse ( y , x ) ;
     assert ( success ) ;
@@ -375,11 +375,16 @@ struct inverse_lcp
 
       // as the b-spline's knot points, we don't store the radius
       // but rather the factor we need to apply to the incoming radius
-      // to obtain the outgoing radius.
+      // to obtain the outgoing radius, minus 1.0, to avoid 'squashing',
+      // because the factor is typically (very) close to 1.0 and the
+      // variations (let's call them delta) are several OOM smaller.
+      // So storing 1.0 + delta 'squashes' delta, especially when
+      // running the code in float - the first few digits of the
+      // mantissa are solely occupied due to the 1.0.
 
       inv_model.core [ i ] = (    notch == 0.0
                                 ? 1.0 / p.derivative ( 0.0 )
-                                : out / notch ) ;
+                                : ( out / notch ) - 1 ) ;
     }
 
     // new we prefilter and set up an evaluator for the spline.
@@ -410,6 +415,7 @@ struct inverse_lcp
     in *= ( nk - 1 ) ;       // move to spline coordinates
 
     fev.eval ( in , out ) ;  // evaluate the spline
+    out += 1 ;               // recover the factor
   }
 } ;
 
@@ -430,13 +436,21 @@ struct pto_planar
 {
   lcp < T , L > polynomial ;
   inverse_lcp < T , L > inv_polynomial ;
-  const T h , v , g , t ;
+  const T s , h , v , g , t ;
 
-  pto_planar ( double _a , double _b , double _c , double r_max ,
+  pto_planar ( double _a , double _b , double _c ,
+               double _s , double r_max ,
                double _d = 0.0 , double _e = 0.0 ,
                double _g = 0.0 , double _t = 0.0 )
   : polynomial ( _a , _b , _c , r_max ) ,
-    inv_polynomial ( _a , _b , _c , r_max , 57 ) ,
+    inv_polynomial ( _a , _b , _c , r_max , 100 ) ,
+                     // // TODO: I'm not sure here:
+                     //   r_max * r_max * r_max * r_max * _a
+                     // + r_max * r_max * r_max * _b
+                     // + r_max * r_max * _c
+                     // + r_max * ( 1 - ( _a + _b + _c ) ) ,
+                     // 100 ) ,
+    s ( _s ) ,
     h ( _d ) ,
     v ( _e ) ,
     g ( _g ) ,
@@ -451,8 +465,9 @@ struct pto_planar
       // the transformation is from target image coordinates
       // to source image coordinates - both in model space units.
 
-      T factor ;
-      polynomial.eval ( norm(_in) , factor ) ;
+      simdized_type<T,L> factor ;
+      polynomial.eval ( norm ( _in ) / s , factor ) ;
+      // std::cout << "fwd: factor = " << factor << std::endl ;
       out = _in * factor ;
       if ( h != 0.0 || v != 0.0 )
       {
@@ -482,10 +497,17 @@ struct pto_planar
         out[0] -= h ;
         out[1] -= v ;
       }
-      T factor ;
-      inv_polynomial.eval ( norm(out) , factor ) ;
+      simdized_type<T,L> factor ;
+      inv_polynomial.eval ( norm ( out ) / s , factor ) ;
+      // std::cout << "bwd: factor = " << factor << std::endl ;
       out *= factor ;
     }
+  }
+
+  template < typename C >
+  void operator() ( C & crd )
+  {
+    eval ( crd , crd ) ;
   }
 } ;
 

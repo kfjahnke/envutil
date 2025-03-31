@@ -399,7 +399,7 @@ struct facet_spec
   double tr_x , tr_y , tr_z ;
   double tp_y , tp_p , tp_r ;
   double shear_g , shear_t ;
-  double s, a, b, c, d, h, v, cap_radius ;
+  double s, a, b, c, d, h, v, cap_radius , r_max ;
   bool lens_correction_active ;
   bool shift_only ;
   bool have_crop ;
@@ -421,19 +421,20 @@ struct facet_spec
     lens_correction_active
       = ( a != 0.0 || b != 0.0 || c != 0.0 || h != 0.0 || v != 0.0 ) ;
 
-    if ( ! lens_correction_active )
-    {
-      s = 0.0 ;
-      d = 1.0 ;
-      return ;
-    }
-
     // reference radius in PTO is half the extent of the smaller edge
 
     double dv = fabs ( extent.y1 - extent.y0 ) / 2.0 ;
     double dh = fabs ( extent.x1 - extent.x0 ) / 2.0 ;
 
     s = ( dh < dv ) ? dh : dv ;
+
+    // so the larger of the two is larger by this factor:
+
+    double aspect = ( dh >= dv ) ? dh / dv : dv / dh ;
+
+    // which gives us r_max (expressed in units of s):
+    
+    r_max = sqrt ( 1 + aspect * aspect ) ;
 
     // set d so that the image is not scaled
 
@@ -453,6 +454,31 @@ struct facet_spec
     d1 = std::max ( d1 , d3 ) ;
     d1 = std::max ( d1 , d4 ) ;
     cap_radius = sqrt ( d1 ) ;
+  }
+
+  void get_image_metrics()
+  {
+    // currently building with raw::user_flip set to zero, to load
+    // raw images in memory order without EXIF rotation. This only
+    // affects raw images.
+
+    ImageSpec config;
+    config [ "raw:user_flip" ] = 0 ;
+    auto inp = ImageInput::open ( filename , &config ) ;
+
+    if ( ! inp )
+    {
+      std::cerr << "failed to open facet image '"
+                << filename << "'" << std::endl ;
+      exit ( -1 ) ;
+    }
+
+    const ImageSpec &spec = inp->spec() ;
+
+    width = spec.width ;
+    height = spec.height ;
+    nchannels = spec.nchannels ;
+    inp->close() ;
   }
 } ;
 
@@ -504,14 +530,15 @@ struct arguments
   std::vector < std::string > facet_yaw_v ;
   std::vector < std::string > facet_pitch_v ;
   std::vector < std::string > facet_roll_v ;
-  std::vector < facet_spec > facet_spec_v ;
 
+  std::vector < facet_spec > facet_spec_v ;
   std::vector < pto_mask_type > pto_mask_v ;
 
   bool have_crop ;
   int p_crop_x0 , p_crop_x1 , p_crop_y0 , p_crop_y1 ;
 
   int solo ;
+  int single ;
   int mask_for ;
 
   // the 'arguments' object's 'init' takes the main program's argc

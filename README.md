@@ -201,7 +201,7 @@ envutil --help gives a summary of command line options:
       --pto PTOFILE            panotools script in hugin PTO dialect (optional)
       --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
                               load oriented non-environment source image
-      --solo FACET_INDEX      show only this facet (indexes starting from zero)
+      --solo FACET_INDEX      show content only from this facet
       --mask_for FACET_INDEX   paint this facet white, all others black
       --nchannels CHANNELS     produce output with CHANNELS channels (1-4)
 
@@ -212,13 +212,14 @@ envutil --help gives a summary of command line options:
       --height EXTENT                height of the output (default: same as width)
 
     additional parameters for single-image output:
-      --yaw ANGLE                    yaw of the virtual camera
-      --pitch ANGLE                  pitch of the virtual camera
-      --roll ANGLE                   roll of the virtual camera
-      --x0 EXTENT                    low end of the horizontal range
-      --x1 EXTENT                    high end of the horizontal range
-      --y0 EXTENT                    low end of the vertical range
-      --y1 EXTENT                    high end of the vertical range
+      --single FACET           render an image like facet FACET
+      --yaw ANGLE              yaw of the virtual camera
+      --pitch ANGLE            pitch of the virtual camera
+      --roll ANGLE             roll of the virtual camera
+      --x0 EXTENT              low end of the horizontal range
+      --x1 EXTENT              high end of the horizontal range
+      --y0 EXTENT              low end of the vertical range
+      --y1 EXTENT              high end of the vertical range
 
     additional parameters for multi-image and video output:
       --seqfile SEQFILE              image sequence file name (optional)
@@ -396,6 +397,27 @@ are simply ignored.
 This is mostly useful when processing PTO files. envutil ignores all
 facets but the specified one - processing is as if they did not exist
 at all, even if they would otherwise occlude the 'solo' facet.
+
+## --single FACET           render an image like facet FACET
+
+This option sounds similar to the previous one, but it affects the
+output rather than the input: the output will be rendered with the same
+projection, width, height and hfov as the facet with the given number.
+If facet FACET is oriented, the virtual camera will be oriented in the
+same way. If no other facets 'get in the way', the output should recreate
+facet FACET - with possibly small differences due to processing. This
+doesn't sound very interesting, but there is one good use I'd like to
+point out: let's say you have a PTO file and the result from stitching
+that PTO. Now you may want to re-create one of the source images. You
+can do that by combining --single and --solo, like this: pass the PTO
+file with --pto, then add a 'free' facet with the stitched image via
+a --facet argument. If the PTO file contains x facets, the 'free' facet
+has facet index x (numbering starts with zero!), now add --solo x to your
+command line, specifying that only content from facet x (the stitched
+image) should be taken. Finally add --single y, where y is the facet from
+the PTO file you'd like to recreate. The rendering will now produce an
+image with the metrics of facet y (from the PTO file) filled with the
+content from the stitched image (passed as 'free' facet).
 
 ## --mask_for FACET_INDEX   paint this facet white, all others black
 

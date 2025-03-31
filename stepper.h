@@ -350,6 +350,158 @@ struct stepper_base
   }
 } ;
 
+template < typename T ,     // fundamental type
+           std::size_t L ,  // lane count
+           bool normalize = true >
+struct generic_stepper
+: public stepper_base < T , L >
+{
+  typedef grok_type < xel_t < float , 2 > ,
+                      xel_t < float , 3 > ,
+                      L > tf_t ;
+
+  typedef stepper_base < T , L > base_t ;
+  using typename base_t::value_t ;
+  using base_t::size ;
+  using typename base_t::crd_t ;
+  using typename base_t::crd3_t ;
+  using typename base_t::crd3_v ;
+  using typename base_t::f_v ;
+  using base_t::planar ;
+  using base_t::init ;
+  using base_t::increase ;
+
+  // we have three 3D vectors of unit length. They are orthogonal and
+  // can be produced e.g. by applying a rotational quaternion to the
+  // three cardinal vectors (1,0,0), (0,1,0), (0,0,1)
+
+  // const crd3_t xx ; 
+  // const crd3_t yy ;
+  // const crd3_t zz ;
+  tf_t tf ;
+
+  // c'tor arguments:
+
+  // _xx, _yy and _zz are 3D directional vectors corresponding to
+  // (1,0,0), (0,1,0) and (0,0,1) with the rotation applied.
+  // If there is no rotation, we could use a simplified object,
+  // but this implementation is perfectly general. An alternative
+  // way to introduce these three vectors would be to pass in
+  // a rotational quaternion and rotate the three base vectors
+  // by it, but since this creates a dependency on the relevant
+  // quaternion code, I prefer to pass in the three vectors.
+  // The vectors are expected to be normalized.
+  // To put it differently: the three vectors _xx, _yy and _zz
+  // form the orthonormal basis for the rotated coordinate
+  // system in which we operate.
+
+  // _width and _height are the extent, in pixels, of the field
+  // of sample values which this get_t will produce - the
+  // 'notional' shape for zimt::process. The width and height
+  // don't need to result in an isotropic sampling; whichever
+  // the values are, the spread of sampling locations will be
+  // uniform in the horizontal and in the vertical. But note
+  // that the sampling does not start at (_a0,_b0) but half a
+  // sampling step 'inwards' - and it also ends half a sampling
+  // step inwards from (_a1,_b1): we're using 'edge-to-edge
+  // semantics'
+
+  // The last four arguments are the 'extent' of the 2D manifold
+  // which will be sampled, in model space units. The default
+  // values will spread the sampling locations evenly over an
+  // entire generic surface.
+
+  // the 2D part of the work - producing the 'planar' coordinate
+  // is handled by the base type.
+
+  generic_stepper ( // crd3_t _xx , crd3_t _yy , crd3_t _zz ,
+                    int _width ,
+                    int _height ,
+                    T _a0 ,
+                    T _a1 ,
+                    T _b0 ,
+                    T _b1 ,
+                    T _bias_x ,
+                    T _bias_y ,
+                    const tf_t & _tf
+                  )
+  : // xx ( _xx ) ,
+    // yy ( _yy ) ,
+    // zz ( _zz ) ,
+    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+             _bias_x , _bias_y ) ,
+    tf ( _tf )
+  { }
+
+  // init is used to initialize the vectorized value to the value
+  // it should hold at the beginning of the run. The discrete
+  // coordinate 'crd' gives the location of the first value, and this
+  // function infers the start value from it.
+
+  void init ( crd3_v & trg , const crd_t & crd )
+  {
+    // the base type's 'init' initializes 'planar'
+
+    init ( crd ) ;
+
+    // 'tf' transforms the planar coordinate to a 3D ray
+
+    // crd3_v help ;
+    tf.eval ( planar , trg ) ;
+    // trg = help[0] * xx + help[1] * yy + help[2] * zz ;
+  }
+
+  // 'capped' variant. This is only needed if the current segment is
+  // so short that no vectors can be formed at all. We fill up the
+  // target value with the last valid datum. The code for this
+  // function is the same for all steppers, but since it uses
+  // 'init', which is specific to a given stepper, and since I
+  // don't want to use a virtual init function, I repeat it
+  // in all steppers.
+
+  void init ( crd3_v & trg ,
+              const crd_t & crd ,
+              const std::size_t & cap )
+  {
+    init ( trg , crd ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+
+  // increase modifies it's argument to contain the next values:
+  // the next 3D 'ray' coordinates in model space units, which are
+  // used as input to the 'act' functor invoked by zimt::process.
+
+  void increase ( crd3_v & trg )
+  {
+    // the base class increase increases planar[0]
+
+    increase() ;
+
+    // 'tf' transforms the planar coordinate to a 3D ray
+
+    // crd3_v help ;
+    tf.eval ( planar , trg ) ;
+    // trg = help[0] * xx + help[1] * yy + help[2] * zz ;
+  }
+
+  // 'capped' variant. This is called after all vectors in the current
+  // segment have been processed. If we'd 'go over the lanes', we might
+  // only set entries below cap and rely on the higher lanes holding
+  // viable values from processing the last full vector, but it's
+  // probably more efficient to fill the target with a vector operation
+  // and stuff unconditionally.
+
+  void increase ( crd3_v & trg ,
+                  const std::size_t & cap ,
+                  const bool & _stuff = true )
+  {
+    increase ( trg ) ;
+    if ( cap < L )
+      trg.stuff ( cap ) ;
+  }
+} ;
+
 // struct spherical_stepper is an object to be used as a zimt get_t.
 // It provides 3D ray coordinates for a sampling of the surface of a
 // sphere with unit radius. What's special here is that the sampling

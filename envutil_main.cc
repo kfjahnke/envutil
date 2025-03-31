@@ -187,27 +187,7 @@ bool facet_spec::init ( int argc , const char ** argv )
 
   // all seems well so far, let's open the image
 
-  // currently building with raw::user_flip set to zero, to load
-  // raw images in memory order without EXIF rotation. This only
-  // affects raw images.
-
-  ImageSpec config;
-  config [ "raw:user_flip" ] = 0 ;
-  auto inp = ImageInput::open ( filename , &config ) ;
-
-  if ( ! inp )
-  {
-    std::cerr << "failed to open facet image '"
-              << filename << "'" << std::endl ;
-    return false ;
-  }
-
-  const ImageSpec &spec = inp->spec() ;
-
-  width = spec.width ;
-  height = spec.height ;
-  nchannels = spec.nchannels ;
-  inp->close() ;
+  get_image_metrics() ;
 
   brighten = 1.0f ;
 
@@ -275,6 +255,12 @@ void arguments::init ( int argc , const char ** argv )
   // parameters for single-image output
 
   ap.separator("  additional parameters for single-image output:");
+
+  // tentative:
+
+  ap.arg("--single FACET")
+    .help("render an image like facet FACET")
+    .metavar("FACET");
 
   ap.arg("--yaw ANGLE")
     .help("yaw of the virtual camera")
@@ -453,8 +439,17 @@ void arguments::init ( int argc , const char ** argv )
     assert ( args.facet_name_v.size() > 0 ) ;
   assert ( output != std::string() ) ;
 
+  bool ignore_p_line = false ;
+
   if ( width == 0 )
+  {
     width = 1024 ;
+  }
+  else
+  {
+    ignore_p_line = true ;
+  }
+
   if ( projection == CUBEMAP || projection == BIATAN6 )
   {
     height = 6 * width ;
@@ -468,45 +463,6 @@ void arguments::init ( int argc , const char ** argv )
   }
   if ( height == 0 )
     height = width ;
-
-  nfacets = facet_name_v.size() ;
-  // assert ( nfacets ) ;
-  facet_spec fspec ;
-  for ( int i = 0 ; i < nfacets ; i++ )
-  {
-    const char * spec[8] ;
-    spec [ 0 ] = "facet_spec" ;
-    spec [ 1 ] = "--facet" ;
-    spec [ 2 ] = facet_name_v[i].c_str() ;
-    spec [ 3 ] = facet_projection_v[i].c_str() ;
-    spec [ 4 ] = facet_hfov_v[i].c_str() ;
-    spec [ 5 ] = facet_yaw_v[i].c_str() ;
-    spec [ 6 ] = facet_pitch_v[i].c_str() ;
-    spec [ 7 ] = facet_roll_v[i].c_str() ;
-    bool success = fspec.init ( 8 , spec ) ;
-    if ( ! success )
-    {
-      std::cerr << "parse of facet argument with index " << i
-                << " failed" << std::endl ;
-      exit ( -1 ) ;
-    }
-    fspec.facet_no = i ;
-    fspec.hfov *= M_PI / 180.0 ;
-    fspec.yaw *= M_PI / 180.0 ;
-    fspec.pitch *= M_PI / 180.0 ;
-    fspec.roll *= M_PI / 180.0 ;
-    fspec.step = get_step ( fspec.projection , fspec.width ,
-                            fspec.height , fspec.hfov ) ;
-    fspec.extent = get_extent ( fspec.projection , fspec.width ,
-                                fspec.height , fspec.hfov ) ;
-    fspec.tr_x = fspec.tr_y = fspec.tr_z = 0.0 ;
-    fspec.tp_y = fspec.tp_p = fspec.tp_r = 0.0 ;
-    fspec.shear_g = fspec.shear_t = 0.0 ;
-    fspec.a = fspec.b = fspec.c = fspec.h = fspec.v = 0.0 ;
-    fspec.have_crop = false ;
-    fspec.have_pto_mask = false ;
-    facet_spec_v.push_back ( fspec ) ;
-  }
 
   bool p_line_present = false ;
   projection_t p_line_projection ;
@@ -543,51 +499,54 @@ void arguments::init ( int argc , const char ** argv )
         return 0.0 ;
       return std::stod ( str ) ;
     } ;
-      
-    auto & p_line_list ( parser.line_group [ "p" ] ) ;
-    if ( p_line_list.size() != 0 )
-      p_line_present = true ;
 
-    for ( auto & p_line : p_line_list )
+    if ( ! ignore_p_line )
     {
-      auto & dir ( p_line.field_map ) ;
-      int prj = std::stoi ( dir [ "f" ] ) ;
-      if ( prj == 0 )
-        p_line_projection = RECTILINEAR ;
-      else if ( prj == 1 )
-        p_line_projection = CYLINDRICAL ;
-      else if ( prj == 2 )
-        p_line_projection = SPHERICAL ;
-      else if ( prj == 3 )
-        p_line_projection = FISHEYE ;
-      else if ( prj == 4 )
-         p_line_projection = STEREOGRAPHIC ;
-      else
-      {
-        // TODO: allow override, better error message, check
-        // abort code (currently produces a zombie process)
-        std::cerr << "can't handle PTO projection code "
-                  << prj << " in p-line" << std::endl ;
+      auto & p_line_list ( parser.line_group [ "p" ] ) ;
+      if ( p_line_list.size() != 0 )
+        p_line_present = true ;
 
-        p_line_projection = PRJ_NONE ;
-      }
-      p_line_width = std::stoi ( dir [ "w" ] ) ;
-      p_line_height = std::stoi ( dir [ "h" ] ) ;
-      p_line_hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
-
-      std::string crop_str = dir [ "S" ] ;
-      if ( crop_str != std::string() )
+      for ( auto & p_line : p_line_list )
       {
-        have_crop = true ;
-        std::regex crop_regex ( "([0-9]+),([0-9]+),([0-9]+),([0-9]+)" ) ;
-        std::smatch parts ;
-        std::regex_match ( crop_str , parts , crop_regex ) ;
-        p_crop_x0 = std::stoi ( parts[1].str() ) ;
-        p_crop_x1 = std::stoi ( parts[2].str() ) ;
-        p_crop_y0 = std::stoi ( parts[3].str() ) ;
-        p_crop_y1 = std::stoi ( parts[4].str() ) ;
+        auto & dir ( p_line.field_map ) ;
+        int prj = std::stoi ( dir [ "f" ] ) ;
+        if ( prj == 0 )
+          p_line_projection = RECTILINEAR ;
+        else if ( prj == 1 )
+          p_line_projection = CYLINDRICAL ;
+        else if ( prj == 2 )
+          p_line_projection = SPHERICAL ;
+        else if ( prj == 3 )
+          p_line_projection = FISHEYE ;
+        else if ( prj == 4 )
+          p_line_projection = STEREOGRAPHIC ;
+        else
+        {
+          // TODO: allow override, better error message, check
+          // abort code (currently produces a zombie process)
+          std::cerr << "can't handle PTO projection code "
+                    << prj << " in p-line" << std::endl ;
+
+          p_line_projection = PRJ_NONE ;
+        }
+        p_line_width = std::stoi ( dir [ "w" ] ) ;
+        p_line_height = std::stoi ( dir [ "h" ] ) ;
+        p_line_hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
+
+        std::string crop_str = dir [ "S" ] ;
+        if ( crop_str != std::string() )
+        {
+          have_crop = true ;
+          std::regex crop_regex ( "([0-9]+),([0-9]+),([0-9]+),([0-9]+)" ) ;
+          std::smatch parts ;
+          std::regex_match ( crop_str , parts , crop_regex ) ;
+          p_crop_x0 = std::stoi ( parts[1].str() ) ;
+          p_crop_x1 = std::stoi ( parts[2].str() ) ;
+          p_crop_y0 = std::stoi ( parts[3].str() ) ;
+          p_crop_y1 = std::stoi ( parts[4].str() ) ;
+        }
+        break ; // additional p-lines are ignored for now.
       }
-      break ; // additional p-lines are ignored for now.
     }
 
     auto & i_line_list ( parser.line_group [ "i" ] ) ;
@@ -622,29 +581,7 @@ void arguments::init ( int argc , const char ** argv )
 
       f.projection_str = projection_name [ f.projection ] ;
       f.hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
-
-      // currently building with raw::user_flip set to zero, to load
-      // raw images in memory order without EXIF rotation. This only
-      // affects raw images.
-
-      ImageSpec config;
-      config [ "raw:user_flip" ] = 0 ;
-      auto inp = ImageInput::open ( f.filename , &config ) ;
-
-      if ( ! inp )
-      {
-        std::cerr << "failed to open facet image '"
-                  << f.filename << "'" << std::endl ;
-        exit ( -1 ) ;
-      }
-
-      const ImageSpec &spec = inp->spec() ;
-
-      f.width = spec.width ;
-      f.height = spec.height ;
-      f.nchannels = spec.nchannels ;
-      inp->close() ;
-
+      f.get_image_metrics() ;
       f.yaw = ( M_PI / 180.0 ) * glean ( dir [ "y" ] ) ;
       f.pitch = ( M_PI / 180.0 ) * glean ( dir [ "p" ] ) ;
       f.roll = ( M_PI / 180.0 ) * glean ( dir [ "r" ] ) ;
@@ -767,7 +704,6 @@ void arguments::init ( int argc , const char ** argv )
       ++ mask_no ;
     }
   }
-  assert ( nfacets ) ;
 
   if ( verbose )
   {
@@ -778,12 +714,68 @@ void arguments::init ( int argc , const char ** argv )
                 << " " << p_crop_y0 << " " << p_crop_y1 << std::endl ;
   }
 
+  // add facets given as single --facet arguments. Even if the argument
+  // occurs before a --pto argument, the 'free' facets are processed
+  // after the ones in the PTO file to simplify facet numbering - it's
+  // easiest to keep the PTO-internal numbering as-is: there are back
+  // references and other references to the facet number in PTO.
+
+  int n_free_facets = facet_name_v.size() ;
+  for ( int i = 0 ; i < n_free_facets ; i++ )
+  {
+    facet_spec fspec ;
+  
+    const char * spec[8] ;
+    spec [ 0 ] = "facet_spec" ;
+    spec [ 1 ] = "--facet" ;
+    spec [ 2 ] = facet_name_v[i].c_str() ;
+    spec [ 3 ] = facet_projection_v[i].c_str() ;
+    spec [ 4 ] = facet_hfov_v[i].c_str() ;
+    spec [ 5 ] = facet_yaw_v[i].c_str() ;
+    spec [ 6 ] = facet_pitch_v[i].c_str() ;
+    spec [ 7 ] = facet_roll_v[i].c_str() ;
+    bool success = fspec.init ( 8 , spec ) ;
+    if ( ! success )
+    {
+      std::cerr << "parse of 'facet' argument with index " << i
+                << " failed" << std::endl ;
+      exit ( -1 ) ;
+    }
+    fspec.facet_no = i + nfacets ;
+    fspec.hfov *= M_PI / 180.0 ;
+    fspec.yaw *= M_PI / 180.0 ;
+    fspec.pitch *= M_PI / 180.0 ;
+    fspec.roll *= M_PI / 180.0 ;
+    fspec.step = get_step ( fspec.projection , fspec.width ,
+                            fspec.height , fspec.hfov ) ;
+    fspec.extent = get_extent ( fspec.projection , fspec.width ,
+                                fspec.height , fspec.hfov ) ;
+    fspec.tr_x = fspec.tr_y = fspec.tr_z = 0.0 ;
+    fspec.tp_y = fspec.tp_p = fspec.tp_r = 0.0 ;
+    fspec.shear_g = fspec.shear_t = 0.0 ;
+    fspec.a = fspec.b = fspec.c = fspec.h = fspec.v ;
+    fspec.process_lc() ;
+    fspec.shift_only = false ;
+    fspec.have_crop = false ;
+    fspec.have_pto_mask = false ;
+    fspec.asset_key = fspec.filename ;
+    fspec.brighten =0.0 ;
+    facet_spec_v.push_back ( fspec ) ;
+  }
+  nfacets += n_free_facets ;
+  assert ( nfacets ) ;
+
   solo = ap["solo"].get<int> ( -1 ) ;
+  single = ap["single"].get<int> ( -1 ) ;
+
   if ( solo != -1 )
     assert ( solo < nfacets ) ;
 
+  if ( single != -1 )
+    assert ( single < nfacets ) ;
+
   // if there is only one facet, we set 'solo' to zero, this will
-  // also result in fcet zero's 'active' field being set true
+  // also result in facet zero's 'active' field being set true
 
   if ( nfacets == 1 )
     solo = 0 ;
@@ -928,7 +920,29 @@ void arguments::init ( int argc , const char ** argv )
 
   // if ( seqfile == std::string() )
   {
-    if ( p_line_present )
+    if ( single >= 0 )
+    {
+      // 'single' means: produce output with the same metrics as the
+      // given facet. The idea is to even produce the same distortions;
+      // for now, to test, just the base metrics:
+
+      if ( verbose )
+        std::cout << "using '--single' argument to set output metrics"
+                  << std::endl ;
+
+      const auto & fspec = facet_spec_v [ single ] ;
+
+      hfov = fspec.hfov ;
+      projection = fspec.projection ;
+      prj_str = projection_name [ projection ] ;
+      width = fspec.width ;
+      height = fspec.height ;
+      yaw = fspec.yaw ;
+      pitch = fspec.pitch ;
+      roll = fspec.roll ;
+      have_crop = false ;
+    }
+    else if ( p_line_present )
     {
       hfov = p_line_hfov ;
       projection = p_line_projection ;
@@ -938,7 +952,11 @@ void arguments::init ( int argc , const char ** argv )
     }
     else
     {
+      // convert angles to radians
       hfov *= M_PI / 180.0 ;
+      yaw *= M_PI / 180.0 ;
+      pitch *= M_PI / 180.0 ;
+      roll *= M_PI / 180.0 ;
     }
 
     // single-image output (no sequence file given)
@@ -948,22 +966,22 @@ void arguments::init ( int argc , const char ** argv )
 
     if ( verbose)
     {
-      std::cout << "output: " << output << std::endl ;
-      std::cout << "output projection: " << prj_str << std::endl ;
+      std::cout << "output:             " << output << std::endl ;
+      std::cout << "output projection:  " << prj_str << std::endl ;
+      std::cout << "output width:       " << width << std::endl ;
+      std::cout << "output height:      " << height << std::endl ;
 
       if ( hfov > 0.0 )
-        std::cout << "output hfov: " << hfov << std::endl ;
+        std::cout << "output hfov:      "
+                  << hfov * 180.0 / M_PI << std::endl ;
 
-      std::cout << "virtual camera yaw: " << yaw
-                << " pitch: " << pitch
-                << " roll: " << roll << std::endl ;
+      std::cout << "virtual camera yaw: "
+                << yaw * 180.0 / M_PI
+                << " pitch: "
+                << pitch * 180.0 / M_PI
+                << " roll: "
+                << roll * 180.0 / M_PI << std::endl ;
     }
-
-    // convert angles to radians
-
-    yaw *= M_PI / 180.0 ;
-    pitch *= M_PI / 180.0 ;
-    roll *= M_PI / 180.0 ;
 
     // calculate extent - a non-zero hfov overrides x0, x1, y0, and y1
 
