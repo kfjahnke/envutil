@@ -448,6 +448,10 @@ struct generic_stepper
 
     // crd3_v help ;
     tf.eval ( planar , trg ) ;
+    if constexpr ( normalize )
+    {
+      trg /= norm ( trg ) ;
+    }
     // trg = help[0] * xx + help[1] * yy + help[2] * zz ;
   }
 
@@ -482,6 +486,10 @@ struct generic_stepper
 
     // crd3_v help ;
     tf.eval ( planar , trg ) ;
+    if constexpr ( normalize )
+    {
+      trg /= norm ( trg ) ;
+    }
     // trg = help[0] * xx + help[1] * yy + help[2] * zz ;
   }
 

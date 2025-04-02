@@ -1845,7 +1845,7 @@ roll_out_23 ( projection_t projection )
 // proceeds through the series backwards, using the transposed
 // rotations, and the shift with inverted sign.
 
-template < typename T , std::size_t L , bool invert = false >
+template < typename T , std::size_t L > // , bool invert = false >
 struct tf3d_t
 : public zimt::unary_functor < xel_t<T,3> , xel_t<T,3> , L >
 {
@@ -1857,12 +1857,14 @@ struct tf3d_t
   const r3_t<T> src_to_trg ;
   const xel_t<T,3> shift ;
   bool has_shift ;
+  T dcp ;
 
   // the standard c'tor takes the two rotations and an optional shift.
 
   tf3d_t ( const r3_t<T> & _trg_to_md ,
            const r3_t<T> & _md_to_src ,
-           const xel_t<T,3> & _shift = xel_t<T,3> ( 0 ) )
+           const xel_t<T,3> & _shift = xel_t<T,3> ( 0 ) ,
+           T _dcp = T(1) )
   : trg_to_md ( _trg_to_md ) ,
     md_to_trg ( transpose ( _trg_to_md ) ) ,
     md_to_src ( _md_to_src ) ,
@@ -1870,62 +1872,74 @@ struct tf3d_t
     trg_to_src ( rotate ( _trg_to_md , _md_to_src ) ) ,
     src_to_trg ( transpose ( rotate ( _trg_to_md , _md_to_src ) ) ) ,
     shift ( _shift ) ,
-    has_shift ( _shift != 0 )
+    has_shift ( _shift[0] != 0 || _shift[1] != 0 || _shift[2] != 0 ) ,
+    dcp ( _dcp )
   { }
 
-  // this c'tor is for convenience. the first two rotations are to
-  // model space and onwards, the third is the rotation from model
-  // space to the reprojection plane. Here, passing the shift is
-  // mandatory - it would be pointless without.
-
-  tf3d_t ( const r3_t<T> & _trg_to_md ,
-           const r3_t<T> & _md_to_src ,
-           const r3_t<T> & _md_to_tp ,
-           const xel_t<T,3> & _shift )
-  : tf3d_t ( rotate ( _trg_to_md , _md_to_tp ) ,
-             rotate ( transpose ( _md_to_tp ) , _md_to_src ) ,
-             shift )
-  { }
+  // // this c'tor is for convenience. the first two rotations are to
+  // // model space and onwards, the third is the rotation from model
+  // // space to the reprojection plane. Here, passing the shift is
+  // // mandatory - it would be pointless without.
+  // 
+  // tf3d_t ( const r3_t<T> & _trg_to_md ,
+  //          const r3_t<T> & _md_to_src ,
+  //          const r3_t<T> & _md_to_tp ,
+  //          const xel_t<T,3> & _shift ,
+  //          T _dcp = T(1) )
+  // : tf3d_t ( rotate ( _trg_to_md , _md_to_tp ) ,
+  //            rotate ( transpose ( _md_to_tp ) , _md_to_src ) ,
+  //            _shift , _dcp )
+  // { }
 
   template < typename I , typename O >
   void eval ( const I & in , O & out )
   {
-    if constexpr ( invert == false )
-    {
-      // the transformation is from target image coordinates
-      // to source image coordinates - both in model space units.
-      // the first case uses two separate rotations and 'slots in'
-      // a shift. the second case does it in one go, which is faster.
+    // the transformation is from target image coordinates
+    // to source image coordinates - both in model space units.
+    // the first case uses two separate rotations and 'slots in'
+    // a shift. the second case does it in one go, which is faster.
 
-      if ( has_shift )
+    if ( has_shift )
+    {
+      // std::cout << "in b4 rot.       " << in << std::endl ;
+      out = rotate ( in , trg_to_md ) ;
+      // std::cout << "in after rot.    " << out << std::endl ;
+      auto mask = ( out[2] <= 0.0f ) ;
+      if ( all_of ( mask ) )
       {
-        out = rotate ( in , trg_to_md ) ;
-        out += shift ;
-        out = rotate ( out , md_to_src ) ;
+        out[0] = 0.0f ;
+        out[1] = 0.0f ;
+        out[2] = - std::numeric_limits<float>::infinity() ;
       }
       else
       {
-        out = rotate ( in , trg_to_src ) ;
+        out[0] /= out[2] ;
+        out[1] /= out[2] ;
+        out[2] = 1.0f ;
+        // std::cout << "after prj to p " << out << std::endl ;
+
+        // the scaling with dcp is only needed when recreating a
+        // single source image with '--single' - for the 'normal'
+        // direction of transformation, dcp is 1.0
+
+        out *= dcp ;
+
+        out -= shift ;
+        // std::cout << "after shift     " << out << std::endl ;
+        out = rotate ( out , md_to_src ) ;
+        // std::cout << "after final rot " << out << std::endl ;
+
+        if ( any_of ( mask ) )
+        {
+          out[0] ( mask ) = 0.0f ;
+          out[1] ( mask ) = 0.0f ;
+          out[2] ( mask ) = - std::numeric_limits<float>::infinity() ;
+        }
       }
     }
     else
     {
-      // the transformation is from source image coordinates
-      // to target image coordinates - both in model space units.
-      // the first case uses two separate rotations and 'slots in'
-      // a shift. the second case does it in one go, which is faster.
-      // note the inverted sign of the shift application.
-
-      if ( has_shift )
-      {
-        out = rotate ( in , src_to_md ) ;
-        out -= shift ;
-        out = rotate ( out , md_to_trg ) ;
-      }
-      else
-      {
-        out = rotate ( in , src_to_trg ) ;
-      }
+      out = rotate ( in , trg_to_src ) ;
     }
   }
 } ;

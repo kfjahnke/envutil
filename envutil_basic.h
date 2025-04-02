@@ -482,6 +482,27 @@ struct facet_spec
   }
 } ;
 
+/* TODO:
+  facet_spec fct_ex_args ;
+  fct_ex_args.masked = 0 ;
+  fct_ex_args.facet_no = -1 ;
+  fct_ex_args.projection = args.projection ;
+
+  fct_ex_args.hfov = args.hfov ;
+  fct_ex_args.extent = args.extent ;
+  fct_ex_args.step = args.step ;  fct_ex_args.hfov = args.hfov ;
+  fct_ex_args.yaw = args.yaw ;
+  fct_ex_args.pich = args.pitch ;
+  fct_ex_args.roll = args.roll ;
+  fct_ex_args.width = args.width ;
+  fct_ex_args.height = args.height ;
+  fct_ex_args.nchannels = args.nchannels ;
+
+  fct_ex_args.a = fct_ex_args.b = fct_ex_args.c = 0 ;
+  fct_ex_args.d = fct_ex_args.h = fct_ex_args.v = 0 ;
+  // fct_ex_args.s = ? ...
+*/  
+
 struct arguments
 {
   bool verbose ;

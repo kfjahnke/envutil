@@ -1064,12 +1064,15 @@ struct reproject_t
       out[2] = - std::numeric_limits<float>::infinity() ;
       return mask_t ( false ) ;
     }
+    // std::cout << "* in before shift " << _in << std::endl ;
     I in ;
     in[0] = ( _in[0] / _in[2] ) - tr_x ;
     in[1] = ( _in[1] / _in[2] ) - tr_y ;
     in[2] = 1.0f - tr_z ;
+    // std::cout << "* after shift    " << in << std::endl ;
     out = in[0] * bs[0] + in[1] * bs[1] + in[2] * bs[2] ;
-    if ( any_of ( mask ) )
+    // std::cout << "* after rotate   " << out << std::endl ;
+   if ( any_of ( mask ) )
     {
       out[0] ( mask ) = 0.0f ;
       out[1] ( mask ) = 0.0f ;
@@ -1202,8 +1205,52 @@ struct generic_r3
     bool have_ttp = ( ft.tr_x != 0 || ft.tr_y != 0 || ft.tr_z != 0 ) ;
     bool have_stp = ( fs.tr_x != 0 || fs.tr_y != 0 || fs.tr_z != 0 ) ;
 
-    xel_t<T,3> shift_t { -ft.tr_x , -ft.tr_y , -ft.tr_z } ;
+    // the PTO 'tanslation' is implemented as a rotation to the
+    // reprojection plane, the reprojection itself by 'casting the
+    // rays down onto the plane' (division by z), a shift which moves
+    // to the CS of the 'virtual camera' and another rotation back
+    // to the next CS - e.g. model space. The position of the virtual
+    // camera is given in model space coordinates, which I find a
+    // debatable choice - I think it may make more sense to define
+    // this position in the CS of to the reprojection plane, which
+    // is how I've coded it here. Maybe using model space coordinates
+    // works better when one uses plane definitions and rays in
+    // model space, rather than doing the CS transformations I use
+    // here.
+
+    xel_t<T,3> shift_t { ft.tr_x , ft.tr_y , ft.tr_z } ;
+
+    // the translation is given in the model space CS, but we want
+    // to apply it in the CS of the translation plane. So we have
+    // to rotate the shift accordingly.
+
+    if ( ft.tp_y != 0 || ft.tp_p != 0 || ft.tp_r != 0 )
+      shift_t = rotate ( xel_t<double,3> ( shift_t ) , rt_tp ) ;
+
+    // this is the inverse transformation, hence:
+
+    shift_t = - shift_t ;
+
+    // same for the source facet, with slight modifications:
+
     xel_t<T,3> shift_s { fs.tr_x , fs.tr_y , fs.tr_z } ;
+
+    // the translation is given in the model space CS, but we want
+    // to apply it in the CS of the translation plane. So we have
+    // to rotate the shift accordingly. Same as above for the
+    // target image - but now, not inverting the sign.
+
+    if ( fs.tp_y != 0 || fs.tp_p != 0 || fs.tp_r != 0 )
+      shift_s = rotate ( xel_t<double,3> ( shift_s ) , rs_tp ) ;
+
+    // dcp is a scaling factor, which is needed for re-cration of
+    // single images. There, the reprojection plane, onto which the
+    // rays are cast in the first step, is not at unit distance from
+    // the origin, which, at that point, is where the 'virtual camera'
+    // of the translation is located - instead it's closer or further
+    // away, depending on TrZ.
+  
+    T dcp = ( 1.0 - ft.tr_z ) ;
 
     if ( have_ttp )
     {
@@ -1211,7 +1258,7 @@ struct generic_r3
       {
         std::cout << "case 1: ttp and stp" << std::endl ;
         r3_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
-        tf3d_t < T , L > tf3d1 ( r_to_ttp , rt_tpi , shift_t ) ;
+        tf3d_t < T , L > tf3d1 ( r_to_ttp , rt_tpi , shift_t , dcp ) ;
         r3_t md_to_facet = rotate ( rs_tpi , r_facet ) ;
         tf3d_t < T , L > tf3d2 ( rs_tp , md_to_facet , shift_s ) ;
         ev = tf3d1 + tf3d2 ;
@@ -1221,7 +1268,7 @@ struct generic_r3
         std::cout << "case 2: ttp only" << std::endl ;
         r3_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
         r3_t ttp_to_facet = rotate ( rt_tpi , r_facet ) ;
-        tf3d_t < T , L > tf3d1 ( r_to_ttp , ttp_to_facet , shift_t ) ;
+        tf3d_t < T , L > tf3d1 ( r_to_ttp , ttp_to_facet , shift_t , dcp ) ;
         ev = tf3d1 ;
       }
     }
@@ -1242,6 +1289,61 @@ struct generic_r3
         r3_t r_complete = rotate ( r_camera , r_facet ) ;
         ev = rotate_t < T , L > ( r_complete ) ;
       }
+    }
+  }
+
+  // target is the regular output given in args, so there are no
+  // transformations due to lens correction or translation on the
+  // target side, but there may be translation on the source side,
+  // which we process here - planar transformations are handled in
+  // the 'environment' object.
+
+  generic_r3 ( const facet_spec & fs )
+  {
+    // here, the facet passed in f is in the 'camera' position
+    // r_camera takes us from target coordinates to model space:
+
+    r3_t r_camera = make_r3_t
+      ( args.roll , args.pitch , args.yaw , false ) ;
+
+    // this rotation takes us from model space to the source facet's
+    // translation plane
+
+    r3_t rs_tp = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , true ) ;
+
+    // this rotation takes us back to model space
+
+    r3_t rs_tpi = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , false ) ;
+
+    // this rotation takes us to the source facet's CS
+
+    r3_t r_facet = make_r3_t ( fs.roll , fs.pitch , fs.yaw , true ) ;
+
+    bool have_stp = ( fs.tr_x != 0 || fs.tr_y != 0 || fs.tr_z != 0 ) ;
+
+    xel_t<T,3> shift_s { fs.tr_x , fs.tr_y , fs.tr_z } ;
+
+    // the translation is given in the model space CS, but we want
+    // to apply it in the CS of the translation plane. So we have
+    // to rotate the shift accordingly.
+
+    if ( fs.tp_y != 0 || fs.tp_p != 0 || fs.tp_r != 0 )
+      shift_s = rotate ( xel_t<double,3> ( shift_s ) , rs_tp ) ;
+
+    if ( have_stp )
+    {
+      std::cout << "case 3: stp only" << std::endl ;
+      r3_t r_to_stp = rotate ( r_camera , rs_tp ) ;
+      r3_t stp_to_facet = rotate ( rs_tpi , r_facet ) ;
+      tf3d_t < T , L > tf3d1 ( r_to_stp , stp_to_facet , shift_s ) ;
+      ev = tf3d1 ;
+    }
+    else
+    {
+      // this is the simplest case: no translation in both facets
+      std::cout << "case 4: no translation" << std::endl ;
+      r3_t r_complete = rotate ( r_camera , r_facet ) ;
+      ev = rotate_t < T , L > ( r_complete ) ;
     }
   }
 
@@ -1294,7 +1396,7 @@ struct tf_ex_facet
     tf33 ( ft , fs )
   { }
 
-  // eval puts the three steps together and provised a ray coordinate
+  // eval puts the three steps together and provides a ray coordinate
   // in the source facet's CS.
 
   template < typename I , typename O >
@@ -1303,6 +1405,36 @@ struct tf_ex_facet
     I in ;
     tf22.eval ( _in , in ) ;
     tf23.eval ( in , out ) ;
+    tf33.eval ( out , out ) ;
+  }
+} ;
+
+template < typename T , std::size_t L >
+struct tf_ex_args
+: public unary_functor < xel_t < T , 2 > ,
+                         xel_t < T , 3 > ,
+                         L >
+{
+  // 2D->3D transformation as per the facet's projection.
+
+  grok_type < xel_t < T , 2 > , xel_t < T , 3 > , L > tf23 ;
+
+  // 3D->3D transformation, may contain inverse translation
+
+  generic_r3 < T , L > tf33 ;
+
+  tf_ex_args ( const facet_spec & fs )
+  : tf23 ( roll_out_23 < T , L > ( args.projection ) ) ,
+    tf33 ( fs )
+  { }
+
+  // eval puts the two steps together and provides a ray coordinate
+  // in the source facet's CS.
+
+  template < typename I , typename O >
+  void eval ( const I & _in , O & out )
+  {
+    tf23.eval ( _in , out ) ;
     tf33.eval ( out , out ) ;
   }
 } ;
@@ -1509,44 +1641,60 @@ void fuse ( int ninputs )
         work ( get_ray , env_v[f] ) ;
         return ;
       }
-
-      // note this setting VVV - we needn't normalize the ray here.
-
-      STP < float , 16 , false > get_ray
-        ( basis1_v[f][0] , basis1_v[f][1] , basis1_v[f][2] ,
-          args.width , args.height ,
-          args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-      if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
-           || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
-      {
-        // there are non-zero translation parameters for this facet,
-        // so we have to add code to handle the reprojection of the
-        // facet to the one-forward plane and the view of this plane
-        // from the translated camera position.
-        // the stepper, which only uses the rotation of the virtual
-        // camera (basis1) is suffixed with a functor handling the
-        // projection of the facet to the reprojection plane and the
-        // application of the camera translation.
-
-        ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
-        trxyz = rot_plane[f] ( trxyz ) ;
-
-        reproject_t rprj ( trxyz , basis2_v[f] ) ;
-
-        suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
-
-        // the resulting object is a get_t in it's own right, and
-        // all that's left to do now is to call work:
-
-        work ( sfg , env_v[f] ) ;
-      }
       else
       {
-        // all translation parameters are zero. this is easy:
-
+        // TODO: currently routing through generic_stepper unconditionally,
+        // to test the code. If there is no translation and no --single
+        // argument, the code using straight STP (below) can be rectivated,
+        // it should be faster.
+        if ( args.verbose )
+          std::cout << "using tf-ex-args "
+                    << args.single << std::endl ;
+        generic_stepper < float , 16 > get_ray
+          ( args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ,
+            0 , 0 , tf_ex_args < float , 16 > ( fct ) ) ;
         work ( get_ray , env_v[f] ) ;
+        return ;
       }
+
+      // // note this setting VVV - we needn't normalize the ray here.
+      // 
+      // STP < float , 16 , false > get_ray
+      //   ( basis1_v[f][0] , basis1_v[f][1] , basis1_v[f][2] ,
+      //     args.width , args.height ,
+      //     args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      // 
+      // if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
+      //      || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
+      // {
+      //   // there are non-zero translation parameters for this facet,
+      //   // so we have to add code to handle the reprojection of the
+      //   // facet to the one-forward plane and the view of this plane
+      //   // from the translated camera position.
+      //   // the stepper, which only uses the rotation of the virtual
+      //   // camera (basis1) is suffixed with a functor handling the
+      //   // projection of the facet to the reprojection plane and the
+      //   // application of the camera translation.
+      // 
+      //   ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
+      //   trxyz = rot_plane[f] ( trxyz ) ;
+      // 
+      //   reproject_t rprj ( trxyz , basis2_v[f] ) ;
+      // 
+      //   suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
+      // 
+      //   // the resulting object is a get_t in it's own right, and
+      //   // all that's left to do now is to call work:
+      // 
+      //   work ( sfg , env_v[f] ) ;
+      // }
+      // else
+      // {
+      //   // all translation parameters are zero. this is easy:
+      // 
+      //   work ( get_ray , env_v[f] ) ;
+      // }
     }
     else
     {
@@ -1574,45 +1722,61 @@ void fuse ( int ninputs )
               0 , 0 , tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
           get_v.push_back ( get_ray ) ;
         }
-        else if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
-                  || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
-        {
-          // if there are translation parameters for this facet,
-          // proceed as in the single-facet case: suffix the stepper
-          // with a reproject_t and then push the resulting object
-          // to get_v (it's 'grokked' in the process, because the
-          // get_v vector is a vector of grok_get_t)
-
-          STP < float , 16 , false > get_ray
-            ( basis1_v[i][0] , basis1_v[i][1] , basis1_v[i][2] ,
-              args.width , args.height ,
-              args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-          ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
-          trxyz = rot_plane[i] ( trxyz ) ;
-
-          reproject_t rprj ( trxyz , basis2_v[i] ) ;
-
-          suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
-          get_v.push_back ( sfg ) ;
-        }
         else
         {
-          // no translation parameters.
+          // TODO: currently routing through generic_stepper unconditionally,
+          // to test the code. If there is no translation and no --single
+          // argument, the code using straight STP (below) can be rectivated,
+          // it should be faster.
 
-          // set up a simple single-coordinate stepper of the type
-          // fixed by 'STP'. This route is taken with direct b-spline
-          // interpolation (no twining)
-
-          // note this setting VV - we need to normalize the ray here.
-
-          STP < float , 16 , true > get_ray
-            ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
-              args.width , args.height ,
-              args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
+          if ( args.verbose )
+            std::cout << "using tf-ex-ergs "
+                      << args.single << std::endl ;
+          generic_stepper < float , 16 > get_ray
+            ( args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ,
+              0 , 0 , tf_ex_args < float , 16 > ( fct ) ) ;
           get_v.push_back ( get_ray ) ;
         }
+        // else if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
+        //           || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
+        // {
+        //   // if there are translation parameters for this facet,
+        //   // proceed as in the single-facet case: suffix the stepper
+        //   // with a reproject_t and then push the resulting object
+        //   // to get_v (it's 'grokked' in the process, because the
+        //   // get_v vector is a vector of grok_get_t)
+        // 
+        //   STP < float , 16 , false > get_ray
+        //     ( basis1_v[i][0] , basis1_v[i][1] , basis1_v[i][2] ,
+        //       args.width , args.height ,
+        //       args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        // 
+        //   ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
+        //   trxyz = rot_plane[i] ( trxyz ) ;
+        // 
+        //   reproject_t rprj ( trxyz , basis2_v[i] ) ;
+        // 
+        //   suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
+        //   get_v.push_back ( sfg ) ;
+        // }
+        // else
+        // {
+        //   // no translation parameters.
+        // 
+        //   // set up a simple single-coordinate stepper of the type
+        //   // fixed by 'STP'. This route is taken with direct b-spline
+        //   // interpolation (no twining)
+        // 
+        //   // note this setting VV - we need to normalize the ray here.
+        // 
+        //   STP < float , 16 , true > get_ray
+        //     ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
+        //       args.width , args.height ,
+        //       args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        // 
+        //   get_v.push_back ( get_ray ) ;
+        // }
       }
 
       // for now, we use a hard-coded synopsis-forming object
