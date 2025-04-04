@@ -80,14 +80,16 @@ template < typename T = double , typename U = double >
 xel_t<U,3> rotate ( const xel_t<U,3> & lhs ,
                     const r3_t<T> & rhs )
 {
-  return { lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2] } ;
+  return (   ( lhs[0] * rhs[0] )
+           + ( lhs[1] * rhs[1] )
+           + ( lhs[2] * rhs[2] ) ) ;
 }
 
 // rotate a rotation matrix 'lhs' with the rotation matrix 'rhs'
 // this is a concatenation of the two rotations.
 
-template < typename T = double >
-r3_t<T> rotate ( const r3_t<T> & lhs , const r3_t<T> & rhs )
+template < typename T = double , typename U = double >
+r3_t<T> rotate ( const r3_t<T> & lhs , const r3_t<U> & rhs )
 {
   return { rotate ( lhs[0] , rhs ) ,
            rotate ( lhs[1] , rhs ) ,

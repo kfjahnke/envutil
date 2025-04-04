@@ -999,6 +999,7 @@ struct generic_r3
 : public unary_functor < xel_t<T,3> , xel_t<T,3> , L >
 {
   grok_type < xel_t<T,3> , xel_t<T,3> , L > ev ;
+  typedef r3_t < T > r_t ;
 
   generic_r3 ( const facet_spec & ft ,
                const facet_spec & fs )
@@ -1006,28 +1007,28 @@ struct generic_r3
     // here, the facet passed in f is in the 'camera' position
     // r_camera takes us from target coordinates to model space:
 
-    r3_t r_camera = make_r3_t ( ft.roll , ft.pitch , ft.yaw , false ) ;
+    r_t r_camera = make_r3_t ( ft.roll , ft.pitch , ft.yaw , false ) ;
 
     // this rotation takes us to the traget's translation plane
 
-    r3_t rt_tp = make_r3_t ( ft.tp_r , ft.tp_p , ft.tp_y , true ) ;
+    r_t rt_tp = make_r3_t ( ft.tp_r , ft.tp_p , ft.tp_y , true ) ;
 
     // this rotation takes us back to model space
 
-    r3_t rt_tpi = make_r3_t ( ft.tp_r , ft.tp_p , ft.tp_y , false ) ;
+    r_t rt_tpi = make_r3_t ( ft.tp_r , ft.tp_p , ft.tp_y , false ) ;
 
     // this rotation takes us from model space to the source facet's
     // translation plane
 
-    r3_t rs_tp = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , true ) ;
+    r_t rs_tp = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , true ) ;
 
     // this rotation takes us back to model space
 
-    r3_t rs_tpi = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , false ) ;
+    r_t rs_tpi = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , false ) ;
 
     // this rotation takes us to the source facet's CS
 
-    r3_t r_facet = make_r3_t ( fs.roll , fs.pitch , fs.yaw , true ) ;
+    r_t r_facet = make_r3_t ( fs.roll , fs.pitch , fs.yaw , true ) ;
 
     bool have_ttp = ( ft.tr_x != 0 || ft.tr_y != 0 || ft.tr_z != 0 ) ;
     bool have_stp = ( fs.tr_x != 0 || fs.tr_y != 0 || fs.tr_z != 0 ) ;
@@ -1078,23 +1079,24 @@ struct generic_r3
     // away, depending on TrZ.
   
     T dcp = ( 1.0 - ft.tr_z ) ;
+    typedef r3_t < T > r_t ;
 
     if ( have_ttp )
     {
       if ( have_stp )
       {
         std::cout << "case 1: ttp and stp" << std::endl ;
-        r3_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
+        r_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
         tf3d_t < T , L > tf3d1 ( r_to_ttp , rt_tpi , shift_t , dcp ) ;
-        r3_t md_to_facet = rotate ( rs_tpi , r_facet ) ;
+        r_t md_to_facet = rotate ( rs_tpi , r_facet ) ;
         tf3d_t < T , L > tf3d2 ( rs_tp , md_to_facet , shift_s ) ;
         ev = tf3d1 + tf3d2 ;
       }
       else
       {
         std::cout << "case 2: ttp only" << std::endl ;
-        r3_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
-        r3_t ttp_to_facet = rotate ( rt_tpi , r_facet ) ;
+        r_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
+        r_t ttp_to_facet = rotate ( rt_tpi , r_facet ) ;
         tf3d_t < T , L > tf3d1 ( r_to_ttp , ttp_to_facet , shift_t , dcp ) ;
         ev = tf3d1 ;
       }
@@ -1104,8 +1106,8 @@ struct generic_r3
       if ( have_stp )
       {
         std::cout << "case 3: stp only" << std::endl ;
-        r3_t r_to_stp = rotate ( r_camera , rs_tp ) ;
-        r3_t stp_to_facet = rotate ( rs_tpi , r_facet ) ;
+        r_t r_to_stp = rotate ( r_camera , rs_tp ) ;
+        r_t stp_to_facet = rotate ( rs_tpi , r_facet ) ;
         tf3d_t < T , L > tf3d1 ( r_to_stp , stp_to_facet , shift_s ) ;
         ev = tf3d1 ;
       }
@@ -1113,7 +1115,7 @@ struct generic_r3
       {
         // this is the simplest case: no translation in both facets
         std::cout << "case 4: no translation" << std::endl ;
-        r3_t r_complete = rotate ( r_camera , r_facet ) ;
+        r_t r_complete = rotate ( r_camera , r_facet ) ;
         ev = rotate_t < T , L > ( r_complete ) ;
       }
     }
@@ -1127,24 +1129,26 @@ struct generic_r3
 
   generic_r3 ( const facet_spec & fs )
   {
+    typedef r3_t < T > r_t ;
+    
     // here, the facet passed in f is in the 'camera' position
     // r_camera takes us from target coordinates to model space:
 
-    r3_t r_camera = make_r3_t
+    r_t r_camera = make_r3_t
       ( args.roll , args.pitch , args.yaw , false ) ;
 
     // this rotation takes us from model space to the source facet's
     // translation plane
 
-    r3_t rs_tp = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , true ) ;
+    r_t rs_tp = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , true ) ;
 
     // this rotation takes us back to model space
 
-    r3_t rs_tpi = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , false ) ;
+    r_t rs_tpi = make_r3_t ( fs.tp_r , fs.tp_p , fs.tp_y , false ) ;
 
     // this rotation takes us to the source facet's CS
 
-    r3_t r_facet = make_r3_t ( fs.roll , fs.pitch , fs.yaw , true ) ;
+    r_t r_facet = make_r3_t ( fs.roll , fs.pitch , fs.yaw , true ) ;
 
     bool have_stp = ( fs.tr_x != 0 || fs.tr_y != 0 || fs.tr_z != 0 ) ;
 
@@ -1160,8 +1164,8 @@ struct generic_r3
     if ( have_stp )
     {
       std::cout << "case 3: stp only" << std::endl ;
-      r3_t r_to_stp = rotate ( r_camera , rs_tp ) ;
-      r3_t stp_to_facet = rotate ( rs_tpi , r_facet ) ;
+      r_t r_to_stp = rotate ( r_camera , rs_tp ) ;
+      r_t stp_to_facet = rotate ( rs_tpi , r_facet ) ;
       tf3d_t < T , L > tf3d1 ( r_to_stp , stp_to_facet , shift_s ) ;
       ev = tf3d1 ;
     }
@@ -1169,7 +1173,7 @@ struct generic_r3
     {
       // this is the simplest case: no translation in both facets
       std::cout << "case 4: no translation" << std::endl ;
-      r3_t r_complete = rotate ( r_camera , r_facet ) ;
+      r_t r_complete = rotate ( r_camera , r_facet ) ;
       ev = rotate_t < T , L > ( r_complete ) ;
     }
   }
