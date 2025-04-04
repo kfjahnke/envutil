@@ -1901,9 +1901,7 @@ struct tf3d_t
 
     if ( has_shift )
     {
-      // std::cout << "in b4 rot.       " << in << std::endl ;
       out = rotate ( in , trg_to_md ) ;
-      // std::cout << "in after rot.    " << out << std::endl ;
       auto mask = ( out[2] <= 0.0f ) ;
       if ( all_of ( mask ) )
       {
@@ -1916,7 +1914,6 @@ struct tf3d_t
         out[0] /= out[2] ;
         out[1] /= out[2] ;
         out[2] = 1.0f ;
-        // std::cout << "after prj to p " << out << std::endl ;
 
         // the scaling with dcp is only needed when recreating a
         // single source image with '--single' - for the 'normal'
@@ -1925,9 +1922,7 @@ struct tf3d_t
         out *= dcp ;
 
         out -= shift ;
-        // std::cout << "after shift     " << out << std::endl ;
         out = rotate ( out , md_to_src ) ;
-        // std::cout << "after final rot " << out << std::endl ;
 
         if ( any_of ( mask ) )
         {

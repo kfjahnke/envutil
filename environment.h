@@ -98,10 +98,10 @@ struct source_t
   std::shared_ptr < spl_t > p_bspl ;
   zimt::grok_type < crd_t , px_t , L > bsp_ev ;
 
-  // the c'tor with arguments receives a view to image data and extracts
-  // the relevant values to access these data directly. This is the route
-  // taken for direct bilinear interpolation of the source data. Note how
-  // we cast data() to float to 'shed' the channel count from the type
+  // we may receive a nullptr in p_bspl. this can occur if there is
+  // a 'solo' argument, in which case loading image data for the other
+  // facets is futile. This will leave bsp_ev in it's default-c'ted
+  // state, which is okay, since it won't be called.
 
   source_t ( std::shared_ptr < spl_t > _p_bspl , int masked )
   : p_bspl ( _p_bspl ) ,
@@ -110,7 +110,8 @@ struct source_t
   {
     if ( masked == -1 )
     {
-      bsp_ev = make_safe_evaluator < spl_t , float , L > ( *p_bspl ) ;
+      if ( p_bspl )
+        bsp_ev = make_safe_evaluator < spl_t , float , L > ( *p_bspl ) ;
     }
     else if ( nchannels == 1 || nchannels == 3 )
     {
@@ -118,7 +119,8 @@ struct source_t
     }
     else
     {
-      bsp_ev = alpha_masking_t < nchannels , L >
+      if ( p_bspl )
+        bsp_ev = alpha_masking_t < nchannels , L >
                  ( masked , p_bspl ) ;
     }
   }
@@ -1108,18 +1110,19 @@ struct _environment
     // masking jobs for images without an alpha channel don't
     // need image data, so we don't set up a b-spline at all
     // and leave p_bspl at it's default value of nullptr.
+    // for 'solo' jobs, it's also futile to load image data
+    // for all but the 'solo' facet, so if we have a 'solo'
+    // argument and the currently handled facet is not the solo
+    // facet, we also skip over the image-loading code and leave
+    // p_bspl nullptr.
 
-    if ( fct.masked == -1 || ( C == 2 || C == 4 ) )
+    bool load_facet = ( fct.masked == -1 || ( C == 2 || C == 4 ) ) ;
+
+    if ( args.solo >= 0 && fct.facet_no != args.solo )
+      load_facet = false ;
+
+    if ( load_facet )
     {
-      // if the facet is subject to masking or cropping, it's
-      // alpha channel was created if it wasn't already present,
-      // and the masking/cropping information is encoded in the
-      // alpha channel. So we can't reuse the image data, because
-      // then we'd only get the masking/cropping of the first facet
-      // using this image file, which is wrong. hence:
-
-      // bool alpha_modified = fct.have_pto_mask || fct.have_crop ;
-
       auto it = spl_map.find ( fct.asset_key ) ;
 
       if ( it != spl_map.end() ) // && alpha_modified == false )

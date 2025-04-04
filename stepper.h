@@ -1645,6 +1645,31 @@ struct deriv_stepper
           _a0 , _a1 , _b0 , _b1 , 0 , bias )
     { }
 
+  // c'tor overload for generic steppers. Here, we don't have the
+  // three basis vectors - the rotation is incorporated in the
+  // tf_t functor.
+
+  typedef grok_type < xel_t < float , 2 > ,
+                      xel_t < float , 3 > ,
+                      L > tf_t ;
+
+  deriv_stepper ( int _width ,
+                  int _height ,
+                  T _a0 ,
+                  T _a1 ,
+                  T _b0 ,
+                  T _b1 ,
+                  const tf_t & tf ,
+                  T bias = .25
+                )
+  : r00 ( _width , _height ,
+          _a0 , _a1 , _b0 , _b1 , 0 , 0 , tf ) ,
+    r10 ( _width , _height ,
+          _a0 , _a1 , _b0 , _b1 , bias , 0 , tf ) ,
+    r01 ( _width , _height ,
+          _a0 , _a1 , _b0 , _b1 , 0 , bias , tf )
+    { }
+
   void init ( crd9_v & trg , const crd_t & crd )
   {
     crd3_v trg00 , trg10 , trg01 ;

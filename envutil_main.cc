@@ -753,13 +753,13 @@ void arguments::init ( int argc , const char ** argv )
     fspec.tr_x = fspec.tr_y = fspec.tr_z = 0.0 ;
     fspec.tp_y = fspec.tp_p = fspec.tp_r = 0.0 ;
     fspec.shear_g = fspec.shear_t = 0.0 ;
-    fspec.a = fspec.b = fspec.c = fspec.h = fspec.v ;
+    fspec.a = fspec.b = fspec.c = fspec.h = fspec.v = 0.0 ;
     fspec.process_lc() ;
     fspec.shift_only = false ;
     fspec.have_crop = false ;
     fspec.have_pto_mask = false ;
     fspec.asset_key = fspec.filename ;
-    fspec.brighten =0.0 ;
+    fspec.brighten = 0.0 ;
     facet_spec_v.push_back ( fspec ) ;
   }
   nfacets += n_free_facets ;
@@ -941,6 +941,10 @@ void arguments::init ( int argc , const char ** argv )
       pitch = fspec.pitch ;
       roll = fspec.roll ;
       have_crop = false ;
+      x0 = fspec.extent.x0 ;
+      x1 = fspec.extent.x1 ;
+      y0 = fspec.extent.y0 ;
+      y1 = fspec.extent.y1 ;
     }
     else if ( p_line_present )
     {

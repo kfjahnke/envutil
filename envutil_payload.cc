@@ -994,179 +994,6 @@ struct voronoi_syn_plus
   }
 } ;
 
-// helper class 'reproject_t' is needed for facets with translation
-// parameters. It receives a ray in model space coordinates, produced
-// by a stepper. The ray is projected to the reprojection plane and
-// the translation parameters are subtracted, resulting in a ray
-// in model space coordinates. This ray is finally rotated into the
-// facet's coordinate system (by applying the basis, bs), and the
-// result - a ray in the facet's coordinate system - is written to
-// 'out'. The reproject_t object is concatenated with the stepper
-// using a 'suffixed_t' object, and the resulting get_t produces
-// the desired rays in the facet's coordinate system, which can be
-// used to pick up pixel values or serve as a quality criterion.
-// There are a few fine points to take into account: the tr_x etc.
-// values can only be taken straight from the args object if the
-// reprojection plane is not tilted (tp_* == 0) - if so, the tr_*
-// values have to be rotated accordingly - this is done in the code
-// setting up the reproject_t objects
-
-typedef xel_t < float , 3 > ray_t ;
-
-struct reproject_t 
-: public unary_functor < ray_t , ray_t , 16 >
-{
-  typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
-  typedef simdized_type < float , 16 > f_v ;
-  typedef typename f_v::mask_type mask_t ;
-
-  float tr_x , tr_y , tr_z ;
-  basis_t bs ;
-
-  reproject_t ( const ray_t & _trxyz ,
-                const basis_t & _bs )
-  : tr_x ( _trxyz[0] ) ,
-    tr_y ( _trxyz[1] ) ,
-    tr_z ( _trxyz[2] ) ,
-    bs ( _bs )
-  { }
-
-  // reprojection may not be possible: if the incoming ray has
-  // zero or negative z, it can't be projected onto the plane
-  // one-forward. If that occurs, we return a straight-back ray,
-  // which is unlikely to occur in the given context: the code
-  // aims to produce an image mosaic of several images taken of
-  // a flat surface with variying camera positions - typically
-  // varying along the horizontal and with similar distance, and
-  // also with little yaw or pitch. Incoming 'impossible' rays
-  // occur only where the source images depict content which is
-  // not on the plane of the flat surface (so, beyond it's
-  // horizon). If the partial images don't provide content
-  // 'all the way' to directly behind the camera's optical
-  // axis, the result will be 0000 anyway.
-  // To solve the problem in a truly general way, 'impossible'
-  // rays would need to be tagged recognizably, or additional
-  // information (like, a mask) would have to be passed alongside
-  // the ray data - but since the reproject_t object is built into
-  // a get_t object which produces rays (and no masks) this is not
-  // possible with the current logic. I 'tag' the 'impossible' rays
-  // with a z component of negative infinity, in case calling code
-  // needs to recognize them.
-
-  template < typename I , typename O >
-  mask_t eval ( const I & _in , O & out )
-  {
-    auto mask = ( _in[2] <= 0.0f ) ;
-    if ( all_of ( mask ) )
-    {
-      out[0] = 0.0f ;
-      out[1] = 0.0f ;
-      out[2] = - std::numeric_limits<float>::infinity() ;
-      return mask_t ( false ) ;
-    }
-    // std::cout << "* in before shift " << _in << std::endl ;
-    I in ;
-    in[0] = ( _in[0] / _in[2] ) - tr_x ;
-    in[1] = ( _in[1] / _in[2] ) - tr_y ;
-    in[2] = 1.0f - tr_z ;
-    // std::cout << "* after shift    " << in << std::endl ;
-    out = in[0] * bs[0] + in[1] * bs[1] + in[2] * bs[2] ;
-    // std::cout << "* after rotate   " << out << std::endl ;
-   if ( any_of ( mask ) )
-    {
-      out[0] ( mask ) = 0.0f ;
-      out[1] ( mask ) = 0.0f ;
-      out[2] ( mask ) = - std::numeric_limits<float>::infinity() ;
-    }
-    return ! mask ;
-  }
-} ;
-
-typedef xel_t < float , 9 > ninepack_t ;
-
-struct reproject9_t 
-: public unary_functor < ninepack_t , ninepack_t , 16 >
-{
-  typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
-
-  float tr_x , tr_y , tr_z ;
-  basis_t bs ;
-
-  reproject9_t ( const ray_t & _trxyz ,
-                 const basis_t & _bs )
-  : tr_x ( _trxyz[0] ) ,
-    tr_y ( _trxyz[1] ) ,
-    tr_z ( _trxyz[2] ) ,
-    bs ( _bs )
-  { }
-
-  // for twining, we have three rays to deal with: the current
-  // central viewing ray and the two rays corresponding with it's
-  // two 'canonical' neighbours. Here, we take the approach that
-  // an 'impossible' central ray always is accompanied by two
-  // other impossible rays, even if the canonical neighbours are
-  // valid. The effect is that twining will go through the futile
-  // exercise of evaluating the same impossible ray for each
-  // twining coefficient and sum up the results, which should be
-  // zero anyway. This seems wasteful, but should rarely occur,
-  // due to the same resoning as above: we're trying to create
-  // an image mosaic, and cases where 'impossible' rays occur
-  // are contrary to the purpose.
-
-  template < typename I , typename O >
-  void eval ( const I & _in , O & out )
-  {
-    auto mask = ( _in[2] <= 0.0f ) ;
-    if ( all_of ( mask ) )
-    {
-      out[0] = 0.0f ;
-      out[1] = 0.0f ;
-      out[2] =  - std::numeric_limits<float>::infinity() ;
-      out[3] = 0.0f ;
-      out[4] = 0.0f ;
-      out[5] =  - std::numeric_limits<float>::infinity() ;
-      out[6] = 0.0f ;
-      out[7] = 0.0f ;
-      out[8] =  - std::numeric_limits<float>::infinity() ;
-      return ;
-    }
-    I in ;
-    in[0] = ( _in[0] / _in[2] ) - tr_x ;
-    in[1] = ( _in[1] / _in[2] ) - tr_y ;
-    in[2] = 1.0f - tr_z ;
-    in[3] = ( _in[3] / _in[5] ) - tr_x ;
-    in[4] = ( _in[4] / _in[5] ) - tr_y ;
-    in[5] = 1.0f - tr_z ;
-    in[6] = ( _in[6] / _in[8] ) - tr_x ;
-    in[7] = ( _in[7] / _in[8] ) - tr_y ;
-    in[8] = 1.0f - tr_z ;
-    auto help1 = in[0] * bs[0] + in[1] * bs[1] + in[2] * bs[2] ;
-    auto help2 = in[3] * bs[0] + in[4] * bs[1] + in[5] * bs[2] ;
-    auto help3 = in[6] * bs[0] + in[7] * bs[1] + in[8] * bs[2] ;
-    out[0] = help1[0] ;
-    out[1] = help1[1] ;
-    out[2] = help1[2] ;
-    out[3] = help2[0] ;
-    out[4] = help2[1] ;
-    out[5] = help2[2] ;
-    out[6] = help3[0] ;
-    out[7] = help3[1] ;
-    out[8] = help3[2] ;
-    if ( any_of ( mask ) )
-    {
-      out[0] ( mask ) = 0.0f ;
-      out[1] ( mask ) = 0.0f ;
-      out[2] ( mask ) =  - std::numeric_limits<float>::infinity() ;
-      out[3] ( mask ) = 0.0f ;
-      out[4] ( mask ) = 0.0f ;
-      out[5] ( mask ) =  - std::numeric_limits<float>::infinity() ;
-      out[6] ( mask ) = 0.0f ;
-      out[7] ( mask ) = 0.0f ;
-      out[8] ( mask ) =  - std::numeric_limits<float>::infinity() ;
-    }
-  }
-} ;
-
 template < typename T , std::size_t L >
 struct generic_r3
 : public unary_functor < xel_t<T,3> , xel_t<T,3> , L >
@@ -1355,6 +1182,41 @@ struct generic_r3
 } ;
 
 // this functor handles the transformation of 2D model space coordinates
+// pertaining to an output image to 3D ray coordinates. here, we take the
+// parameters for the target image from 'args'. one down is a variant
+// using a facet_spec object to parameterize the target image.
+
+template < typename T , std::size_t L >
+struct tf_ex_args
+: public unary_functor < xel_t < T , 2 > ,
+                         xel_t < T , 3 > ,
+                         L >
+{
+  // 2D->3D transformation as per the facet's projection.
+
+  grok_type < xel_t < T , 2 > , xel_t < T , 3 > , L > tf23 ;
+
+  // 3D->3D transformation, may contain inverse translation
+
+  generic_r3 < T , L > tf33 ;
+
+  tf_ex_args ( const facet_spec & fs )
+  : tf23 ( roll_out_23 < T , L > ( args.projection ) ) ,
+    tf33 ( fs )
+  { }
+
+  // eval puts the two steps together and provides a ray coordinate
+  // in the source facet's CS.
+
+  template < typename I , typename O >
+  void eval ( const I & _in , O & out )
+  {
+    tf23.eval ( _in , out ) ;
+    tf33.eval ( out , out ) ;
+  }
+} ;
+
+// this functor handles the transformation of 2D model space coordinates
 // pertaining to an output image to 3D ray coordinates. The speciality
 // here is that the output is recreating one of the facets, so there
 // is a '--single' argument, or we're looking at control points where
@@ -1405,36 +1267,6 @@ struct tf_ex_facet
     I in ;
     tf22.eval ( _in , in ) ;
     tf23.eval ( in , out ) ;
-    tf33.eval ( out , out ) ;
-  }
-} ;
-
-template < typename T , std::size_t L >
-struct tf_ex_args
-: public unary_functor < xel_t < T , 2 > ,
-                         xel_t < T , 3 > ,
-                         L >
-{
-  // 2D->3D transformation as per the facet's projection.
-
-  grok_type < xel_t < T , 2 > , xel_t < T , 3 > , L > tf23 ;
-
-  // 3D->3D transformation, may contain inverse translation
-
-  generic_r3 < T , L > tf33 ;
-
-  tf_ex_args ( const facet_spec & fs )
-  : tf23 ( roll_out_23 < T , L > ( args.projection ) ) ,
-    tf33 ( fs )
-  { }
-
-  // eval puts the two steps together and provides a ray coordinate
-  // in the source facet's CS.
-
-  template < typename I , typename O >
-  void eval ( const I & _in , O & out )
-  {
-    tf23.eval ( _in , out ) ;
     tf33.eval ( out , out ) ;
   }
 } ;
@@ -1604,10 +1436,39 @@ void fuse ( int ninputs )
   // - ninputs is either 3 or 9 - 3 for direct interpolation
   //   and 9 for 'twining'
 
-  // - we may have only a single facet, in which case we can
-  //   handle the job with leaner code
+  // - we may have only a single source facet, in which case we
+  //   can handle the job with leaner code
 
   // - facets may come with or without translation parameters
+  //   or lens correction parameters
+
+  // - the target may be an 'ordinary' image specified in 'args'
+  //   or a 'single' image recreating a facet, which may make it
+  //   necessary to add inverse translation and lens correction
+  //   to recreate the facet as faithfully as possible.
+
+  // we need to determine whether to use a generic stepper or
+  // the stepper encoded in STP - the latter only handles a
+  // single rotation directly to the target image, which can't
+  // have attributes like lens correction or tanslation - this
+  // is currently only possible when passing --single. If we do
+  // have a --single argument, we use the generic stepper
+  // unconditionally, and set generic_target to this effect.
+
+  bool generic_target = false ;
+  bool generic_source = false ;
+
+  if ( args.single != -1 )
+  {
+    // let's look at the 'single' facet. If it has lens
+    // correction or translation active, we set 'generic_target'
+    // to trigger the use of a generic stepper.
+
+    auto const & fct ( args.facet_spec_v [ args.single ] ) ;
+
+    if ( fct.lens_correction_active || fct.translation_active )
+      generic_target = true ;
+  }
 
   if ( ninputs == 3 )
   {
@@ -1620,95 +1481,21 @@ void fuse ( int ninputs )
       // Note how we use a stepper which does not normalize it's result:
       // Since we don't compare the z component of the ray as quality
       // criterion (which we'd do for multiple facets) we can do without
-      // the normalization.
+      // the normalization. (TODO: check this for the first two cases)
 
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
 
       int f = args.solo ;
-      const auto & fct ( args.facet_spec_v [ f ] ) ; // shorthand
+      const auto & fct ( args.facet_spec_v [ f ] ) ;
 
-      if ( args.single >= 0 )
+      generic_source = (    fct.lens_correction_active
+                         || fct.translation_active ) ;
+
+      if ( generic_source || generic_target )
       {
-        if ( args.verbose )
-          std::cout << "re-creating single facet "
-                    << args.single << std::endl ;
-        const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
-        generic_stepper < float , 16 > get_ray
-          ( args.width , args.height ,
-            args.x0 , args.x1 , args.y0 , args.y1 ,
-            0 , 0 , tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
-        work ( get_ray , env_v[f] ) ;
-        return ;
-      }
-      else
-      {
-        // TODO: currently routing through generic_stepper unconditionally,
-        // to test the code. If there is no translation and no --single
-        // argument, the code using straight STP (below) can be rectivated,
-        // it should be faster.
-        if ( args.verbose )
-          std::cout << "using tf-ex-args "
-                    << args.single << std::endl ;
-        generic_stepper < float , 16 > get_ray
-          ( args.width , args.height ,
-            args.x0 , args.x1 , args.y0 , args.y1 ,
-            0 , 0 , tf_ex_args < float , 16 > ( fct ) ) ;
-        work ( get_ray , env_v[f] ) ;
-        return ;
-      }
-
-      // // note this setting VVV - we needn't normalize the ray here.
-      // 
-      // STP < float , 16 , false > get_ray
-      //   ( basis1_v[f][0] , basis1_v[f][1] , basis1_v[f][2] ,
-      //     args.width , args.height ,
-      //     args.x0 , args.x1 , args.y0 , args.y1 ) ;
-      // 
-      // if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
-      //      || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
-      // {
-      //   // there are non-zero translation parameters for this facet,
-      //   // so we have to add code to handle the reprojection of the
-      //   // facet to the one-forward plane and the view of this plane
-      //   // from the translated camera position.
-      //   // the stepper, which only uses the rotation of the virtual
-      //   // camera (basis1) is suffixed with a functor handling the
-      //   // projection of the facet to the reprojection plane and the
-      //   // application of the camera translation.
-      // 
-      //   ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
-      //   trxyz = rot_plane[f] ( trxyz ) ;
-      // 
-      //   reproject_t rprj ( trxyz , basis2_v[f] ) ;
-      // 
-      //   suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
-      // 
-      //   // the resulting object is a get_t in it's own right, and
-      //   // all that's left to do now is to call work:
-      // 
-      //   work ( sfg , env_v[f] ) ;
-      // }
-      // else
-      // {
-      //   // all translation parameters are zero. this is easy:
-      // 
-      //   work ( get_ray , env_v[f] ) ;
-      // }
-    }
-    else
-    {
-      // there are several facets.
-
-      // we'll have several get_t objects, one for each facet,
-      // producing rays. These get_t objects are 'grokked' to erase
-      // ther specific type (STP) and stored in this vector:
-
-      std::vector < gg_t > get_v ;
-
-      for ( int i = 0 ; i < args.nfacets ; i++ )
-      {
-        const auto & fct ( args.facet_spec_v[i] ) ; // shorthand
+        // source or target have lens correction or translation.
+        // we use a 'generic stepper'.
 
         if ( args.single >= 0 )
         {
@@ -1720,63 +1507,94 @@ void fuse ( int ninputs )
             ( args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ,
               0 , 0 , tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
-          get_v.push_back ( get_ray ) ;
+          work ( get_ray , env_v[f] ) ;
         }
         else
         {
-          // TODO: currently routing through generic_stepper unconditionally,
-          // to test the code. If there is no translation and no --single
-          // argument, the code using straight STP (below) can be rectivated,
-          // it should be faster.
-
           if ( args.verbose )
-            std::cout << "using tf-ex-ergs "
+            std::cout << "using tf-ex-args "
                       << args.single << std::endl ;
           generic_stepper < float , 16 > get_ray
             ( args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ,
               0 , 0 , tf_ex_args < float , 16 > ( fct ) ) ;
+          work ( get_ray , env_v[f] ) ;
+        }
+      }
+      else
+      {
+        // neither source nor target have translation or lens control
+        // set, so we can use the 'fast lane'
+
+        if ( args.verbose )
+          std::cout << "using 'fast lane' STP" << std::endl ;
+
+        STP < float , 16 , false > get_ray
+          ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
+            args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ) ;
+        work ( get_ray , env_v[f] ) ;
+      }
+    }
+    else
+    {
+      // there are several facets. The strategy is the same as above,
+      // but now repeated for each source facet.
+
+      // we'll have several get_t objects, one for each facet,
+      // producing rays. These get_t objects are 'grokked' to erase
+      // ther specific type (STP) and stored in this vector:
+
+      std::vector < gg_t > get_v ;
+
+      for ( int i = 0 ; i < args.nfacets ; i++ )
+      {
+        const auto & fct ( args.facet_spec_v[i] ) ; // shorthand
+
+        generic_source = (    fct.lens_correction_active
+                           || fct.translation_active ) ;
+
+        if ( generic_source || generic_target )
+        {
+          // source or target have lens correction or translation
+
+          if ( args.single >= 0 )
+          {
+            if ( args.verbose )
+              std::cout << "re-creating single facet "
+                        << args.single << std::endl ;
+            const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
+            generic_stepper < float , 16 > get_ray
+              ( args.width , args.height ,
+                args.x0 , args.x1 , args.y0 , args.y1 ,
+                0 , 0 , tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
+            get_v.push_back ( get_ray ) ;
+          }
+          else
+          {
+            if ( args.verbose )
+              std::cout << "using tf-ex-args "
+                        << args.single << std::endl ;
+            generic_stepper < float , 16 > get_ray
+              ( args.width , args.height ,
+                args.x0 , args.x1 , args.y0 , args.y1 ,
+                0 , 0 , tf_ex_args < float , 16 > ( fct ) ) ;
+            get_v.push_back ( get_ray ) ;
+          }
+        }
+        else
+        {
+          // neither source nor target have translation or lens control
+          // set, so we can use the 'fast lane'
+
+          if ( args.verbose )
+            std::cout << "using 'fast lane' STP" << std::endl ;
+          STP < float , 16 , false > get_ray
+            ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
+              args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ) ;
           get_v.push_back ( get_ray ) ;
         }
-        // else if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
-        //           || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
-        // {
-        //   // if there are translation parameters for this facet,
-        //   // proceed as in the single-facet case: suffix the stepper
-        //   // with a reproject_t and then push the resulting object
-        //   // to get_v (it's 'grokked' in the process, because the
-        //   // get_v vector is a vector of grok_get_t)
-        // 
-        //   STP < float , 16 , false > get_ray
-        //     ( basis1_v[i][0] , basis1_v[i][1] , basis1_v[i][2] ,
-        //       args.width , args.height ,
-        //       args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        // 
-        //   ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
-        //   trxyz = rot_plane[i] ( trxyz ) ;
-        // 
-        //   reproject_t rprj ( trxyz , basis2_v[i] ) ;
-        // 
-        //   suffixed_t < float , 3 , 2 , 16 > sfg ( get_ray , rprj ) ;
-        //   get_v.push_back ( sfg ) ;
-        // }
-        // else
-        // {
-        //   // no translation parameters.
-        // 
-        //   // set up a simple single-coordinate stepper of the type
-        //   // fixed by 'STP'. This route is taken with direct b-spline
-        //   // interpolation (no twining)
-        // 
-        //   // note this setting VV - we need to normalize the ray here.
-        // 
-        //   STP < float , 16 , true > get_ray
-        //     ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
-        //       args.width , args.height ,
-        //       args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        // 
-        //   get_v.push_back ( get_ray ) ;
-        // }
       }
 
       // for now, we use a hard-coded synopsis-forming object
@@ -1800,54 +1618,72 @@ void fuse ( int ninputs )
   else // ninputs == 9
   {
     // this is the code we use for twining. instead of processing
-    // simple 3D rays, we process 'ninepacks'.
+    // simple 3D rays, we process 'ninepacks'. The structure of the
+    // code is very similar to the code without twining, but now we
+    // 'wrap' the steppers in 'deriv_stepper' objects which contain
+    // three separate steppers with slightly different parameters,
+    // producing three slightly different rays which are combined in
+    // the deriv_stepper's output - a 'ninepack'.
 
     if ( args.solo != -1 )
     {
-      int f = args.solo ;
-      const auto & fct ( args.facet_spec_v[f] ) ;
-
-      // special case: there is only one facet. We have to wrap the
-      // single evaluator in a twine_t object to process the 'ninepacks'
-      // which the deriv_stepper in get_ray will produce. Using the
-      // multi-facet code would work, but would produce futile overhead.
+      // special case: use only one facet.
       // Note how we use a stepper which does not normalize it's result:
       // Since we don't compare the z component of the ray as quality
       // criterion (which we'd do for multiple facets) we can do without
-      // the normalization.
+      // the normalization. (TODO: check this for the first two cases)
 
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
 
-      if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
-           || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
-      {
-        deriv_stepper < float , 16 , STP , true > get_ray
-            ( basis1_v[f][0] , basis1_v[f][1] , basis1_v[f][2] ,
-              args.width , args.height ,
-              args.x0 , args.x1 , args.y0 , args.y1 ) ;
+      int f = args.solo ;
+      const auto & fct ( args.facet_spec_v [ f ] ) ;
 
-        twine_t < NCH , 16 >
-          twenv ( env_v[f] , args.twine_spread ) ;
-        ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
-        trxyz = rot_plane[f] ( trxyz ) ;
-        reproject9_t rprj ( trxyz , basis2_v[f] ) ;
-        suffixed_t < float , 9 , 2 , 16 > sfg ( get_ray , rprj ) ;
-        work ( sfg , twenv ) ;
+      generic_source = (    fct.lens_correction_active
+                         || fct.translation_active ) ;
+
+      if ( generic_source || generic_target )
+      {
+        // source or target have lens correction or translation.
+
+        if ( args.single >= 0 )
+        {
+          if ( args.verbose )
+            std::cout << "re-creating single facet "
+                      << args.single << std::endl ;
+          const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
+          deriv_stepper < float , 16 , generic_stepper , true > get_ray
+            ( args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ,
+              tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
+          twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
+          work ( get_ray , twenv ) ;
+        }
+        else
+        {
+          if ( args.verbose )
+            std::cout << "using tf-ex-args "
+                      << args.single << std::endl ;
+          deriv_stepper < float , 16 , generic_stepper , true > get_ray
+            ( args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ,
+              tf_ex_args < float , 16 > ( fct ) ) ;
+          twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
+          work ( get_ray , twenv ) ;
+        }
       }
       else
       {
-        // for single-facet operation with twining, we also use steppers
-        // with normalized rays:           VVVV
+        // neither source nor target have translation or lens control
+        // set, so we can use the 'fast lane'
+
+        std::cout << "using 'fast lane' STP" << std::endl ;
 
         deriv_stepper < float , 16 , STP , true > get_ray
             ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-        twine_t < NCH , 16 >
-          twenv ( env_v[f] , args.twine_spread ) ;
-
+        twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
         work ( get_ray , twenv ) ;
       }
     }
@@ -1862,46 +1698,55 @@ void fuse ( int ninputs )
       {
         const auto & fct ( args.facet_spec_v[i] ) ;
 
-        if (    fct.tr_x != 0.0 || fct.tr_y != 0.0 || fct.tr_z != 0.0
-             || fct.tp_y != 0.0 || fct.tp_p != 0.0 || fct.tp_r != 0.0 )
+        generic_source = (    fct.lens_correction_active
+                           || fct.translation_active ) ;
+
+        if ( generic_source || generic_target )
         {
-          // we set up a deriv_stepper (specialized with the stepper
-          // type given in template argument STP) which produces ninepacks
+          // source or target have lens correction or translation
 
-          // note this setting               VVV - we need normalized rays.
-
-          deriv_stepper < float , 16 , STP , true > get_ray
-              ( basis1_v[i][0] , basis1_v[i][1] , basis1_v[i][2] ,
-                args.width , args.height ,
-                args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-          // and push it to the get_v vector
-
-          ray_t trxyz { fct.tr_x , fct.tr_y , fct.tr_z } ;
-          trxyz = rot_plane[i] ( trxyz ) ;
-
-          reproject9_t rprj ( trxyz , basis2_v[i] ) ;
-
-          suffixed_t < float , 9 , 2 , 16 > sfg ( get_ray , rprj ) ;
-
-          get_v.push_back ( sfg ) ;
+          if ( args.single >= 0 )
+          {
+            if ( args.verbose )
+              std::cout << "re-creating single facet "
+                        << args.single << std::endl ;
+            const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
+            deriv_stepper < float , 16 , generic_stepper , true > get_ray
+              ( args.width , args.height ,
+                args.x0 , args.x1 , args.y0 , args.y1 ,
+                tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
+            get_v.push_back ( get_ray ) ;
+          }
+          else
+          {
+            if ( args.verbose )
+              std::cout << "using tf-ex-args "
+                        << args.single << std::endl ;
+            deriv_stepper < float , 16 , generic_stepper , true > get_ray
+              ( args.width , args.height ,
+                args.x0 , args.x1 , args.y0 , args.y1 ,
+                tf_ex_args < float , 16 > ( fct ) ) ;
+            get_v.push_back ( get_ray ) ;
+          }
         }
         else
         {
+          // neither source nor target have translation or lens control
+          // set, so we can use the 'fast lane'
+
+          std::cout << "using 'fast lane' STP" << std::endl ;
           deriv_stepper < float , 16 , STP , true > get_ray
               ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
                 args.width , args.height ,
                 args.x0 , args.x1 , args.y0 , args.y1 ) ;
-
-          // and push it to the get_v vector
-
           get_v.push_back ( get_ray ) ;
         }
       }
 
       // we set up the synopsis-forming object and introduce it to
       // the fusion_t object - which is now used via it's ninepack-
-      // processing member function.
+      // processing member function. The synopsis-forming object
+      // handles the twining as well.
 
       SYN vs ( env_v ) ;
 

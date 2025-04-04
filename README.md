@@ -417,7 +417,12 @@ command line, specifying that only content from facet x (the stitched
 image) should be taken. Finally add --single y, where y is the facet from
 the PTO file you'd like to recreate. The rendering will now produce an
 image with the metrics of facet y (from the PTO file) filled with the
-content from the stitched image (passed as 'free' facet).
+content from the stitched image (passed as 'free' facet). The special
+feature here is that the 'single'' image will be rendered with inverse
+translation and lens correction, so the 'recreation' of the single
+image is as faithful as possible. This feature can be used to produce
+a set of synthetic source images from an already-stitched panorama and
+then stitch the synthetic images with the same PTO parameters.
 
 ## --mask_for FACET_INDEX   paint this facet white, all others black
 

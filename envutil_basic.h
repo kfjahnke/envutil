@@ -399,6 +399,7 @@ struct facet_spec
   double tr_x , tr_y , tr_z ;
   double tp_y , tp_p , tp_r ;
   double shear_g , shear_t ;
+  bool translation_active ;
   double s, a, b, c, d, h, v, cap_radius , r_max ;
   bool lens_correction_active ;
   bool shift_only ;
@@ -416,7 +417,7 @@ struct facet_spec
   void process_lc()
   {
     shift_only
-      = ( a == 0.0 && b == 0.0 && c == 0.0 ) ;
+      = ( a == 0.0 && b == 0.0 && c == 0.0 && ( h != 0.0 || v != 0.0 ) ) ;
 
     lens_correction_active
       = ( a != 0.0 || b != 0.0 || c != 0.0 || h != 0.0 || v != 0.0 ) ;
@@ -454,6 +455,10 @@ struct facet_spec
     d1 = std::max ( d1 , d3 ) ;
     d1 = std::max ( d1 , d4 ) ;
     cap_radius = sqrt ( d1 ) ;
+
+    // check for translation parameters
+
+    translation_active = ( tr_x != 0 || tr_y != 0 || tr_z != 0 ) ;
   }
 
   void get_image_metrics()
