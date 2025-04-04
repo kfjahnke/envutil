@@ -557,6 +557,8 @@ struct arguments
   std::vector < std::string > facet_pitch_v ;
   std::vector < std::string > facet_roll_v ;
 
+  std::vector < std::string > addenda ;
+
   std::vector < facet_spec > facet_spec_v ;
   std::vector < pto_mask_type > pto_mask_v ;
 

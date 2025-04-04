@@ -159,22 +159,34 @@ struct pto_parser_type
 
   // TODO: handle escaped quotation marks
 
-  bool read_pto_file ( const std::string & filename )
+  bool read_pto_file ( const std::string & filename ,
+                       const std::vector < std::string > & addenda 
+                         = std::vector < std::string > () )
   {
-    std::ifstream str ( filename ) ;
-    if ( ! str )
+    if ( filename != std::string() )
     {
-      std::cerr << "could not open pto file " << filename << std::endl ;
-      return false ;
+      std::ifstream str ( filename ) ;
+      if ( ! str )
+      {
+        std::cerr << "could not open pto file " << filename << std::endl ;
+        return false ;
+      }
+
+      // ought to suffice
+
+      char buffer [ 2048 ] ;
+
+      while ( str.getline ( buffer , 2048 ) )
+      {
+        bool success = parse_pto_line ( buffer ) ;
+        if ( ! success )
+          return false ;
+      }
     }
 
-    // ought to suffice
-
-    char buffer [ 2048 ] ;
-
-    while ( str.getline ( buffer , 2048 ) )
+    for ( const auto & line : addenda )
     {
-      bool success = parse_pto_line ( buffer ) ;
+      bool success = parse_pto_line ( line ) ;
       if ( ! success )
         return false ;
     }

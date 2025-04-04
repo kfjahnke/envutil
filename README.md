@@ -199,6 +199,7 @@ envutil --help gives a summary of command line options:
 
     parameters for mounted (facet) image input:
       --pto PTOFILE            panotools script in hugin PTO dialect (optional)
+      --pto_line LINE          add (trailing) line of PTO code
       --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
                               load oriented non-environment source image
       --solo FACET_INDEX      show content only from this facet
@@ -392,6 +393,23 @@ may not be present; if they are not given envutil sets them to zero.
 And if the i-line contains fields which envutil does not process, they
 are simply ignored.
 
+## --pto_line LINE          add (trailing) line of PTO code
+
+PTO format is good to specify things like source images. At times
+editing or producing a given PTO file is laborious, and if all that's
+needed can be expressed in one or a few lines of PTO code on the
+command line this is the option to use. You can pass as many PTO
+lines as you want by passing this argument repeatedly. The effect is
+precisely the same as if you added the PTO lines to the PTO script
+passed with --pto - and if you did not pass a PTO script, only the
+lines given with pto_line option(s) are used. Internally, pto_line
+arguments are simply collected and passed to the PTO parser after
+a PTO file, if there is one, so there is no special magic here.
+Any 'facet' arguments are processed after the 'pto' and 'pto_line'
+arguments - this is relevant if you need to refer to source images
+by number. See the example given in the text for the --single
+option for an example!
+
 ## --solo FACET_INDEX       show only this facet (indexes starting from zero)
 
 This is mostly useful when processing PTO files. envutil ignores all
@@ -402,10 +420,10 @@ at all, even if they would otherwise occlude the 'solo' facet.
 
 This option sounds similar to the previous one, but it affects the
 output rather than the input: the output will be rendered with the same
-projection, width, height and hfov as the facet with the given number.
+projection, width, height, hfov etc. as the facet with the given number.
 If facet FACET is oriented, the virtual camera will be oriented in the
 same way. If no other facets 'get in the way', the output should recreate
-facet FACET - with possibly small differences due to processing. This
+facet FACET - possibly with small differences due to processing. This
 doesn't sound very interesting, but there is one good use I'd like to
 point out: let's say you have a PTO file and the result from stitching
 that PTO. Now you may want to re-create one of the source images. You
@@ -418,11 +436,39 @@ image) should be taken. Finally add --single y, where y is the facet from
 the PTO file you'd like to recreate. The rendering will now produce an
 image with the metrics of facet y (from the PTO file) filled with the
 content from the stitched image (passed as 'free' facet). The special
-feature here is that the 'single'' image will be rendered with inverse
-translation and lens correction, so the 'recreation' of the single
+feature here is that the 'single' image will be rendered with *inverse
+translation and lens correction*, so the 'recreation' of the single
 image is as faithful as possible. This feature can be used to produce
 a set of synthetic source images from an already-stitched panorama and
-then stitch the synthetic images with the same PTO parameters.
+then stitch the synthetic images with the same PTO parameters, which may
+be helpful when testing panorama-related software. To give an example of
+the procedure, suppose you have a pto 'pano.pto' with four source images
+and the stitched output 'pano.tif', let's say it's a full spherical.
+To recreate the second source image (so, number 1) from pano.tif:
+
+    envutil --pto pano.pto \
+            --facet pano.tif spherical 360 0 0 0 \
+            --solo 4 --single 1 --output image1.tif
+
+At times you want to add further specifications to the 'solo' facet,
+e.g. lens correction parameters or translation parameters. envutil
+does not provide command line arguments for these specific values,
+but you can add trailing lines of PTO code with one or several
+--pto_line arguments. Here's an example specifying a solo facet with
+a specific Eev value:
+
+    envutil --pto pano.pto \
+            --pto_line 'i f4 v360 n"pano.tif" Eev13.5' \
+            --solo 4 --single 1 --output image1.tif
+
+Apart from the Eev parameter this is just the same as the previous
+invocation, but the syntax is plain PTO: you add an 'i' line
+specifying an additional source image 'pano.tif' in spherical
+projection (f4) and 360 degrees fov (v360). Note that it's enough
+to specify only the parameters you need.
+
+This feature is also handy for shell scripts or other scenarios where
+you want to use envutil as a helper program.
 
 ## --mask_for FACET_INDEX   paint this facet white, all others black
 

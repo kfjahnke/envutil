@@ -54,8 +54,8 @@ endif()
 # set(ENV{CC} clang)
 
 set(envutil_major 0)
-set(envutil_minor 1)
-set(envutil_patch 2)
+set(envutil_minor 2)
+set(envutil_patch 0)
 
 message(STATUS "VERSION = ${envutil_major}.${envutil_minor}.${envutil_patch}")
 

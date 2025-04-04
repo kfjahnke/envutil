@@ -366,6 +366,9 @@ void arguments::init ( int argc , const char ** argv )
                   &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v )
     .help("load oriented non-environment source image") ;
 
+  ap.add_argument("--pto_line %L:LINE", &addenda )
+    .help("add (trailing) line of PTO code") ;
+
   ap.add_argument("--solo FACET_INDEX")
     .help("show only this facet (indexes starting from zero)")
     .metavar("FACET_INDEX") ;
@@ -435,7 +438,7 @@ void arguments::init ( int argc , const char ** argv )
   }
   projection = projection_t ( prj ) ;
 
-  if ( pto_file == std::string() )
+  if ( pto_file == std::string() && addenda.size() == 0 )
     assert ( args.facet_name_v.size() > 0 ) ;
   assert ( output != std::string() ) ;
 
@@ -472,13 +475,13 @@ void arguments::init ( int argc , const char ** argv )
   float eev_sum = 0.0f ;
   int eev_count = 0 ;
 
-  if ( pto_file != std::string() )
+  if ( pto_file != std::string() || addenda.size() > 0 )
   {
     if ( verbose )
       std::cout << "processing PTO file " << pto_file << std::endl ;
 
     pto_parser_type parser ;
-    auto success = parser.read_pto_file ( pto_file ) ;
+    auto success = parser.read_pto_file ( pto_file , addenda ) ;
 
     if ( verbose )
       std::cout << "PTO file parse "

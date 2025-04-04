@@ -1457,7 +1457,8 @@ void fuse ( int ninputs )
   // have attributes like lens correction or tanslation - this
   // is currently only possible when passing --single. If we do
   // have a --single argument, we use the generic stepper
-  // unconditionally, and set generic_target to this effect.
+  // if the facet has lens correction or translation active,
+  // and set generic_target to this effect.
 
   bool generic_target = false ;
   bool generic_source = false ;
@@ -1493,8 +1494,12 @@ void fuse ( int ninputs )
       int f = args.solo ;
       const auto & fct ( args.facet_spec_v [ f ] ) ;
 
-      generic_source = (    fct.lens_correction_active
-                         || fct.translation_active ) ;
+      // if the source facet has translation parameters, we also use a
+      // generic stepper. lens correction on the source side is handled
+      // by the 'environment' object, so we don't need a generic stepper
+      // for that.
+
+      generic_source = fct.translation_active ;
 
       if ( generic_source || generic_target )
       {
@@ -1506,15 +1511,39 @@ void fuse ( int ninputs )
           if ( args.verbose )
             std::cout << "re-creating single facet "
                       << args.single << std::endl ;
+
+          // we use tf_ex_facet to create the transformation from one
+          // facet's geometry to the other facet's geometry.
+          // This transformation takes us 'all the way' to 3D ray
+          // coordinates which can be fed to an 'environemnt' object
+          // to obtain pixel values. The transformation is 'wrapped'
+          // in a generic_stepper object, which zimt::process can
+          // use to provide input to the pixel pipelines - that's
+          // done in 'work', see there.
+
+          // get a reference to the target (single) facet:
+
           const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
+
+          // create the stepper:
+
           generic_stepper < float , 16 > get_ray
             ( args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ,
               0 , 0 , tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
+
+          // invoke 'work'
+
           work ( get_ray , env_v[f] ) ;
         }
         else
         {
+          // roughly the same procedure, but taking the metrics of the
+          // output from 'args'. Here, the target can't have translation
+          // or lens correction parameters - there aren't any parameters
+          // to affect that. So it must be due to translation arguments
+          // in the source facet that we land here (generic_source is set)
+
           if ( args.verbose )
             std::cout << "using tf-ex-args "
                       << args.single << std::endl ;
@@ -1522,13 +1551,15 @@ void fuse ( int ninputs )
             ( args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ,
               0 , 0 , tf_ex_args < float , 16 > ( fct ) ) ;
+
           work ( get_ray , env_v[f] ) ;
         }
       }
       else
       {
         // neither source nor target have translation or lens control
-        // set, so we can use the 'fast lane'
+        // set, so we can use the 'fast lane', using the type of stepper
+        // encoded in 'STP' in the calling function.
 
         if ( args.verbose )
           std::cout << "using 'fast lane' STP" << std::endl ;
@@ -1537,6 +1568,7 @@ void fuse ( int ninputs )
           ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
             args.width , args.height ,
             args.x0 , args.x1 , args.y0 , args.y1 ) ;
+
         work ( get_ray , env_v[f] ) ;
       }
     }
@@ -1555,13 +1587,10 @@ void fuse ( int ninputs )
       {
         const auto & fct ( args.facet_spec_v[i] ) ; // shorthand
 
-        generic_source = (    fct.lens_correction_active
-                           || fct.translation_active ) ;
+        generic_source = fct.translation_active ;
 
         if ( generic_source || generic_target )
         {
-          // source or target have lens correction or translation
-
           if ( args.single >= 0 )
           {
             if ( args.verbose )
@@ -1588,9 +1617,6 @@ void fuse ( int ninputs )
         }
         else
         {
-          // neither source nor target have translation or lens control
-          // set, so we can use the 'fast lane'
-
           if ( args.verbose )
             std::cout << "using 'fast lane' STP" << std::endl ;
           STP < float , 16 , false > get_ray
@@ -1643,8 +1669,7 @@ void fuse ( int ninputs )
       int f = args.solo ;
       const auto & fct ( args.facet_spec_v [ f ] ) ;
 
-      generic_source = (    fct.lens_correction_active
-                         || fct.translation_active ) ;
+      generic_source = fct.translation_active ;
 
       if ( generic_source || generic_target )
       {
@@ -1702,8 +1727,7 @@ void fuse ( int ninputs )
       {
         const auto & fct ( args.facet_spec_v[i] ) ;
 
-        generic_source = (    fct.lens_correction_active
-                           || fct.translation_active ) ;
+        generic_source = fct.translation_active ;
 
         if ( generic_source || generic_target )
         {
