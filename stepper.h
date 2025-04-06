@@ -371,29 +371,7 @@ struct generic_stepper
   using base_t::init ;
   using base_t::increase ;
 
-  // we have three 3D vectors of unit length. They are orthogonal and
-  // can be produced e.g. by applying a rotational quaternion to the
-  // three cardinal vectors (1,0,0), (0,1,0), (0,0,1)
-
-  // const crd3_t xx ; 
-  // const crd3_t yy ;
-  // const crd3_t zz ;
-  tf_t tf ;
-
   // c'tor arguments:
-
-  // _xx, _yy and _zz are 3D directional vectors corresponding to
-  // (1,0,0), (0,1,0) and (0,0,1) with the rotation applied.
-  // If there is no rotation, we could use a simplified object,
-  // but this implementation is perfectly general. An alternative
-  // way to introduce these three vectors would be to pass in
-  // a rotational quaternion and rotate the three base vectors
-  // by it, but since this creates a dependency on the relevant
-  // quaternion code, I prefer to pass in the three vectors.
-  // The vectors are expected to be normalized.
-  // To put it differently: the three vectors _xx, _yy and _zz
-  // form the orthonormal basis for the rotated coordinate
-  // system in which we operate.
 
   // _width and _height are the extent, in pixels, of the field
   // of sample values which this get_t will produce - the
@@ -406,13 +384,19 @@ struct generic_stepper
   // step inwards from (_a1,_b1): we're using 'edge-to-edge
   // semantics'
 
-  // The last four arguments are the 'extent' of the 2D manifold
+  // The next four arguments are the 'extent' of the 2D manifold
   // which will be sampled, in model space units. The default
   // values will spread the sampling locations evenly over an
   // entire generic surface.
 
   // the 2D part of the work - producing the 'planar' coordinate
   // is handled by the base type.
+
+  // this functor will handle the transformation from planar
+  // target coordinates all the way to 3D ray coordinates in the
+  // source facet's CS.
+
+  tf_t tf ;
 
   generic_stepper ( // crd3_t _xx , crd3_t _yy , crd3_t _zz ,
                     int _width ,
@@ -425,10 +409,7 @@ struct generic_stepper
                     T _bias_y ,
                     const tf_t & _tf
                   )
-  : // xx ( _xx ) ,
-    // yy ( _yy ) ,
-    // zz ( _zz ) ,
-    base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
+  : base_t ( _width , _height , _a0 , _a1 , _b0 , _b1 ,
              _bias_x , _bias_y ) ,
     tf ( _tf )
   { }
@@ -446,13 +427,11 @@ struct generic_stepper
 
     // 'tf' transforms the planar coordinate to a 3D ray
 
-    // crd3_v help ;
     tf.eval ( planar , trg ) ;
     if constexpr ( normalize )
     {
       trg /= norm ( trg ) ;
     }
-    // trg = help[0] * xx + help[1] * yy + help[2] * zz ;
   }
 
   // 'capped' variant. This is only needed if the current segment is

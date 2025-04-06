@@ -253,7 +253,7 @@ void work ( get_t & get , act_t & act )
     h = args.height ;
   }
 
-  static zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
+   static zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
   
   // set up a zimt::storer to populate the target array with
   // zimt::process. This is the third component needed for
@@ -283,7 +283,35 @@ void work ( get_t & get , act_t & act )
 
   // bill.njobs = 1 ; // to run the rendering single-threaded
 
-  zimt::process ( trg.shape , get , act , cstor , bill ) ;
+  float unbrighten = 1.0f ;
+  if ( args.single >= 0 )
+  {
+    const auto & fct ( args.facet_spec_v [ args.single ] ) ;
+    if ( fct.brighten != 1.0 )
+    {
+      unbrighten = 1.0 / fct.brighten ;
+    }
+  }
+
+  if ( unbrighten != 1.0f )
+  {
+    // for 'single' jobs, undo the target facet's 'brighten'
+    // TODO tentative. linear vs. sRGB is still unresolved!
+    // Where 'brighten' is used now - so, here, and 'on the
+    // other end of the pipeline' - a whole complex of processing
+    // needs to be 'slotted in' to handle e.g. colour space
+    // conversions.
+
+    px_t amplify = unbrighten ;
+    if ( nchannels == 2 || nchannels == 4 )
+      amplify [ nchannels - 1 ] = 1.0 ;
+    amplify_type < px_t , px_t , px_t , 16 > amp ( amplify ) ;
+    zimt::process ( trg.shape , get , act + amp , cstor , bill ) ;
+  }
+  else
+  {
+    zimt::process ( trg.shape , get , act , cstor , bill ) ;
+  }
   
   std::chrono::system_clock::time_point end
     = std::chrono::system_clock::now() ;
@@ -1001,8 +1029,8 @@ struct generic_r3
   grok_type < xel_t<T,3> , xel_t<T,3> , L > ev ;
   typedef r3_t < T > r_t ;
 
-  generic_r3 ( const facet_spec & ft ,
-               const facet_spec & fs )
+  generic_r3 ( const facet_base & ft ,
+               const facet_base & fs )
   {
     // here, the facet passed in f is in the 'camera' position
     // r_camera takes us from target coordinates to model space:
@@ -1085,7 +1113,7 @@ struct generic_r3
     {
       if ( have_stp )
       {
-        std::cout << "case 1: ttp and stp" << std::endl ;
+        // std::cout << "case 1: ttp and stp" << std::endl ;
         r_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
         tf3d_t < T , L > tf3d1 ( r_to_ttp , rt_tpi , shift_t , dcp ) ;
         r_t md_to_facet = rotate ( rs_tpi , r_facet ) ;
@@ -1094,7 +1122,7 @@ struct generic_r3
       }
       else
       {
-        std::cout << "case 2: ttp only" << std::endl ;
+        // std::cout << "case 2: ttp only" << std::endl ;
         r_t r_to_ttp = rotate ( r_camera , rt_tp ) ;
         r_t ttp_to_facet = rotate ( rt_tpi , r_facet ) ;
         tf3d_t < T , L > tf3d1 ( r_to_ttp , ttp_to_facet , shift_t , dcp ) ;
@@ -1105,7 +1133,7 @@ struct generic_r3
     {
       if ( have_stp )
       {
-        std::cout << "case 3: stp only" << std::endl ;
+        // std::cout << "case 3: stp only" << std::endl ;
         r_t r_to_stp = rotate ( r_camera , rs_tp ) ;
         r_t stp_to_facet = rotate ( rs_tpi , r_facet ) ;
         tf3d_t < T , L > tf3d1 ( r_to_stp , stp_to_facet , shift_s ) ;
@@ -1114,7 +1142,7 @@ struct generic_r3
       else
       {
         // this is the simplest case: no translation in both facets
-        std::cout << "case 4: no translation" << std::endl ;
+        // std::cout << "case 4: no translation" << std::endl ;
         r_t r_complete = rotate ( r_camera , r_facet ) ;
         ev = rotate_t < T , L > ( r_complete ) ;
       }
@@ -1127,7 +1155,7 @@ struct generic_r3
   // which we process here - planar transformations are handled in
   // the 'environment' object.
 
-  generic_r3 ( const facet_spec & fs )
+  generic_r3 ( const facet_base & fs )
   {
     typedef r3_t < T > r_t ;
     
@@ -1190,36 +1218,36 @@ struct generic_r3
 // parameters for the target image from 'args'. one down is a variant
 // using a facet_spec object to parameterize the target image.
 
-template < typename T , std::size_t L >
-struct tf_ex_args
-: public unary_functor < xel_t < T , 2 > ,
-                         xel_t < T , 3 > ,
-                         L >
-{
-  // 2D->3D transformation as per the facet's projection.
-
-  grok_type < xel_t < T , 2 > , xel_t < T , 3 > , L > tf23 ;
-
-  // 3D->3D transformation, may contain inverse translation
-
-  generic_r3 < T , L > tf33 ;
-
-  tf_ex_args ( const facet_spec & fs )
-  : tf23 ( roll_out_23 < T , L > ( args.projection ) ) ,
-    tf33 ( fs )
-  { }
-
-  // eval puts the two steps together and provides a ray coordinate
-  // in the source facet's CS.
-
-  template < typename I , typename O >
-  void eval ( const I & _in , O & out )
-  {
-    tf23.eval ( _in , out ) ;
-    tf33.eval ( out , out ) ;
-  }
-} ;
-
+// template < typename T , std::size_t L >
+// struct tf_ex_args
+// : public unary_functor < xel_t < T , 2 > ,
+//                          xel_t < T , 3 > ,
+//                          L >
+// {
+//   // 2D->3D transformation as per the facet's projection.
+// 
+//   grok_type < xel_t < T , 2 > , xel_t < T , 3 > , L > tf23 ;
+// 
+//   // 3D->3D transformation, may contain inverse translation
+// 
+//   generic_r3 < T , L > tf33 ;
+// 
+//   tf_ex_args ( const facet_spec & fs )
+//   : tf23 ( roll_out_23 < T , L > ( args.projection ) ) ,
+//     tf33 ( fs )
+//   { }
+// 
+//   // eval puts the two steps together and provides a ray coordinate
+//   // in the source facet's CS.
+// 
+//   template < typename I , typename O >
+//   void eval ( const I & _in , O & out )
+//   {
+//     tf23.eval ( _in , out ) ;
+//     tf33.eval ( out , out ) ;
+//   }
+// } ;
+// 
 // this functor handles the transformation of 2D model space coordinates
 // pertaining to an output image to 3D ray coordinates. The speciality
 // here is that the output is recreating one of the facets, so there
@@ -1255,7 +1283,7 @@ struct tf_ex_facet
 
   generic_r3 < T , L > tf33 ;
 
-  tf_ex_facet ( const facet_spec & ft , const facet_spec & fs )
+  tf_ex_facet ( const facet_base & ft , const facet_base & fs )
   : tf22 ( ft.a , ft.b , ft.c , ft.s , ft.r_max ,
            ft.h , ft.v , ft.shear_g , ft.shear_t ) ,
     tf23 ( roll_out_23 < T , L > ( ft.projection ) ) ,
@@ -1291,10 +1319,11 @@ void fuse ( int ninputs )
   typedef fusion_t < float , NCH , 2 , 16 , float , 3 , SYN > fs_t ;
   typedef fusion_t < float , NCH , 2 , 16 , float , 9 , SYN > fs9_t ;
 
-  typedef zimt::xel_t < zimt::xel_t < double , 3 > , 3 > basis_t ;
-  std::vector < basis_t > basis_v ;
-  std::vector < basis_t > basis1_v ;
-  std::vector < basis_t > basis2_v ;
+  typedef r3_t < double > r_t ;
+
+  // we'll need some 3D rotations for the 'steppers':
+
+  std::vector < r_t > basis_v ;
 
   // we have a set of facet specs in args.facet_spec_v, which already
   // have the information about the facet images. Now we set up get_v,
@@ -1309,14 +1338,11 @@ void fuse ( int ninputs )
   // result.
 
   std::vector < env_t > env_v ;
-  std::vector < xel_t < double , 3 > > trxyzv ( args.nfacets ) ;
 
-  typedef rotate_3d < double , 16 > rotate_t ;
-  rotate_t r_camera ( args.roll , args.pitch , args.yaw , false ) ;
+  // r_camera takes us from target coordinates to model space:
 
-  std::vector < rotate_t > rot_plane ( args.nfacets ) ;
-  std::vector < rotate_t > rot_plane_i ( args.nfacets ) ;
-  std::vector < rotate_t > rot_facet ( args.nfacets ) ;
+  r_t r_camera = make_r3_t
+    ( args.roll , args.pitch , args.yaw , false ) ;
 
   for ( int i = 0 ; i < args.nfacets ; i++ )
   {
@@ -1328,110 +1354,19 @@ void fuse ( int ninputs )
 
     env_v.push_back ( env_t ( fct ) ) ;
 
-    // we also need several rotations stemming from the
-    // orientation of the virtual camera and the orientation
-    // of the facet. We create one such 'basis' for each
-    // of the facets and store them in a vector 'basis_v'
+    // for 'standard' steppers (encoded in template argument STP)
+    // we need the rotation from the camera's to each facet's CS:
 
-    zimt::xel_t < double , 3 > xx { 1.0 , 0.0 , 0.0 } ;
-    zimt::xel_t < double , 3 > yy { 0.0 , 1.0 , 0.0 } ;
-    zimt::xel_t < double , 3 > zz { 0.0 , 0.0 , 1.0 } ;
+    // this rotation takes us to the source facet's CS
 
-    basis_t neutral { xx , yy , zz } ;
+    r_t r_facet = make_r3_t ( fct.roll , fct.pitch , fct.yaw , true ) ;
 
-    // all facets need to process two rotations: one due to
-    // the viewer's orientation (global yaw, pitch and roll)
-    // and one due to the facet's own orientation. The first
-    // one is already set (it's the same throughout: r_camera)
-    // now we create and save the facet-specific one.
+    // and this is the combination of both rotations, taking us
+    // from the camera's CS to the facet's
 
-    rotate_3d < double , 16 > r_facet ( fct.roll ,
-                                        fct.pitch ,
-                                        fct.yaw ,
-                                        true ) ;
-    rot_facet[i] = r_facet ;
+    r_t r_complete = rotate ( r_camera , r_facet ) ;
 
-    // additionally, the reprojection plane for facets with
-    // translation can be tilted. We need both the rotation and
-    // it's inverse:
-
-    rotate_3d < double , 16 > r_plane ( fct.tp_r ,
-                                        fct.tp_p ,
-                                        fct.tp_y ,
-                                        true ) ;
-    rot_plane[i] = r_plane ;
-
-    rotate_3d < double , 16 > r_plane_i ( fct.tp_r ,
-                                          fct.tp_p ,
-                                          fct.tp_y ,
-                                          false ) ;
-    rot_plane_i[i] = r_plane_i ;
-
-    if (    fct.tr_x == 0.0 && fct.tr_y == 0.0 && fct.tr_z == 0.0
-         && fct.tp_r == 0.0 && fct.tp_p == 0.0 && fct.tp_y == 0.0 )
-    {
-      // there are no translation parameters. only the combined
-      // rotations due to the orientation of the virtual camera
-      // and of the facet's orientation are used and directly
-      // fed to the stepper later on.
-
-      xx = r_camera ( xx ) ;
-      yy = r_camera ( yy ) ;
-      zz = r_camera ( zz ) ;
-
-      xx = r_facet ( xx ) ;
-      yy = r_facet ( yy ) ;
-      zz = r_facet ( zz ) ;
-
-      basis_t bs { xx , yy , zz } ;
-      basis_v.push_back ( bs ) ;
-
-      // basis1_v and basis2_v are not used, but the facet's slot
-      // has to be filled in with something, to keep all basis_v
-      // equally sized.
-
-      basis1_v.push_back ( neutral ) ;
-      basis2_v.push_back ( neutral ) ;
-    }
-    else
-    {
-      // handle yaw and pitch of the reprojection plane. The plane
-      // is always at unit distance from the master camera in the
-      // origin, and the yaw and pitch both determine the point where
-      // the unit sphere touches the plane and the plane's normal vector.
-
-      // with translation parameters, the two rotations are kept
-      // separate. the first brings us to the CS of the reprojection
-      // plane:
-
-      auto xx1 = r_camera ( xx ) ;
-      auto yy1 = r_camera ( yy ) ;
-      auto zz1 = r_camera ( zz ) ;
-
-      xx1 = r_plane ( xx1 ) ;
-      yy1 = r_plane ( yy1 ) ;
-      zz1 = r_plane ( zz1 ) ;
-
-      basis_t bs1 { xx1 , yy1 , zz1 } ;
-      basis1_v.push_back ( bs1 ) ;
-
-      // the second one brings us to the CS of the facet - rays which
-      // have been through the chain of transformations will now be
-      // usable with environment_t objects to produce pixel data.
-
-      auto xx2 = r_plane_i ( xx ) ;
-      auto yy2 = r_plane_i ( yy ) ;
-      auto zz2 = r_plane_i ( zz ) ;
-
-      xx2 = r_facet ( xx2 ) ;
-      yy2 = r_facet ( yy2 ) ;
-      zz2 = r_facet ( zz2 ) ;
-
-      basis_t bs2 { xx2 , yy2 , zz2 } ;
-      basis2_v.push_back ( bs2 ) ;
-
-      basis_v.push_back ( neutral ) ;
-    }
+    basis_v.push_back ( r_complete ) ;
   }
 
   // now we have a set of cases to handle, depending on the type
@@ -1463,6 +1398,8 @@ void fuse ( int ninputs )
   bool generic_target = false ;
   bool generic_source = false ;
 
+  // TODO: undo facet's 'brighten' when rendering a 'single'
+
   if ( args.single != -1 )
   {
     // let's look at the 'single' facet. If it has lens
@@ -1482,11 +1419,11 @@ void fuse ( int ninputs )
 
     if ( args.solo != -1 )
     {
-      // special case: use only one facet.
-      // Note how we use a stepper which does not normalize it's result:
+      // special case: use only one facet. We don't need a synopsis-
+      // -forming object, and we don't need normalized ray coordinates:
       // Since we don't compare the z component of the ray as quality
       // criterion (which we'd do for multiple facets) we can do without
-      // the normalization. (TODO: check this for the first two cases)
+      // the normalization.
 
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
@@ -1504,65 +1441,23 @@ void fuse ( int ninputs )
       if ( generic_source || generic_target )
       {
         // source or target have lens correction or translation.
-        // we use a 'generic stepper'.
+        // we use a 'generic stepper'. The target geometry in 'args'
+        // is contained in it's base class, facet_base, so we can
+        // simply pass 'args' as target facet geometry in the call
+        // to tf_ex_facet.
 
-        if ( args.single >= 0 )
-        {
-          if ( args.verbose )
-            std::cout << "re-creating single facet "
-                      << args.single << std::endl ;
+        generic_stepper < float , 16 , false > get_ray
+          ( args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ,
+            0 , 0 , tf_ex_facet < float , 16 > ( args , fct ) ) ;
 
-          // we use tf_ex_facet to create the transformation from one
-          // facet's geometry to the other facet's geometry.
-          // This transformation takes us 'all the way' to 3D ray
-          // coordinates which can be fed to an 'environemnt' object
-          // to obtain pixel values. The transformation is 'wrapped'
-          // in a generic_stepper object, which zimt::process can
-          // use to provide input to the pixel pipelines - that's
-          // done in 'work', see there.
-
-          // get a reference to the target (single) facet:
-
-          const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
-
-          // create the stepper:
-
-          generic_stepper < float , 16 > get_ray
-            ( args.width , args.height ,
-              args.x0 , args.x1 , args.y0 , args.y1 ,
-              0 , 0 , tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
-
-          // invoke 'work'
-
-          work ( get_ray , env_v[f] ) ;
-        }
-        else
-        {
-          // roughly the same procedure, but taking the metrics of the
-          // output from 'args'. Here, the target can't have translation
-          // or lens correction parameters - there aren't any parameters
-          // to affect that. So it must be due to translation arguments
-          // in the source facet that we land here (generic_source is set)
-
-          if ( args.verbose )
-            std::cout << "using tf-ex-args "
-                      << args.single << std::endl ;
-          generic_stepper < float , 16 > get_ray
-            ( args.width , args.height ,
-              args.x0 , args.x1 , args.y0 , args.y1 ,
-              0 , 0 , tf_ex_args < float , 16 > ( fct ) ) ;
-
-          work ( get_ray , env_v[f] ) ;
-        }
+        work ( get_ray , env_v[f] ) ;
       }
       else
       {
         // neither source nor target have translation or lens control
         // set, so we can use the 'fast lane', using the type of stepper
         // encoded in 'STP' in the calling function.
-
-        if ( args.verbose )
-          std::cout << "using 'fast lane' STP" << std::endl ;
 
         STP < float , 16 , false > get_ray
           ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
@@ -1575,7 +1470,11 @@ void fuse ( int ninputs )
     else
     {
       // there are several facets. The strategy is the same as above,
-      // but now repeated for each source facet.
+      // but now repeated for each source facet. We need normalized
+      // ray coordinates, in order to have a simple criterion for the
+      // synopsis-forming object (maximal z value) rather than having
+      // to perform more involved calculations (like the angle vs. the
+      // z axis).
 
       // we'll have several get_t objects, one for each facet,
       // producing rays. These get_t objects are 'grokked' to erase
@@ -1591,35 +1490,15 @@ void fuse ( int ninputs )
 
         if ( generic_source || generic_target )
         {
-          if ( args.single >= 0 )
-          {
-            if ( args.verbose )
-              std::cout << "re-creating single facet "
-                        << args.single << std::endl ;
-            const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
-            generic_stepper < float , 16 > get_ray
-              ( args.width , args.height ,
-                args.x0 , args.x1 , args.y0 , args.y1 ,
-                0 , 0 , tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
-            get_v.push_back ( get_ray ) ;
-          }
-          else
-          {
-            if ( args.verbose )
-              std::cout << "using tf-ex-args "
-                        << args.single << std::endl ;
-            generic_stepper < float , 16 > get_ray
-              ( args.width , args.height ,
-                args.x0 , args.x1 , args.y0 , args.y1 ,
-                0 , 0 , tf_ex_args < float , 16 > ( fct ) ) ;
-            get_v.push_back ( get_ray ) ;
-          }
+          generic_stepper < float , 16 , true > get_ray
+            ( args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ,
+              0 , 0 , tf_ex_facet < float , 16 > ( args , fct ) ) ;
+          get_v.push_back ( get_ray ) ;
         }
         else
         {
-          if ( args.verbose )
-            std::cout << "using 'fast lane' STP" << std::endl ;
-          STP < float , 16 , false > get_ray
+          STP < float , 16 , true > get_ray
             ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
@@ -1661,7 +1540,7 @@ void fuse ( int ninputs )
       // Note how we use a stepper which does not normalize it's result:
       // Since we don't compare the z component of the ray as quality
       // criterion (which we'd do for multiple facets) we can do without
-      // the normalization. (TODO: check this for the first two cases)
+      // the normalization.
 
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
@@ -1673,42 +1552,16 @@ void fuse ( int ninputs )
 
       if ( generic_source || generic_target )
       {
-        // source or target have lens correction or translation.
-
-        if ( args.single >= 0 )
-        {
-          if ( args.verbose )
-            std::cout << "re-creating single facet "
-                      << args.single << std::endl ;
-          const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
-          deriv_stepper < float , 16 , generic_stepper , true > get_ray
-            ( args.width , args.height ,
-              args.x0 , args.x1 , args.y0 , args.y1 ,
-              tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
-          twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
-          work ( get_ray , twenv ) ;
-        }
-        else
-        {
-          if ( args.verbose )
-            std::cout << "using tf-ex-args "
-                      << args.single << std::endl ;
-          deriv_stepper < float , 16 , generic_stepper , true > get_ray
-            ( args.width , args.height ,
-              args.x0 , args.x1 , args.y0 , args.y1 ,
-              tf_ex_args < float , 16 > ( fct ) ) ;
-          twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
-          work ( get_ray , twenv ) ;
-        }
+        deriv_stepper < float , 16 , generic_stepper , false > get_ray
+          ( args.width , args.height ,
+            args.x0 , args.x1 , args.y0 , args.y1 ,
+            tf_ex_facet < float , 16 > ( args , fct ) ) ;
+        twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
+        work ( get_ray , twenv ) ;
       }
       else
       {
-        // neither source nor target have translation or lens control
-        // set, so we can use the 'fast lane'
-
-        std::cout << "using 'fast lane' STP" << std::endl ;
-
-        deriv_stepper < float , 16 , STP , true > get_ray
+        deriv_stepper < float , 16 , STP , false > get_ray
             ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
@@ -1731,38 +1584,14 @@ void fuse ( int ninputs )
 
         if ( generic_source || generic_target )
         {
-          // source or target have lens correction or translation
-
-          if ( args.single >= 0 )
-          {
-            if ( args.verbose )
-              std::cout << "re-creating single facet "
-                        << args.single << std::endl ;
-            const auto & fctt ( args.facet_spec_v [ args.single ] ) ;
-            deriv_stepper < float , 16 , generic_stepper , true > get_ray
-              ( args.width , args.height ,
-                args.x0 , args.x1 , args.y0 , args.y1 ,
-                tf_ex_facet < float , 16 > ( fctt , fct ) ) ;
-            get_v.push_back ( get_ray ) ;
-          }
-          else
-          {
-            if ( args.verbose )
-              std::cout << "using tf-ex-args "
-                        << args.single << std::endl ;
-            deriv_stepper < float , 16 , generic_stepper , true > get_ray
-              ( args.width , args.height ,
-                args.x0 , args.x1 , args.y0 , args.y1 ,
-                tf_ex_args < float , 16 > ( fct ) ) ;
-            get_v.push_back ( get_ray ) ;
-          }
+          deriv_stepper < float , 16 , generic_stepper , true > get_ray
+            ( args.width , args.height ,
+              args.x0 , args.x1 , args.y0 , args.y1 ,
+              tf_ex_facet < float , 16 > ( args , fct ) ) ;
+          get_v.push_back ( get_ray ) ;
         }
         else
         {
-          // neither source nor target have translation or lens control
-          // set, so we can use the 'fast lane'
-
-          std::cout << "using 'fast lane' STP" << std::endl ;
           deriv_stepper < float , 16 , STP , true > get_ray
               ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
                 args.width , args.height ,

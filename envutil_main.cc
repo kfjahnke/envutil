@@ -152,7 +152,7 @@ bool facet_spec::init ( int argc , const char ** argv )
   ArgParse ap;
 
   ap.add_argument("--facet %s:IMAGE %s:PROJECTION %F:HFOV %F:YAW %F:PITCH %F:ROLL", &filename , &projection_str, &hfov, &yaw, &pitch, &roll)
-    .help("load oriented non-environment source image") ;
+    .help("load oriented source ('facet') image") ;
 
   if (ap.parse(argc, argv) < 0 ) {
       std::cerr << ap.geterror() << std::endl;
@@ -261,6 +261,10 @@ void arguments::init ( int argc , const char ** argv )
   ap.arg("--single FACET")
     .help("render an image like facet FACET")
     .metavar("FACET");
+
+  ap.arg("--split FORMAT_STRING")
+    .help("create a 'single' facet for all facets in a PTO")
+    .metavar("FORMAT_STRING");
 
   ap.arg("--yaw ANGLE")
     .help("yaw of the virtual camera")
@@ -398,6 +402,7 @@ void arguments::init ( int argc , const char ** argv )
   seqfile = ap["seqfile"].as_string ( "" ) ;
   pto_file = ap["pto"].as_string ( "" ) ;
   twf_file = ap["twf_file"].as_string ( "" ) ;
+  split = ap["split"].as_string ( "" ) ;
   // fct_file = ap["fct_file"].as_string ( "" ) ;
   codec = ap["codec"].as_string ( "libx265" ) ; 
   mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
@@ -423,7 +428,7 @@ void arguments::init ( int argc , const char ** argv )
   yaw = ap["yaw"].get<float>(0.0);
   pitch = ap["pitch"].get<float>(0.0);
   roll = ap["roll"].get<float>(0.0);
-  prj_str = ap["projection"].as_string ( "rectilinear" ) ;
+  projection_str = ap["projection"].as_string ( "rectilinear" ) ;
 
   if ( prefilter_degree < 0 )
     prefilter_degree = spline_degree ;
@@ -432,7 +437,7 @@ void arguments::init ( int argc , const char ** argv )
   int prj = 0 ;
   for ( const auto & p : projection_name )
   {
-    if ( p == prj_str )
+    if ( p == projection_str )
       break ;
     ++ prj ;
   }
@@ -440,7 +445,7 @@ void arguments::init ( int argc , const char ** argv )
 
   if ( pto_file == std::string() && addenda.size() == 0 )
     assert ( args.facet_name_v.size() > 0 ) ;
-  assert ( output != std::string() ) ;
+  assert ( output != std::string() || split != std::string() ) ;
 
   bool ignore_p_line = false ;
 
@@ -598,8 +603,8 @@ void arguments::init ( int argc , const char ** argv )
       f.shear_t = glean ( dir [ "t" ] ) / f.width ;
       f.step = get_step ( f.projection , f.width ,
                           f.height , f.hfov ) ;
-      f.extent = get_extent ( f.projection , f.width ,
-                              f.height , f.hfov ) ;
+      (extent_type&)f = get_extent ( f.projection , f.width ,
+                                     f.height , f.hfov ) ;
       f.a = glean ( dir [ "a" ] ) ;
       f.b = glean ( dir [ "b" ] ) ;
       f.c = glean ( dir [ "c" ] ) ;
@@ -751,8 +756,8 @@ void arguments::init ( int argc , const char ** argv )
     fspec.roll *= M_PI / 180.0 ;
     fspec.step = get_step ( fspec.projection , fspec.width ,
                             fspec.height , fspec.hfov ) ;
-    fspec.extent = get_extent ( fspec.projection , fspec.width ,
-                                fspec.height , fspec.hfov ) ;
+    (extent_type&) fspec = get_extent ( fspec.projection , fspec.width ,
+                                        fspec.height , fspec.hfov ) ;
     fspec.tr_x = fspec.tr_y = fspec.tr_z = 0.0 ;
     fspec.tp_y = fspec.tp_p = fspec.tp_r = 0.0 ;
     fspec.shear_g = fspec.shear_t = 0.0 ;
@@ -935,25 +940,15 @@ void arguments::init ( int argc , const char ** argv )
 
       const auto & fspec = facet_spec_v [ single ] ;
 
-      hfov = fspec.hfov ;
-      projection = fspec.projection ;
-      prj_str = projection_name [ projection ] ;
-      width = fspec.width ;
-      height = fspec.height ;
-      yaw = fspec.yaw ;
-      pitch = fspec.pitch ;
-      roll = fspec.roll ;
-      have_crop = false ;
-      x0 = fspec.extent.x0 ;
-      x1 = fspec.extent.x1 ;
-      y0 = fspec.extent.y0 ;
-      y1 = fspec.extent.y1 ;
+      // take over the facet's geometry to the target geometry in args
+
+      (facet_base&) args = fspec ;
     }
     else if ( p_line_present )
     {
       hfov = p_line_hfov ;
       projection = p_line_projection ;
-      prj_str = projection_name [ projection ] ;
+      projection_str = projection_name [ projection ] ;
       width = p_line_width ;
       height = p_line_height ;
     }
@@ -974,7 +969,7 @@ void arguments::init ( int argc , const char ** argv )
     if ( verbose)
     {
       std::cout << "output:             " << output << std::endl ;
-      std::cout << "output projection:  " << prj_str << std::endl ;
+      std::cout << "output projection:  " << projection_str << std::endl ;
       std::cout << "output width:       " << width << std::endl ;
       std::cout << "output height:      " << height << std::endl ;
 
@@ -995,11 +990,8 @@ void arguments::init ( int argc , const char ** argv )
     step = 0.0 ;
     if ( hfov != 0.0 )
     {
-      auto extent = get_extent ( projection , width , height , hfov  ) ;
-      x0 = extent.x0 ;
-      x1 = extent.x1 ;
-      y0 = extent.y0 ;
-      y1 = extent.y1 ;
+      (extent_type&) args
+        = get_extent ( projection , width , height , hfov  ) ;
     }
     assert ( x0 < x1 ) ;
     assert ( y0 < y1 ) ;
@@ -1414,12 +1406,8 @@ int main ( int argc , const char ** argv )
       args.pitch = seq_pitch * M_PI / 180.0 ;
       args.roll = seq_roll * M_PI / 180.0 ;
     
-      auto extent = get_extent ( args.projection , args.width ,
-                                 args.height , args.hfov  ) ;
-      args.x0 = extent.x0 ;
-      args.x1 = extent.x1 ;
-      args.y0 = extent.y0 ;
-      args.y1 = extent.y1 ;
+      (extent_type &) args = get_extent ( args.projection , args.width ,
+                                          args.height , args.hfov  ) ;
       assert ( args.x0 < args.x1 ) ;
       assert ( args.y0 < args.y1 ) ;
       args.step = ( args.x1 - args.x0 ) / args.width ;
@@ -1446,7 +1434,51 @@ int main ( int argc , const char ** argv )
     // now call the ISA-specific rendering code via the dispatch_base
     // pointer received from get_dispatch.
 
-    dp->payload ( nch , ninp , prj ) ;
+    if ( args.split != std::string() )
+    {
+      image_series split_name ( args.split ) ;
+
+      for ( int i = 0 ; i < args.nfacets ; i++ )
+      {
+        // if 'solo' is set (it would be -1 otherwise) we skip the
+        // solo facet as a target - we already have it, so there's
+        // little point in re-creating it.
+
+        if ( i == args.solo )
+          continue ;
+
+        // for all other facets, we take the facet's geometry (encoded
+        // in it's base class facet_base) over as target geometry and
+        // then run a 'single' job with that target, which recreates
+        // the facet from either the solo image (if that was given)
+        // or from the synopsis formed from all source facets. The
+        // latter variant (no solo facet) will show stitching artifacts
+        // depending on the stitching process, and the 're-created'
+        // facets will look as if they had been 're-created' from a
+        // stitch done with envutil with the current settings. As of
+        // this writing, this is quite rough-and-ready - it's
+        // geometrically correct, but the facet's aren't blended,
+        // so the seams may be visible.
+
+        const auto & fspec = args.facet_spec_v [ i ] ;
+
+        // take over the facet's geometry to the target geometry in args
+
+        (facet_base&) args = fspec ;
+
+        // request a 'single' job - TODO may become obsolete
+
+        args.single = i ;
+
+        // save the target with this filename:
+
+        args.output = split_name[i] ;
+
+        dp->payload ( nch , ninp , prj ) ;
+      }
+    }
+    else
+      dp->payload ( nch , ninp , prj ) ;
     ++frames ;
   }
   while ( have_seq ) ; // loop criterion for 'do' loop

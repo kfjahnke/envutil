@@ -382,20 +382,29 @@ void fill_polygon ( const std::vector<float> & px ,
                     int IMAGE_RIGHT , int IMAGE_BOT ,
                     std::function < void ( int , int ) > fillPixel ) ;
 
-struct facet_spec
+// class facet_base is a common base type for images with PTO attributes.
+// It's used both for 'facet' images - single oriented source images
+// gleaned directly from the command line or a PTO script - and for the
+// target image - currently, class 'args' directly inherits from
+// facet_base. The factoring-out to this base class makes handling
+// the geometries easier - earlier I started out with discrete member
+// variables, but I think this approach is better. The common base
+// class is especially handy when it comes to 'single' and 'split'
+// jobs, where a facet's geometry is taken over as the target's
+// geometry to re-create single images from already-stitched ones.
+// facet_base itself inherits from extent_type - a standard way of
+// expressing the dimensions of a 2D raster in 'model space'.
+
+struct facet_base
+: public extent_type
 {
-  int masked ;
-  int facet_no ;
-  std::string filename ;
   std::string projection_str ;
   projection_t projection ;
   double hfov ;
-  extent_type extent ;
   double step ;
   double yaw , pitch , roll ;
   std::size_t width ;
   std::size_t height ;
-  std::size_t nchannels ;
   double tr_x , tr_y , tr_z ;
   double tp_y , tp_p , tp_r ;
   double shear_g , shear_t ;
@@ -403,6 +412,16 @@ struct facet_spec
   double s, a, b, c, d, h, v, cap_radius , r_max ;
   bool lens_correction_active ;
   bool shift_only ;
+} ;
+
+struct facet_spec
+: public facet_base
+{
+  int masked ;
+  int facet_no ;
+  int nchannels ;
+  std::string filename ;
+  // extent_type extent ;
   bool have_crop ;
   int crop_x0 , crop_x1 , crop_y0 , crop_y1 ;
   bool have_pto_mask ;
@@ -424,8 +443,8 @@ struct facet_spec
 
     // reference radius in PTO is half the extent of the smaller edge
 
-    double dv = fabs ( extent.y1 - extent.y0 ) / 2.0 ;
-    double dh = fabs ( extent.x1 - extent.x0 ) / 2.0 ;
+    double dv = fabs ( y1 - y0 ) / 2.0 ;
+    double dh = fabs ( x1 - x0 ) / 2.0 ;
 
     s = ( dh < dv ) ? dh : dv ;
 
@@ -443,17 +462,19 @@ struct facet_spec
 
     // the PTO d and e parameters are in pixels, h and v in unit radii
 
-    double factor = fabs ( extent.x1 - extent.x0 ) / width ;
+    double factor = fabs ( x1 - x0 ) / width ;
     h *= factor ;
     v *= factor ;
 
-    auto d1 = extent.x0 * extent.x0 + extent.y0 + extent.y0 ;
-    auto d2 = extent.x1 * extent.x1 + extent.y0 + extent.y0 ;
-    auto d3 = extent.x0 * extent.x0 + extent.y1 + extent.y1 ;
-    auto d4 = extent.x1 * extent.x1 + extent.y1 + extent.y1 ;
+    auto d1 = x0 * x0 + y0 + y0 ;
+    auto d2 = x1 * x1 + y0 + y0 ;
+    auto d3 = x0 * x0 + y1 + y1 ;
+    auto d4 = x1 * x1 + y1 + y1 ;
+
     d1 = std::max ( d1 , d2 ) ;
     d1 = std::max ( d1 , d3 ) ;
     d1 = std::max ( d1 , d4 ) ;
+
     cap_radius = sqrt ( d1 ) ;
 
     // check for translation parameters
@@ -487,49 +508,19 @@ struct facet_spec
   }
 } ;
 
-/* TODO:
-  facet_spec fct_ex_args ;
-  fct_ex_args.masked = 0 ;
-  fct_ex_args.facet_no = -1 ;
-  fct_ex_args.projection = args.projection ;
-
-  fct_ex_args.hfov = args.hfov ;
-  fct_ex_args.extent = args.extent ;
-  fct_ex_args.step = args.step ;  fct_ex_args.hfov = args.hfov ;
-  fct_ex_args.yaw = args.yaw ;
-  fct_ex_args.pich = args.pitch ;
-  fct_ex_args.roll = args.roll ;
-  fct_ex_args.width = args.width ;
-  fct_ex_args.height = args.height ;
-  fct_ex_args.nchannels = args.nchannels ;
-
-  fct_ex_args.a = fct_ex_args.b = fct_ex_args.c = 0 ;
-  fct_ex_args.d = fct_ex_args.h = fct_ex_args.v = 0 ;
-  // fct_ex_args.s = ? ...
-*/  
-
 struct arguments
+: public facet_base
 {
   bool verbose ;
   std::string output ;
-  double hfov ;
-  std::size_t width ;
-  std::size_t height ;
-  std::string prj_str ;
-  projection_t projection ;
-
+  std::string split ;
   std::size_t support_min ;
   std::size_t tile_size ;
-
-  double yaw , pitch , roll ;
-  double x0 , x1 , y0 , y1 ;
- 
   std::string pto_file ;
   std::string seqfile ;
   std::string codec ;
   float mbps ;
   int fps ;
-
   int prefilter_degree ;
   int spline_degree ;
   int twine  ;
@@ -541,7 +532,6 @@ struct arguments
 
   // gleaned from other parameters or input images
 
-  double step ;
   std::size_t nchannels ;
 
   // technical variables for the argument parser
@@ -552,7 +542,7 @@ struct arguments
   std::size_t nfacets ;
   std::vector < std::string > facet_name_v ;
   std::vector < std::string > facet_projection_v ;
-  std::vector < std::string> facet_hfov_v ;
+  std::vector < std::string > facet_hfov_v ;
   std::vector < std::string > facet_yaw_v ;
   std::vector < std::string > facet_pitch_v ;
   std::vector < std::string > facet_roll_v ;

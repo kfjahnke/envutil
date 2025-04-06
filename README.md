@@ -470,6 +470,40 @@ to specify only the parameters you need.
 This feature is also handy for shell scripts or other scenarios where
 you want to use envutil as a helper program.
 
+## --split FORMAT_STRING  create a 'single' facet for all facets in a PTO
+
+This argument is for convenience - you might produce the same set of
+output images with a 'single' job (see above) for each of the source
+facets. Here, you pass a format string which contains a placeholder for
+an integer (use something like %02d) - this is replaced with each
+facet number in turn, and a 'single' job for that facet is run,
+producing the corresponding 're-created' facet image. As explained
+for 'single' jobs, you can do this with 'solo' set to a facet which
+you want to yield content exclusively. For 'split' jobs, this is
+typically an already-stitched panorama image, and because you do
+not normally want to have this image re-created, (you have it already)
+'split' jobs skip over the solo facet. Without a 'solo' argument,
+content for the 're-created' images is taken from all source facets,
+like in an ordinary stitch with envutil - as of this writing, this is
+geometrically correct, but the images are not blended. Here's the
+example above as a 'split' job *with* a solo argument:
+
+    envutil --pto pano.pto \
+            --pto_line 'i f4 v360 n"pano.tif"' \
+            --solo 4 --split img_%02d.tif
+
+This would produce images img_00.tif, img_01.tif and img_03.tif,
+which should be geometrically identical to the three source facets
+given in 'pano.pto', provided that 'pano.tif' was stitched from that
+PTO script - but due to the stitched intermediate, the new files
+will show the stitched image's content - so if the stitch is with
+proper blending, you'll not see any seams, and of course you won't
+see any content which was masked out or not included into pano.tif
+during the stitch. Re-stitching the 're-created' images with the
+original PTO (replacing filenames in the i-lines) should recreate
+pano.tif - minus small differences due to processing, e.g. from
+interpolation or due to excession of the dynamic range.
+
 ## --mask_for FACET_INDEX   paint this facet white, all others black
 
 The caption is slightly simplified, so here's the whole story: processing
