@@ -229,23 +229,7 @@ struct lcp
 
   lcp ( T _a , T _b , T _c , T r_max )
   : pl_t ( { _a , _b , _c , T(1) - ( _a + _b + _c ) } )
-  {
-    // test whether rr(r) rises over the intended knot point interval
-    // not entirely safe - there might be a very small wiggle we don't
-    // catch.
-    double scale = r_max / 31.0 ;
-    double y0 = 0.0 ;
-    for ( int i = 1 ; i < 36 ; i++ )
-    {
-      double x = i * scale ;
-      double y ;
-      eval ( x , y ) ;
-      y *= x ;
-      // std::cout << "sample: " << x << " -> " << y << std::endl ;
-      assert ( y > y0 ) ;
-      y0 = y ;
-    }
-  }
+  { }
 
   using pl_t::eval ; 
 } ;
@@ -416,98 +400,6 @@ struct inverse_lcp
 
     fev.eval ( in , out ) ;  // evaluate the spline
     out += 1 ;               // recover the factor
-  }
-} ;
-
-// a class for the entire planar transformations occuring in PTO.
-// with 'invert' false, we have the 'normal' operation from target
-// to source coordinates. 'invert' true yields the inverse of that
-// transformation - it should be needed less frequently, e.g. for
-// the inspection of control points or creation of synthetic images
-// with the same geometrical flaws as given input facets from an
-// already-stitched panorama. Note the terminological ambiguity:
-// 'normal' operation is actually an inverse transformation - namely
-// from target to source coordinates. Here the template parameter
-// 'inverse' refers to the inverse of the 'normal' operation.
-
-template < typename T , std::size_t L , bool invert = false >
-struct pto_planar
-: public zimt::unary_functor < xel_t<T,2> , xel_t<T,2> , L >
-{
-  lcp < T , L > polynomial ;
-  inverse_lcp < T , L > inv_polynomial ;
-  const T s , h , v , g , t ;
-
-  pto_planar ( double _a , double _b , double _c ,
-               double _s , double r_max ,
-               double _d = 0.0 , double _e = 0.0 ,
-               double _g = 0.0 , double _t = 0.0 )
-  : polynomial ( _a , _b , _c , r_max ) ,
-    inv_polynomial ( _a , _b , _c , r_max , 100 ) ,
-                     // // TODO: I'm not sure here:
-                     //   r_max * r_max * r_max * r_max * _a
-                     // + r_max * r_max * r_max * _b
-                     // + r_max * r_max * _c
-                     // + r_max * ( 1 - ( _a + _b + _c ) ) ,
-                     // 100 ) ,
-    s ( _s ) ,
-    h ( _d ) ,
-    v ( _e ) ,
-    g ( _g ) ,
-    t ( _t )
-  { }
-
-  template < typename I , typename O >
-  void eval ( const I & _in , O & out )
-  {
-    if constexpr ( invert == false )
-    {
-      // the transformation is from target image coordinates
-      // to source image coordinates - both in model space units.
-
-      simdized_type<T,L> factor ;
-      polynomial.eval ( norm ( _in ) / s , factor ) ;
-      // std::cout << "fwd: factor = " << factor << std::endl ;
-      out = _in * factor ;
-      if ( h != 0.0 || v != 0.0 )
-      {
-        out[0] += h ;
-        out[1] += v ;
-      }
-      if ( g != 0.0 || t != 0.0 )
-      {
-        out = { out[0] + ( out[1] * g ) ,
-                out[1] + ( out[0] * t ) } ;
-      }
-    }
-    else
-    {
-      // the transformation is from source image coordinates
-      // to target image coordinates - both in model space units.
-
-      out = _in ;
-      if ( g != 0.0 || t != 0.0 )
-      {
-        // I adapted this formula from panotools' math.c (see shearInv):
-        out[1]  = (_in[1] - t * _in[0]) / (1 - t * g);
-        out[0]  = (_in[0] - g * out[1]);
-      }
-      if ( h != 0.0 || v != 0.0 )
-      {
-        out[0] -= h ;
-        out[1] -= v ;
-      }
-      simdized_type<T,L> factor ;
-      inv_polynomial.eval ( norm ( out ) / s , factor ) ;
-      // std::cout << "bwd: factor = " << factor << std::endl ;
-      out *= factor ;
-    }
-  }
-
-  template < typename C >
-  void operator() ( C & crd )
-  {
-    eval ( crd , crd ) ;
   }
 } ;
 

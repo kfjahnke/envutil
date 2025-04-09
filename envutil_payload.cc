@@ -242,7 +242,7 @@ void work ( get_t & get , act_t & act )
   // array is sized accordingly.
 
   std::size_t w , h ;
-  if ( args.have_crop )
+  if ( args.has_crop )
   {
     w = args.p_crop_x1 - args.p_crop_x0 ;
     h = args.p_crop_y1 - args.p_crop_y0 ;
@@ -272,7 +272,7 @@ void work ( get_t & get , act_t & act )
   // (from a PTO file's p-line), the discrete coordinates fed into
   // the pixel pipeline have to be raised appropriately:
 
-  if ( args.have_crop )
+  if ( args.has_crop )
   {
     bill.get_offset.push_back ( args.p_crop_x0 ) ;
     bill.get_offset.push_back ( args.p_crop_y0 ) ;
@@ -1032,12 +1032,12 @@ struct generic_r3
   generic_r3 ( const facet_base & ft ,
                const facet_base & fs )
   {
-    // here, the facet passed in f is in the 'camera' position
+    // here, the facet passed in ft is in the 'camera' position
     // r_camera takes us from target coordinates to model space:
 
     r_t r_camera = make_r3_t ( ft.roll , ft.pitch , ft.yaw , false ) ;
 
-    // this rotation takes us to the traget's translation plane
+    // this rotation takes us to the target's translation plane
 
     r_t rt_tp = make_r3_t ( ft.tp_r , ft.tp_p , ft.tp_y , true ) ;
 
@@ -1061,7 +1061,7 @@ struct generic_r3
     bool have_ttp = ( ft.tr_x != 0 || ft.tr_y != 0 || ft.tr_z != 0 ) ;
     bool have_stp = ( fs.tr_x != 0 || fs.tr_y != 0 || fs.tr_z != 0 ) ;
 
-    // the PTO 'tanslation' is implemented as a rotation to the
+    // the PTO 'translation' is implemented as a rotation to the
     // reprojection plane, the reprojection itself by 'casting the
     // rays down onto the plane' (division by z), a shift which moves
     // to the CS of the 'virtual camera' and another rotation back
@@ -1083,6 +1083,19 @@ struct generic_r3
     if ( ft.tp_y != 0 || ft.tp_p != 0 || ft.tp_r != 0 )
       shift_t = rotate ( xel_t<double,3> ( shift_t ) , rt_tp ) ;
 
+    // dcp is a scaling factor, which is needed for re-cration of
+    // single images. There, the reprojection plane, onto which the
+    // rays are cast in the first step, is not at unit distance from
+    // the origin, which, at that point, is where the 'virtual camera'
+    // of the translation is located - instead it's closer or further
+    // away, depending on the distance from the translation plane,
+    // which we have in the z component of shift_t. Note that we can't
+    // use tr_z here, because that is in mdel space units, but we need
+    // the distance in the CS of the translation plane, to which we
+    // have rotated shift_z, just above. hence:
+  
+    T dcp = ( 1.0 - shift_t[2] ) ;
+
     // this is the inverse transformation, hence:
 
     shift_t = - shift_t ;
@@ -1099,14 +1112,6 @@ struct generic_r3
     if ( fs.tp_y != 0 || fs.tp_p != 0 || fs.tp_r != 0 )
       shift_s = rotate ( xel_t<double,3> ( shift_s ) , rs_tp ) ;
 
-    // dcp is a scaling factor, which is needed for re-cration of
-    // single images. There, the reprojection plane, onto which the
-    // rays are cast in the first step, is not at unit distance from
-    // the origin, which, at that point, is where the 'virtual camera'
-    // of the translation is located - instead it's closer or further
-    // away, depending on TrZ.
-  
-    T dcp = ( 1.0 - ft.tr_z ) ;
     typedef r3_t < T > r_t ;
 
     if ( have_ttp )
@@ -1191,7 +1196,7 @@ struct generic_r3
 
     if ( have_stp )
     {
-      std::cout << "case 3: stp only" << std::endl ;
+      // std::cout << "case 3: stp only" << std::endl ;
       r_t r_to_stp = rotate ( r_camera , rs_tp ) ;
       r_t stp_to_facet = rotate ( rs_tpi , r_facet ) ;
       tf3d_t < T , L > tf3d1 ( r_to_stp , stp_to_facet , shift_s ) ;
@@ -1200,7 +1205,7 @@ struct generic_r3
     else
     {
       // this is the simplest case: no translation in both facets
-      std::cout << "case 4: no translation" << std::endl ;
+      // std::cout << "case 4: no translation" << std::endl ;
       r_t r_complete = rotate ( r_camera , r_facet ) ;
       ev = rotate_t < T , L > ( r_complete ) ;
     }
@@ -1248,6 +1253,7 @@ struct generic_r3
 //   }
 // } ;
 // 
+
 // this functor handles the transformation of 2D model space coordinates
 // pertaining to an output image to 3D ray coordinates. The speciality
 // here is that the output is recreating one of the facets, so there
@@ -1283,11 +1289,13 @@ struct tf_ex_facet
 
   generic_r3 < T , L > tf33 ;
 
+  const bool has_2d_tf ;
+
   tf_ex_facet ( const facet_base & ft , const facet_base & fs )
-  : tf22 ( ft.a , ft.b , ft.c , ft.s , ft.r_max ,
-           ft.h , ft.v , ft.shear_g , ft.shear_t ) ,
+  : tf22 ( ft ) ,
     tf23 ( roll_out_23 < T , L > ( ft.projection ) ) ,
-    tf33 ( ft , fs )
+    tf33 ( ft , fs ) ,
+    has_2d_tf ( ft.has_2d_tf )
   { }
 
   // eval puts the three steps together and provides a ray coordinate
@@ -1297,7 +1305,11 @@ struct tf_ex_facet
   void eval ( const I & _in , O & out )
   {
     I in ;
-    tf22.eval ( _in , in ) ;
+    if ( has_2d_tf )
+      tf22.eval ( _in , in ) ;
+    else
+      in = _in ;
+
     tf23.eval ( in , out ) ;
     tf33.eval ( out , out ) ;
   }
@@ -1408,7 +1420,7 @@ void fuse ( int ninputs )
 
     auto const & fct ( args.facet_spec_v [ args.single ] ) ;
 
-    if ( fct.lens_correction_active || fct.translation_active )
+    if ( fct.has_2d_tf || fct.has_translation )
       generic_target = true ;
   }
 
@@ -1436,7 +1448,7 @@ void fuse ( int ninputs )
       // by the 'environment' object, so we don't need a generic stepper
       // for that.
 
-      generic_source = fct.translation_active ;
+      generic_source = fct.has_translation ;
 
       if ( generic_source || generic_target )
       {
@@ -1486,7 +1498,7 @@ void fuse ( int ninputs )
       {
         const auto & fct ( args.facet_spec_v[i] ) ; // shorthand
 
-        generic_source = fct.translation_active ;
+        generic_source = fct.has_translation ;
 
         if ( generic_source || generic_target )
         {
@@ -1548,7 +1560,7 @@ void fuse ( int ninputs )
       int f = args.solo ;
       const auto & fct ( args.facet_spec_v [ f ] ) ;
 
-      generic_source = fct.translation_active ;
+      generic_source = fct.has_translation ;
 
       if ( generic_source || generic_target )
       {
@@ -1580,7 +1592,7 @@ void fuse ( int ninputs )
       {
         const auto & fct ( args.facet_spec_v[i] ) ;
 
-        generic_source = fct.translation_active ;
+        generic_source = fct.has_translation ;
 
         if ( generic_source || generic_target )
         {

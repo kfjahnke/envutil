@@ -405,41 +405,52 @@ struct facet_base
   double yaw , pitch , roll ;
   std::size_t width ;
   std::size_t height ;
+
   double tr_x , tr_y , tr_z ;
   double tp_y , tp_p , tp_r ;
   double shear_g , shear_t ;
-  bool translation_active ;
   double s, a, b, c, d, h, v, cap_radius , r_max ;
-  bool lens_correction_active ;
-  bool shift_only ;
+
+  bool has_shift ;
+  bool has_lcp ;
+  bool has_shear ;
+  bool has_2d_tf ;
+  bool has_translation ;
 } ;
 
 struct facet_spec
 : public facet_base
 {
-  int masked ;
   int facet_no ;
   int nchannels ;
+
   std::string filename ;
-  // extent_type extent ;
-  bool have_crop ;
-  int crop_x0 , crop_x1 , crop_y0 , crop_y1 ;
-  bool have_pto_mask ;
-  std::vector < pto_mask_type > pto_mask_v ;
   std::string asset_key ;
-  float brighten ;
+
+  bool has_crop ;
+  bool has_pto_mask ;
+
+  int crop_x0 , crop_x1 , crop_y0 , crop_y1 ;
+  std::vector < pto_mask_type > pto_mask_v ;
 
   bool init ( int argc , const char ** argv ) ;
 
-  // TODO scale d, e
+  int masked ;
+  float brighten ;
 
-  void process_lc()
+  // this member function inspects the geometry-related parameters
+  // and sets the internal state accordingly. It also sets a few flags
+  // to make it easier for other code to decide which components are
+  // present and which can be left out in processing.
+
+  void process_geometry()
   {
-    shift_only
-      = ( a == 0.0 && b == 0.0 && c == 0.0 && ( h != 0.0 || v != 0.0 ) ) ;
+    has_shift = ( h != 0.0 || v != 0.0 ) ;
+    has_lcp = ( a != 0.0 || b != 0.0 || c != 0.0 ) ;
+    has_shear = ( shear_g != 0.0 || shear_t != 0.0 ) ;
+    has_2d_tf = ( has_shift || has_lcp || has_shear ) ;
 
-    lens_correction_active
-      = ( a != 0.0 || b != 0.0 || c != 0.0 || h != 0.0 || v != 0.0 ) ;
+    has_translation = ( tr_x != 0 || tr_y != 0 || tr_z != 0 ) ;
 
     // reference radius in PTO is half the extent of the smaller edge
 
@@ -476,10 +487,6 @@ struct facet_spec
     d1 = std::max ( d1 , d4 ) ;
 
     cap_radius = sqrt ( d1 ) ;
-
-    // check for translation parameters
-
-    translation_active = ( tr_x != 0 || tr_y != 0 || tr_z != 0 ) ;
   }
 
   void get_image_metrics()
@@ -552,7 +559,7 @@ struct arguments
   std::vector < facet_spec > facet_spec_v ;
   std::vector < pto_mask_type > pto_mask_v ;
 
-  bool have_crop ;
+  bool has_crop ;
   int p_crop_x0 , p_crop_x1 , p_crop_y0 , p_crop_y1 ;
 
   int solo ;

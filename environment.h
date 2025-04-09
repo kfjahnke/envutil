@@ -64,6 +64,93 @@ using OIIO::ImageInput ;
 using OIIO::TypeDesc ;
 using OIIO::ImageSpec ;
 
+// a class for the entire planar transformations occuring in PTO.
+// with 'invert' false, we have the 'normal' operation from target
+// to source coordinates. 'invert' true yields the inverse of that
+// transformation - it should be needed less frequently, e.g. for
+// the inspection of control points or creation of synthetic images
+// with the same geometrical flaws as given input facets from an
+// already-stitched panorama. Note the terminological ambiguity:
+// 'normal' operation is actually an inverse transformation - namely
+// from target to source coordinates. Here the template parameter
+// 'inverse' refers to the inverse of the 'normal' operation.
+
+template < typename T , std::size_t L , bool invert = false >
+struct pto_planar
+: public zimt::unary_functor < xel_t<T,2> , xel_t<T,2> , L > ,
+  public facet_base
+{
+  lcp < T , L > polynomial ;
+  inverse_lcp < T , L > inv_polynomial ;
+
+  pto_planar ( const facet_base & fct )
+  : facet_base ( fct ) ,
+    polynomial ( fct.a , fct.b , fct.c , fct.r_max ) ,
+    inv_polynomial ( fct.a , fct.b , fct.c , fct.r_max , 100 )
+  { }
+
+  template < typename I , typename O >
+  void eval ( const I & _in , O & out )
+  {
+    out = _in ;
+
+    if constexpr ( invert == false )
+    {
+      // the transformation is from target image coordinates
+      // to source image coordinates - both in model space units.
+
+      if ( has_lcp )
+      {
+        simdized_type < T , L > factor ;
+        polynomial.eval ( norm ( _in ) / T ( s ) , factor ) ;
+        out *= factor ;
+      }
+      if ( has_shift )
+      {
+        out[0] += h ;
+        out[1] += v ;
+      }
+      if ( has_shear )
+      {
+        out = { out[0] + ( out[1] * shear_g ) ,
+                out[1] + ( out[0] * shear_t ) } ;
+      }
+    }
+    else
+    {
+      // the transformation is from source image coordinates
+      // to target image coordinates - both in model space units.
+
+      if ( has_shear )
+      {
+        // I adapted this formula from panotools' math.c (see shearInv):
+        out[1]  = (out[1] - shear_t * out[0]) / (1 - shear_t * shear_g );
+        out[0]  = (out[0] - shear_g * out[1]);
+      }
+      if ( has_shift )
+      {
+        out[0] -= h ;
+        out[1] -= v ;
+      }
+      if ( has_lcp )
+      {
+        simdized_type<T,L> factor ;
+        inv_polynomial.eval ( norm ( out ) / s , factor ) ;
+        out *= factor ;
+      }
+    }
+  }
+
+  // for convenience:
+
+  template < typename C >
+  void operator() ( C & crd )
+  {
+    C help ( crd ) ;
+    eval ( help , crd ) ;
+  }
+} ;
+
 // source_t provides pixel values from a mounted 2D manifold. The
 // incoming 2D coordinates are pixel coordinates guaranteed to be
 // in the range of the spline:
@@ -1178,7 +1265,7 @@ struct _environment
           // one to two or from three to four, to make room for an alpha
           // channel if that isn't already present.
 
-          assert ( fct.have_crop || fct.have_pto_mask ) ;
+          assert ( fct.has_crop || fct.has_pto_mask ) ;
 
           // we initialize the alpha channel to 1.0f
 
@@ -1195,7 +1282,7 @@ struct _environment
 
         // now we process masking and cropping information
 
-        if ( fct.have_crop || fct.have_pto_mask )
+        if ( fct.has_crop || fct.has_pto_mask )
         {
           assert ( C == 2 || C == 4 ) ;
 
@@ -1205,7 +1292,7 @@ struct _environment
           int w = alpha.shape[0] ;
           int h = alpha.shape[1] ;
 
-          if ( fct.have_pto_mask )
+          if ( fct.has_pto_mask )
           {
             auto clear = [&] ( int x , int y )
             {
@@ -1222,7 +1309,7 @@ struct _environment
             }
           }
   
-          if ( fct.have_crop )
+          if ( fct.has_crop )
           {
             float a = fabs ( fct.crop_x1 - fct.crop_x0 ) / 2.0 ;
             float b = fabs ( fct.crop_y1 - fct.crop_y0 ) / 2.0 ;
@@ -1405,20 +1492,18 @@ struct _environment
     // class which combines lens correction polynomial, lens shift
     // and shear:
 
-    if ( fct.lens_correction_active )
+    if ( fct.has_lcp )
     {
-      pf = pto_planar < float , LANES >
-             ( fct.a , fct.b , fct.c , fct.s , fct.r_max ,
-               fct.h , fct.v , fct.shear_g , fct.shear_t ) ;
+      pf = pto_planar < float , LANES > ( fct ) ;
     }
-    else if ( fct.shear_g != 0.0 || fct.shear_t != 0.0 )
-    {
-      pf = [=] ( crd_v & crd )
-      {
-        crd = {  crd[0] + ( crd[1] * fct.shear_g ) ,
-                 crd[1] + ( crd[0] * fct.shear_t ) } ;
-      } ;
-    }
+    // else if ( fct.shear_g != 0.0 || fct.shear_t != 0.0 )
+    // {
+    //   pf = [=] ( crd_v & crd )
+    //   {
+    //     crd = {  crd[0] + ( crd[1] * fct.shear_g ) ,
+    //              crd[1] + ( crd[0] * fct.shear_t ) } ;
+    //   } ;
+    // }
 
     // we fix the projection as a template argument to class mount_t,
     // passing the planar function as well. Then we also set up the

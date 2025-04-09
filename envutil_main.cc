@@ -544,7 +544,7 @@ void arguments::init ( int argc , const char ** argv )
         std::string crop_str = dir [ "S" ] ;
         if ( crop_str != std::string() )
         {
-          have_crop = true ;
+          has_crop = true ;
           std::regex crop_regex ( "([0-9]+),([0-9]+),([0-9]+),([0-9]+)" ) ;
           std::smatch parts ;
           std::regex_match ( crop_str , parts , crop_regex ) ;
@@ -564,8 +564,8 @@ void arguments::init ( int argc , const char ** argv )
       facet_spec f ;
       f.facet_no = nfacets++ ;
       f.filename = dir [ "n" ] ;
-      f.have_crop = false ;
-      f.have_pto_mask = false ;
+      f.has_crop = false ;
+      f.has_pto_mask = false ;
       if ( f.filename [ 0 ] == '"' )
         f.filename = f.filename.substr ( 1 , f.filename.size() - 2 ) ;
       f.asset_key = f.filename ;
@@ -610,7 +610,7 @@ void arguments::init ( int argc , const char ** argv )
       f.c = glean ( dir [ "c" ] ) ;
       f.h = glean ( dir [ "d" ] ) ;
       f.v = glean ( dir [ "e" ] ) ;
-      f.process_lc() ;
+      f.process_geometry() ;
       f.brighten = glean ( dir [ "Eev" ] ) ;
       if ( f.brighten != 0.0f )
       {
@@ -620,7 +620,7 @@ void arguments::init ( int argc , const char ** argv )
       std::string crop_str = dir [ "S" ] ;
       if ( crop_str != std::string() )
       {
-        f.have_crop = true ;
+        f.has_crop = true ;
         std::regex crop_regex ( "([0-9]+),([0-9]+),([0-9]+),([0-9]+)" ) ;
         std::smatch parts ;
         std::regex_match ( crop_str , parts , crop_regex ) ;
@@ -647,7 +647,7 @@ void arguments::init ( int argc , const char ** argv )
       auto & dir ( k_line.field_map ) ;
       pto_mask_type mask ;
       mask.image = std::stoi ( dir [ "i" ] ) ;
-      facet_spec_v [ mask.image ] . have_pto_mask = true ;
+      facet_spec_v [ mask.image ] . has_pto_mask = true ;
       mask.variant = std::stoi ( dir [ "t" ] ) ;
       mask.vertex_list = dir [ "p" ] ;
 
@@ -705,7 +705,7 @@ void arguments::init ( int argc , const char ** argv )
       if ( fct.filename == fct.asset_key )
       {
         suffix += args.pto_file + "." ;
-        fct.have_pto_mask = true ;
+        fct.has_pto_mask = true ;
       }
       suffix += std::to_string ( mask_no ) ;
       fct.asset_key += suffix ;
@@ -717,7 +717,7 @@ void arguments::init ( int argc , const char ** argv )
   {
     for ( const auto mask: pto_mask_v )
       std::cout << mask ;
-    if ( have_crop )
+    if ( has_crop )
       std::cout << "p-line crop: " << p_crop_x0 << " " << p_crop_x1
                 << " " << p_crop_y0 << " " << p_crop_y1 << std::endl ;
   }
@@ -762,10 +762,9 @@ void arguments::init ( int argc , const char ** argv )
     fspec.tp_y = fspec.tp_p = fspec.tp_r = 0.0 ;
     fspec.shear_g = fspec.shear_t = 0.0 ;
     fspec.a = fspec.b = fspec.c = fspec.h = fspec.v = 0.0 ;
-    fspec.process_lc() ;
-    fspec.shift_only = false ;
-    fspec.have_crop = false ;
-    fspec.have_pto_mask = false ;
+    fspec.process_geometry() ;
+    fspec.has_crop = false ;
+    fspec.has_pto_mask = false ;
     fspec.asset_key = fspec.filename ;
     fspec.brighten = 0.0 ;
     facet_spec_v.push_back ( fspec ) ;
@@ -830,7 +829,7 @@ void arguments::init ( int argc , const char ** argv )
       m.brighten = 1.0f ;
     }
 
-    if ( m.have_pto_mask || m.have_crop )
+    if ( m.has_pto_mask || m.has_crop )
     {
       if ( m.nchannels == 1 || m.nchannels == 3 )
         m.nchannels ++ ;
@@ -886,7 +885,7 @@ void arguments::init ( int argc , const char ** argv )
         std::cout << "  b/w mask only: " << ( m.masked == 0
                                               ? "black"
                                               : "white" ) << std::endl ;
-      if ( m.have_crop )
+      if ( m.has_crop )
         std::cout << "  cropping active: " << m.crop_x0 << " "
                   << m.crop_x1 << " " << m.crop_y0
                   << " " << m.crop_y1 << std::endl ;
