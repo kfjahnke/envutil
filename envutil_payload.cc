@@ -242,7 +242,7 @@ void work ( get_t & get , act_t & act )
   // array is sized accordingly.
 
   std::size_t w , h ;
-  if ( args.has_crop )
+  if ( args.store_cropped )
   {
     w = args.p_crop_x1 - args.p_crop_x0 ;
     h = args.p_crop_y1 - args.p_crop_y0 ;
@@ -272,7 +272,7 @@ void work ( get_t & get , act_t & act )
   // (from a PTO file's p-line), the discrete coordinates fed into
   // the pixel pipeline have to be raised appropriately:
 
-  if ( args.has_crop )
+  if ( args.store_cropped )
   {
     bill.get_offset.push_back ( args.p_crop_x0 ) ;
     bill.get_offset.push_back ( args.p_crop_y0 ) ;

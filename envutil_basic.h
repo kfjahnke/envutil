@@ -427,15 +427,29 @@ struct facet_spec
   std::string filename ;
   std::string asset_key ;
 
-  bool has_crop ;
-  bool has_pto_mask ;
+  // PTO can specify that certein marginal parts of a facet image should
+  // be 'blacked out' (like a passepartout - rectangular or circular). In
+  // envutil, we realize this by an alpha channel manipulation, and if the
+  // source image comes without an alpha channel, we add one. The unwanted
+  // parts are set to transparent black.
 
+  bool has_lens_crop ;
   int crop_x0 , crop_x1 , crop_y0 , crop_y1 ;
+
+  // PTO also allows the application of polygonal masks to 'black out'
+  // unwanted content. Like the feature above, we use alpha and create the
+  // A channel if needed.
+
+  bool has_pto_mask ;
   std::vector < pto_mask_type > pto_mask_v ;
 
   bool init ( int argc , const char ** argv ) ;
 
+  // this member has nothing to do with the PTO masks above. It's used
+  // when producing mask images (see masking.h).
+
   int masked ;
+
   float brighten ;
 
   // this member function inspects the geometry-related parameters
@@ -559,7 +573,11 @@ struct arguments
   std::vector < facet_spec > facet_spec_v ;
   std::vector < pto_mask_type > pto_mask_v ;
 
-  bool has_crop ;
+  // if output cropping is specified in the p-line, this flag is
+  // set, and the four values defining the cropping window are in
+  // p_crop_...
+
+  bool store_cropped ;
   int p_crop_x0 , p_crop_x1 , p_crop_y0 , p_crop_y1 ;
 
   int solo ;

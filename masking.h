@@ -36,6 +36,24 @@
 /*                                                                      */
 /************************************************************************/
 
+// the classes in this header are used to create 'mask' images. They are
+// made by producing pixels in a given set colour rather than the greyscale
+// or RGB component contained in an image. For single-image processing this
+// isn't very useful, it's used for multi-facet jobs: one facet is set to
+// produce 'white' pixels, the other facets are set to produce 'black'
+// pixels. When subsequent processing produces output, it will be 'white'
+// only where greyscale/RGB content from the singled-out facet would be
+// visible in an 'ordinary' job. This mask can be used as spatial 'quality'
+// indicator in the Burt&Adelson image splining algorithm, which is why I
+// have implemented the feature - the B&A algorithm is not yet available
+// in envutil, but the masking jobs are here already, so the masks plus
+// 'solo' images can be fed to other programs which can do the job.
+// images which have an alpha channel will result in masks with an alpha
+// channel, where transparent sections of the image will result in
+// transparent sections in the mask image. This may be unwanted - to
+// create a single-channel mask, the result can be 'cast down' to one
+// channel.
+
 #if defined(ENVUTIL_MASKING_H) == defined(HWY_TARGET_TOGGLE)
   #ifdef ENVUTIL_MASKING_H
     #undef ENVUTIL_MASKING_H

@@ -544,7 +544,7 @@ void arguments::init ( int argc , const char ** argv )
         std::string crop_str = dir [ "S" ] ;
         if ( crop_str != std::string() )
         {
-          has_crop = true ;
+          store_cropped = true ;
           std::regex crop_regex ( "([0-9]+),([0-9]+),([0-9]+),([0-9]+)" ) ;
           std::smatch parts ;
           std::regex_match ( crop_str , parts , crop_regex ) ;
@@ -564,7 +564,7 @@ void arguments::init ( int argc , const char ** argv )
       facet_spec f ;
       f.facet_no = nfacets++ ;
       f.filename = dir [ "n" ] ;
-      f.has_crop = false ;
+      f.has_lens_crop = false ;
       f.has_pto_mask = false ;
       if ( f.filename [ 0 ] == '"' )
         f.filename = f.filename.substr ( 1 , f.filename.size() - 2 ) ;
@@ -620,7 +620,7 @@ void arguments::init ( int argc , const char ** argv )
       std::string crop_str = dir [ "S" ] ;
       if ( crop_str != std::string() )
       {
-        f.has_crop = true ;
+        f.has_lens_crop = true ;
         std::regex crop_regex ( "([0-9]+),([0-9]+),([0-9]+),([0-9]+)" ) ;
         std::smatch parts ;
         std::regex_match ( crop_str , parts , crop_regex ) ;
@@ -717,7 +717,7 @@ void arguments::init ( int argc , const char ** argv )
   {
     for ( const auto mask: pto_mask_v )
       std::cout << mask ;
-    if ( has_crop )
+    if ( store_cropped )
       std::cout << "p-line crop: " << p_crop_x0 << " " << p_crop_x1
                 << " " << p_crop_y0 << " " << p_crop_y1 << std::endl ;
   }
@@ -763,7 +763,7 @@ void arguments::init ( int argc , const char ** argv )
     fspec.shear_g = fspec.shear_t = 0.0 ;
     fspec.a = fspec.b = fspec.c = fspec.h = fspec.v = 0.0 ;
     fspec.process_geometry() ;
-    fspec.has_crop = false ;
+    fspec.has_lens_crop = false ;
     fspec.has_pto_mask = false ;
     fspec.asset_key = fspec.filename ;
     fspec.brighten = 0.0 ;
@@ -829,7 +829,7 @@ void arguments::init ( int argc , const char ** argv )
       m.brighten = 1.0f ;
     }
 
-    if ( m.has_pto_mask || m.has_crop )
+    if ( m.has_pto_mask || m.has_lens_crop )
     {
       if ( m.nchannels == 1 || m.nchannels == 3 )
         m.nchannels ++ ;
@@ -885,8 +885,8 @@ void arguments::init ( int argc , const char ** argv )
         std::cout << "  b/w mask only: " << ( m.masked == 0
                                               ? "black"
                                               : "white" ) << std::endl ;
-      if ( m.has_crop )
-        std::cout << "  cropping active: " << m.crop_x0 << " "
+      if ( m.has_lens_crop )
+        std::cout << " input cropping: " << m.crop_x0 << " "
                   << m.crop_x1 << " " << m.crop_y0
                   << " " << m.crop_y1 << std::endl ;
     }

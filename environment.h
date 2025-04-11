@@ -1265,7 +1265,7 @@ struct _environment
           // one to two or from three to four, to make room for an alpha
           // channel if that isn't already present.
 
-          assert ( fct.has_crop || fct.has_pto_mask ) ;
+          assert ( fct.has_lens_crop || fct.has_pto_mask ) ;
 
           // we initialize the alpha channel to 1.0f
 
@@ -1282,7 +1282,7 @@ struct _environment
 
         // now we process masking and cropping information
 
-        if ( fct.has_crop || fct.has_pto_mask )
+        if ( fct.has_lens_crop || fct.has_pto_mask )
         {
           assert ( C == 2 || C == 4 ) ;
 
@@ -1309,7 +1309,7 @@ struct _environment
             }
           }
   
-          if ( fct.has_crop )
+          if ( fct.has_lens_crop )
           {
             float a = fabs ( fct.crop_x1 - fct.crop_x0 ) / 2.0 ;
             float b = fabs ( fct.crop_y1 - fct.crop_y0 ) / 2.0 ;
@@ -1477,7 +1477,7 @@ struct _environment
     // might be added by providing suitable parameterization.
 
     auto extent = get_extent ( fct.projection , fct.width ,
-                               fct.height , fct.hfov  ) ;
+                               fct.height , fct.hfov ) ;
 
     // Some facets require additional processing of the planar (image)
     // coordinates which the source_t object receives. This is needed
