@@ -449,6 +449,10 @@ void arguments::init ( int argc , const char ** argv )
 
   bool ignore_p_line = false ;
 
+  // 'solo' may be set for 'unstitching' jobs, so we initialize it:
+
+  solo = -1 ;
+
   if ( width == 0 )
   {
     width = 1024 ;
@@ -508,6 +512,13 @@ void arguments::init ( int argc , const char ** argv )
       return std::stod ( str ) ;
     } ;
 
+    auto iglean = [] ( const std::string & str ) -> int
+    {
+      if ( str == std::string() )
+        return 0 ;
+      return std::stoi ( str ) ;
+    } ;
+
     if ( ! ignore_p_line )
     {
       auto & p_line_list ( parser.line_group [ "p" ] ) ;
@@ -558,38 +569,124 @@ void arguments::init ( int argc , const char ** argv )
     }
 
     auto & i_line_list ( parser.line_group [ "i" ] ) ;
+
     for ( auto & i_line : i_line_list )
     {
       auto & dir ( i_line.field_map ) ;
       facet_spec f ;
       f.facet_no = nfacets++ ;
-      f.filename = dir [ "n" ] ;
       f.has_lens_crop = false ;
       f.has_pto_mask = false ;
-      if ( f.filename [ 0 ] == '"' )
-        f.filename = f.filename.substr ( 1 , f.filename.size() - 2 ) ;
-      f.asset_key = f.filename ;
-      int prj = std::stoi ( dir [ "f" ] ) ;
-      if ( prj == 0 )
-        f.projection = RECTILINEAR ;
-      else if ( prj == 1 )
-        f.projection = CYLINDRICAL ;
-      else if ( prj == 2 || prj == 3 ) // TODO: elliptic crop f. 2
-        f.projection = FISHEYE ;
-      else if ( prj == 4 )
-         f.projection = SPHERICAL ;
-      else if ( prj == 10 )
-        f.projection = STEREOGRAPHIC ;
+
+      // envutil provides an extension to PT format: a 'Pano'
+      // clause. This takes the data from a PTO file's p-line
+      // over to the current facet. This is used for 'unstitching',
+      // see the section on the '--split' argument in the
+      // documentation.
+      
+      auto pano = dir [ "Pano" ] ;
+      if ( pano != std::string() )
+      {
+        assert ( p_line_present == true ) ;
+        f.filename = pano ;
+        f.asset_key = f.filename ;
+        if ( f.filename [ 0 ] == '"' )
+          f.filename = f.filename.substr ( 1 , f.filename.size() - 2 ) ;
+        f.projection = p_line_projection ;
+        f.hfov = p_line_hfov ;
+        f.window_width = p_crop_x1 - p_crop_x0 ;
+        f.window_height = p_crop_y1 - p_crop_y0 ;
+        f.get_image_metrics() ;
+        if ( store_cropped )
+        {
+          // make sure the image file has the crop window's size
+          assert ( f.window_width == f.width ) ;
+          assert ( f.window_height == f.height ) ;
+          f.width = p_line_width ;
+          f.height = p_line_height ;
+          f.window_x_offset = p_crop_x0 ;
+          f.window_y_offset = p_crop_y0 ;
+          // make sure the metrics are realistic
+          assert ( f.width >= f.window_x_offset + f.window_width ) ;
+          assert ( f.height >= f.window_y_offset + f.window_height ) ;
+        }
+        else
+        {
+          f.window_width = f.width ;
+          f.window_height = f.height ;
+          f.window_x_offset = 0 ;
+          f.window_y_offset = 0 ;
+        }
+        solo = f.facet_no ;
+      }
       else
       {
-        std::cerr << "can't handle PTO projection code "
-                  << prj << " in i-line" << std::endl ;
-        exit ( -1 ) ;
+        // 'regular' processing of the i-line
+
+        f.filename = dir [ "n" ] ;
+        if ( f.filename [ 0 ] == '"' )
+          f.filename = f.filename.substr ( 1 , f.filename.size() - 2 ) ;
+        f.asset_key = f.filename ;
+        int prj = std::stoi ( dir [ "f" ] ) ;
+        if ( prj == 0 )
+          f.projection = RECTILINEAR ;
+        else if ( prj == 1 )
+          f.projection = CYLINDRICAL ;
+        else if ( prj == 2 || prj == 3 ) // TODO: elliptic crop f. 2
+          f.projection = FISHEYE ;
+        else if ( prj == 4 )
+          f.projection = SPHERICAL ;
+        else if ( prj == 10 )
+          f.projection = STEREOGRAPHIC ;
+        else
+        {
+          std::cerr << "can't handle PTO projection code "
+                    << prj << " in i-line" << std::endl ;
+          exit ( -1 ) ;
+        }
+
+        f.get_image_metrics() ;
+        f.hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
+
+        // The 'W' clause is another envutil extension to PTO format,
+        // used to deal with cropped image input.
+
+        std::string window_str = dir [ "W" ] ;
+
+        if ( window_str != std::string() )
+        {
+          // as an extension to PTO format, we accept a parameter to
+          // describe cropped input images. The four values passed after
+          // the 'W' are the same which would be given with 'S' in a
+          // p-line to describe output cropping. If the 'W' parameter
+          // is given, the 'w' and 'h' paramters must also be present
+          // and give the size of the 'total' or uncropped image, and
+          // the hfov relates to this total size. The image size gleaned
+          // by get_image_metrics is the size of the image on disk, so
+          // it must be just the same as the size of the window given
+          // with 'W'.
+
+          std::regex crop_regex ( "([0-9]+),([0-9]+),([0-9]+),([0-9]+)" ) ;
+          std::smatch parts ;
+          std::regex_match ( window_str , parts , crop_regex ) ;
+          int x0 = std::stoi ( parts[1].str() ) ;
+          int x1 = std::stoi ( parts[2].str() ) ;
+          int y0 = std::stoi ( parts[3].str() ) ;
+          int y1 = std::stoi ( parts[4].str() ) ;
+          f.window_x_offset = x0 ;
+          f.window_y_offset = y0 ;
+          f.window_width = x1 - x0 ;
+          f.window_height = y1 - y0 ;
+          assert ( f.window_width == f.width ) ;
+          assert ( f.window_height == f.height ) ;
+          f.width = iglean ( dir [ "w" ] ) ;
+          f.height = iglean ( dir [ "h" ] ) ;
+          assert ( f.width != 0 ) ;
+          assert ( f.height != 0 ) ;
+        }
       }
 
       f.projection_str = projection_name [ f.projection ] ;
-      f.hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
-      f.get_image_metrics() ;
       f.yaw = ( M_PI / 180.0 ) * glean ( dir [ "y" ] ) ;
       f.pitch = ( M_PI / 180.0 ) * glean ( dir [ "p" ] ) ;
       f.roll = ( M_PI / 180.0 ) * glean ( dir [ "r" ] ) ;
@@ -772,7 +869,12 @@ void arguments::init ( int argc , const char ** argv )
   nfacets += n_free_facets ;
   assert ( nfacets ) ;
 
-  solo = ap["solo"].get<int> ( -1 ) ;
+  // if 'solo' hasn't been set yet (e.g. by an 'unstitching' job)
+  // we glean it now:
+
+  if ( solo == -1 )
+    solo = ap["solo"].get<int> ( -1 ) ;
+
   single = ap["single"].get<int> ( -1 ) ;
 
   if ( solo != -1 )
@@ -1465,9 +1567,10 @@ int main ( int argc , const char ** argv )
 
         (facet_base&) args = fspec ;
 
-        // request a 'single' job - TODO may become obsolete
+        // request a 'single' job
 
         args.single = i ;
+        args.store_cropped = false ;
 
         // save the target with this filename:
 
@@ -1477,7 +1580,11 @@ int main ( int argc , const char ** argv )
       }
     }
     else
+    {
+      if ( args.single != -1 )
+        args.store_cropped = false ;
       dp->payload ( nch , ninp , prj ) ;
+    }
     ++frames ;
   }
   while ( have_seq ) ; // loop criterion for 'do' loop

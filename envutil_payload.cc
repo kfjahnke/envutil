@@ -1090,7 +1090,7 @@ struct generic_r3
     // of the translation is located - instead it's closer or further
     // away, depending on the distance from the translation plane,
     // which we have in the z component of shift_t. Note that we can't
-    // use tr_z here, because that is in mdel space units, but we need
+    // use tr_z here, because that is in model space units, but we need
     // the distance in the CS of the translation plane, to which we
     // have rotated shift_z, just above. hence:
   
@@ -1683,18 +1683,18 @@ void roll_out ( int ninputs ,
     case SPHERICAL:
       roll_out < NCH , spherical_stepper > ( ninputs ) ;
       break ;
-#ifndef NARROW_SCOPE
+// #ifndef NARROW_SCOPE
     case CYLINDRICAL:
       roll_out < NCH , cylindrical_stepper > ( ninputs ) ;
       break ;
-#endif
+// #endif
     case RECTILINEAR:
       roll_out < NCH , rectilinear_stepper > ( ninputs ) ;
       break ;
+#ifndef NARROW_SCOPE
     case FISHEYE:
       roll_out < NCH , fisheye_stepper > ( ninputs ) ;
       break ;
-#ifndef NARROW_SCOPE
     case STEREOGRAPHIC:
       roll_out < NCH , stereographic_stepper > ( ninputs ) ;
       break ;
@@ -1765,11 +1765,11 @@ struct dispatch
       case 3:
         roll_out < 3 > ( ninputs , projection ) ;
         break ;
-#ifndef NARROW_SCOPE
+// #ifndef NARROW_SCOPE
       case 4:
         roll_out < 4 > ( ninputs , projection ) ;
         break ;
-#endif
+// #endif
       std::cerr << "unhandled channel count " << nchannels
                 << std::endl ;
     }

@@ -367,9 +367,11 @@ is widened, which introduces overall blur as well.
 envutil can process a growing subset of the PTO standard. Currently, the
 i-lines in a PTO file are scanned for file name, projection, hfov, yaw,
 pitch, roll, translation, shear and lens correction parameters. For an
-explanation of PTO lens correction parameters, see this [Wiki Page](https://wiki.panotools.org/Lens_correction_model).
+explanation of PTO lens correction parameters, see this [Wiki Page](https://wiki.panotools.org/Lens_correction_model). The p-line is also processed,
+and k-lines (specifying masks) are prtly understood (exclude masks for
+single images only).
 Other lines in the PTO file are currently ignored. images from PTO files
-are added to the set of facets given with --facet - if no --facet parameters
+precede the set of facets given with --facet - if no --facet parameters
 are present, only those given in the PTO file are used. I have opted to
 restrict the facet parameters accessible with the --facet option to the
 set given above to avoid an overly large parameter signature - in favour
@@ -380,18 +382,17 @@ currently no image blending (no image splining with the Burt&Adelson image
 splining algorithm as I use it in lux) - the facets will have 'hard' edges.
 The facet prioritization is also fixed to a simple voronoi-diagram-like
 mode, more complex schemes like lux' shallow cone/steep pyramid method are
-not yet available in envutil. Image brightness (and vignetting) is not
-touched either, stacks, masks and cropping aren't supported. Nevertheless,
-the set of PTO parameters which envutil now recognizes should convey a good
-idea of the fit of an intended stitch - similar to the fast 'live stitch'
-used for animated sequences in lux. I may add more PTO features, but mainly
-I want the PTO option to introduce facets with extended geometrical 
-information via a file, to avoid overly long and cumbersome parameter lists.
+not yet available in envutil. Image vignetting is not touched either, and
+for brightness envutil just looks at the Eev values and brightens/darkens
+accordingly, which is only correct for linear RGB input. stacks aren't yet supported.
+
 envutil parses PTO format 'leniently' - you need to pass an image file
 name, projection and hfov in the i-lines, but other parameters may or
-may not be present; if they are not given envutil sets them to zero.
-And if the i-line contains fields which envutil does not process, they
-are simply ignored.
+may not be present; if they are not given envutil sets them to zero or
+some other sensible default. If the i-line contains fields which envutil
+does not process, they are simply ignored. envutil also recognizes some
+extensions to PTO format to help with cropped image input (cropped TIFF
+is currently not recognized) - see the section for the '--split' argument.
 
 ## --pto_line LINE          add (trailing) line of PTO code
 
@@ -468,7 +469,9 @@ projection (f4) and 360 degrees fov (v360). Note that it's enough
 to specify only the parameters you need.
 
 This feature is also handy for shell scripts or other scenarios where
-you want to use envutil as a helper program.
+you want to use envutil as a helper program. Please read on to the next
+section, where I introduce parameterization for cropped image input;
+this can be used for 'single' jobs as well.
 
 ## --split FORMAT_STRING  create a 'single' facet for all facets in a PTO
 
@@ -502,7 +505,68 @@ see any content which was masked out or not included into pano.tif
 during the stitch. Re-stitching the 're-created' images with the
 original PTO (replacing filenames in the i-lines) should recreate
 pano.tif - minus small differences due to processing, e.g. from
-interpolation or due to excession of the dynamic range.
+interpolation or due to excession of the dynamic range. There is
+one stumbling stone in this process: output cropping. PT format
+allows output cropping via an 'S' clause in the p-line. Obviously,
+the output resulting from stitching such a PTO file will need
+special treatment - and so do other facet images which have been
+cropped from a (possibly virtual) larger image file. envutil can
+process cropped images, but the metrics of the cropping window must
+be given explicitly - currently, 'cropped TIFF format' is not
+recognized. envutil uses an extension to PTO format: a 'W' clause.
+This is using the same syntax as the 'S' clause in the p-line, so
+it's W<X0>,<Y0>,<X1>,<Y1> where <X0> stands for the start pixel
+number for the window, <X1> for one past it's end, and the Y values
+similarly for the vertical. If a 'W' clause is present, an i-line
+also needs 'w' and 'h' clauses, which are taken to encode the width
+and height of the *uncropped* image, which can't be figured out
+otherwise. With a 'W' clause present, the size of the window given
+by the 'W' clause must match the size of the image data in the image
+file given in the i-line's 'n' clause. Let's assume the file 'pano.tif'
+from the example above had been made with this p-line 'S' clause:
+
+    S20,10,2000,1500
+
+And assume the uncropped size given in pano.pto is 4000X2000. The
+image file 'pano.tif' must be size 1980X1490 (the size of the cropping
+window), and it's a cut-out from a (virtual) full spherical image. To
+run a 'split' job using 'pano.tif', you'd invoke envutil like this:
+
+    envutil --pto pano.pto \
+            --pto_line 'i f4 v360 n"pano.tif" W20,10,2000,1500 w4000 h2000' \
+            --solo 4 --split img_%02d.tif
+
+As before, the extra image file which is submitted to splitting is
+introduced as an extra facet. The extra facet is used as sole input.
+But the i-line used to introduce the extra facet now has the information
+needed to take into account the fact that it's a cropped image. Please
+don't confuse the 'W' clause in an i-line with an 'S' clause, which may
+also be present - this has quite a different meaning in an i-line and
+specifies lens cropping - discarding unwanted marginal parts of the image
+which don't contain useful content.
+
+Most of the time, when you want to 'unstitch' a panorama, you'll want to
+work with just what the PTO file's p-line prescribes - you've seen in the
+previous example how the w,h, and S-clauses 'reappeared' in the pto_line
+argumment. Because this is a common requirement, there is a shortcut with
+yet another envutil extension to PT format. To get the same effect as
+above, use:
+
+    envutil --pto pano.pto \
+            --pto_line 'i Pano"pano.tif"' \
+            --split img_%02d.tif
+
+The metrics of the extra facet are now taken *from the p-line*, and the
+'solo' argument is set automatically. Output is the same. If the p-line
+in the PTO file does not have an S-clause, that's okay - the image is
+taken as uncropped, with width and height as found in the image file
+(this takes precedence over 'w' and 'h' clauses in the p-line). So the
+'Pano' clause in the pto_line argument can make your life easier. Note
+that the two envutil extensions to PTO format which I have described -
+namely the 'W' clause and the 'Pano' clause - can be used inside of
+PTO files just as well, but this may make the PTO file invalid for
+other programs using PT format, so 'slotting in' the extra facet with
+a pto_line parameter is less intrusive.
 
 ## --mask_for FACET_INDEX   paint this facet white, all others black
 

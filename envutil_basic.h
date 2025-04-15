@@ -43,6 +43,7 @@
 #define ENVUTIL_BASIC_H
 
 #include <cmath>
+#include <iostream>
 
 // enum encoding the sequence of cube face images in the cubemap
 // This is the sequence used for openEXR cubmap layout. The top
@@ -156,6 +157,14 @@ double get_step ( projection_t projection ,
 struct extent_type
 {
   double x0 , x1 , y0 , y1 ;
+
+  friend std::ostream & operator<<
+    ( std::ostream & osr , const extent_type & e )
+  {
+    osr << "ext { " << e.x0 << " " << e.x1 << " "
+        << e.y0 << " " << e.y1 << " }" ;
+    return osr ;
+  }
 } ;
 
 // extract internally uses the notion of an image's 'extent' in 'model
@@ -403,8 +412,12 @@ struct facet_base
   double hfov ;
   double step ;
   double yaw , pitch , roll ;
-  std::size_t width ;
-  std::size_t height ;
+  int width ;
+  int height ;
+  int window_width ;
+  int window_height ;
+  int window_x_offset ;
+  int window_y_offset ;
 
   double tr_x , tr_y , tr_z ;
   double tp_y , tp_p , tp_r ;
@@ -522,8 +535,9 @@ struct facet_spec
 
     const ImageSpec &spec = inp->spec() ;
 
-    width = spec.width ;
-    height = spec.height ;
+    width = window_width = spec.width ;
+    height = window_height = spec.height ;
+    window_x_offset = window_y_offset = 0 ;
     nchannels = spec.nchannels ;
     inp->close() ;
   }
@@ -534,6 +548,7 @@ struct arguments
 {
   bool verbose ;
   std::string output ;
+  std::string pano ;
   std::string split ;
   std::size_t support_min ;
   std::size_t tile_size ;

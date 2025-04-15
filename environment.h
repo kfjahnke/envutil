@@ -151,337 +151,6 @@ struct pto_planar
   }
 } ;
 
-// source_t provides pixel values from a mounted 2D manifold. The
-// incoming 2D coordinates are pixel coordinates guaranteed to be
-// in the range of the spline:
-// ( -0.5 ... width - 0.5 ) , ( -0.5 ... height - 0.5 )
-
-template < std::size_t nchannels , std::size_t ncrd , std::size_t L >
-struct source_t
-: public zimt::unary_functor < zimt::xel_t < float , ncrd > ,
-                               zimt::xel_t < float , nchannels > ,
-                               L
-                             >
-{
-  typedef zimt::unary_functor < zimt::xel_t < float , ncrd > ,
-                                zimt::xel_t < float , nchannels > ,
-                                L
-                              > base_t ;
-
-  typedef zimt::xel_t < float , ncrd > pkg_t ;
-  typedef zimt::simdized_type < pkg_t , L > pkg_v ;
-  typedef zimt::xel_t < float , 2 > crd_t ;
-  typedef zimt::simdized_type < crd_t , L > crd_v ;
-  typedef zimt::xel_t < float , nchannels > px_t ;
-  typedef zimt::simdized_type < px_t , L > px_v ;
-
-  static_assert ( ncrd == 2 || ncrd == 6 ) ;
-
-  int width ;
-  int height ;
-  zimt::xel_t < int , 2 > strides ;
-
-  typedef zimt::bspline < px_t , 2 > spl_t ;
-  std::shared_ptr < spl_t > p_bspl ;
-  zimt::grok_type < crd_t , px_t , L > bsp_ev ;
-
-  // we may receive a nullptr in p_bspl. this can occur if there is
-  // a 'solo' argument, in which case loading image data for the other
-  // facets is futile. This will leave bsp_ev in it's default-c'ted
-  // state, which is okay, since it won't be called.
-
-  source_t ( std::shared_ptr < spl_t > _p_bspl , int masked )
-  : p_bspl ( _p_bspl ) ,
-    width ( _p_bspl ? _p_bspl->core.shape[0] : 1 ) ,
-    height ( _p_bspl ? _p_bspl->core.shape[1] : 1 )
-  {
-    if ( masked == -1 )
-    {
-      if ( p_bspl )
-        bsp_ev = make_safe_evaluator < spl_t , float , L > ( *p_bspl ) ;
-    }
-    else if ( nchannels == 1 || nchannels == 3 )
-    {
-      bsp_ev = masking_t < 2 , nchannels , L > ( masked ) ;
-    }
-    else
-    {
-      if ( p_bspl )
-        bsp_ev = alpha_masking_t < nchannels , L >
-                 ( masked , p_bspl ) ;
-    }
-  }
-
-  void eval ( const pkg_v & _crd , px_v & px )
-  {
-    // incoming is const &, hence:
-
-    pkg_v crd ( _crd ) ;
-
-    if constexpr ( ncrd == 2 )
-    {
-      // crd[0] *= width ;
-      // crd[1] *= height ;
-      // crd -= .5f ;
-      bsp_ev.eval ( crd , px ) ;
-    }
-    else
-    {
-      assert ( false ) ;
-    }
-  }
-} ;
-
-// struct mount_t provides data from a rectangular 2D manifold holding
-// pixel data in a given projection which may not cover the entire
-// 360X180 degree environment. Typical candidates would be rectilinear
-// patches or cropped images. This class handles channel counts up to
-// four and paints pixels outside the covered range black. For RGBA
-// pixels, 'outside' pixels are painted 0000, assuming associated alpha.
-// The 'ncrd' template argument is either three for lookups without
-// or nine for lookups with two next neighbour's coordinates which
-// can be used to find derivatives. This class relies on an 'inner'
-// functor of class source_t to actually provide pixel data, this here
-// class deals with the geometrical transformations needed for the
-// different types of projections which the mounted images can have,
-// and with masking out parts where the mounted image has no data.
-
-template < std::size_t nchannels ,
-           projection_t P ,
-           std::size_t L >
-struct mount_t
-: public zimt::unary_functor < zimt::xel_t < float , 3 > ,
-                               zimt::xel_t < float , nchannels > ,
-                               L
-                             >
-{
-  typedef zimt::unary_functor < zimt::xel_t < float , 3 > ,
-                                zimt::xel_t < float , nchannels > ,
-                                L
-                              > base_t ;
-
-  typedef zimt::xel_t < float , 3 > ray_t ;
-  typedef zimt::simdized_type < ray_t , L > ray_v ;
-  typedef zimt::xel_t < float , 2 > crd_t ;
-  typedef zimt::xel_t < float , 3 > crd3_t ;
-  typedef zimt::simdized_type < crd_t , L > crd_v ;
-  typedef zimt::simdized_type < crd3_t , L > crd3_v ;
-  typedef zimt::xel_t < float , nchannels > px_t ;
-  typedef zimt::simdized_type < px_t , L > px_v ;
-
-  using typename base_t::in_v ;
-  using typename base_t::in_ele_v ;
-  typedef typename in_ele_v::mask_type mask_t ;
-  typedef std::function < void ( crd_v & ) > planar_f ;
-
-  extent_type extent ;
-  crd_t center ;
-  crd_t rgirth ;
-  source_t < nchannels , 2 , L > inner ;
-  planar_f pf ;
-
-  static_assert (    P == SPHERICAL
-                  || P == CYLINDRICAL
-                  || P == RECTILINEAR
-                  || P == STEREOGRAPHIC
-                  || P == FISHEYE ) ;
-
-  static crd_t get_center
-    ( const source_t < nchannels , 2 , L > & src ,
-      const extent_type & ext )
-  {
-    // first get the center in model space coordinates
-
-    crd_t center { ( ext.x0 + ext.x1 ) * .5 ,
-                   ( ext.y0 + ext.y1 ) * .5 } ;
-
-    // then the distance from the left/upper margin of the extent
-
-    crd_t dc { center[0] - ext.x0 ,
-               center[1] - ext.y0 } ;
-
-    // now move to image coordinates
-
-    dc[0] *= src.width ;
-    dc[1] *= src.height ;
-    dc[0] -= .5 ;
-    dc[1] -= .5 ;
-
-    return dc ;
-  }
-                  
-  // calculate the scaling factor from model space to pixel units
-
-  static crd_t get_rgirth
-    ( const source_t < nchannels , 2 , L > & src ,
-      const extent_type & ext )
-  {
-    crd_t rgirth { src.width / ( ext.x1 - ext.x0 ) ,
-                   src.height / ( ext.y1 - ext.y0 ) } ;
-    return rgirth ;
-  }
-                            
-  mount_t ( extent_type _extent ,
-            source_t < nchannels , 2 , L > & _inner ,
-            const planar_f & _pf = [] ( crd_v & ) { } )
-  : extent ( _extent ) ,
-    center ( get_center ( _inner , _extent ) ) ,
-    rgirth ( get_rgirth ( _inner , _extent ) ) ,
-    inner ( _inner ) ,
-    pf ( _pf )
-  { }
-
-  // shade provides a pixel value for a 2D coordinate inside the
-  // 2D manifold's 'extent' by delegating to the 'inner' functor
-  // of class source_t
-
-  px_v shade ( crd_v crd )
-  {
-    // move to image coordinates. The eval code uses clamping,
-    // so absolute precision isn't required.
-
-    crd[0] = ( crd[0] - extent.x0 ) * rgirth[0] - .5f ;
-    crd[1] = ( crd[1] - extent.y0 ) * rgirth[1] - .5f ;
-
-    // use 'inner' to provide the pixel
-
-    px_v result ;
-
-    inner.eval ( crd , result ) ;
-    return result ;
-  }
-
-  // plain coordinate transformation without masking. The mask is
-  // calculated one function down. The geometrical transformations
-  // are coded in 'geometry.h'.
-  
-  void get_coordinate_nomask ( const crd3_v & crd3 , crd_v & crd ) const
-  {
-    // depending on the source image's geometry, we convert the
-    // incoming 3D ray coordinate to a planar coordinate pertaining
-    // to the source image plane
-
-    if constexpr ( P == RECTILINEAR )
-    {
-      ray_to_rect_t<float,L>::eval ( crd3 , crd ) ;
-    }
-    else if constexpr ( P == SPHERICAL )
-    {
-      ray_to_ll_t<float,L>::eval ( crd3 , crd ) ;
-    }
-    else if constexpr ( P == CYLINDRICAL )
-    {
-      ray_to_cyl_t<float,L>::eval ( crd3 , crd ) ;
-    }
-    else if constexpr ( P == STEREOGRAPHIC )
-    {
-      ray_to_ster_t<float,L>::eval ( crd3 , crd ) ;
-    }
-    else if constexpr ( P == FISHEYE )
-    {
-      ray_to_fish_t<float,L>::eval ( crd3 , crd ) ;
-    }
-
-    // we now have the 'raw' 2D coordinate in 'crd'. The last step
-    // applies an optional in-plane transformation, which is used
-    // for stuff like lens correction and shear.
-
-    pf ( crd ) ;
-  }
-
-  // get_coordinate yields a coordinate into the mounted 2D manifold
-  // and a true mask value if the ray passes through the draped 2D
-  // manifold, or a valid coordinate (the center of the 'extent')
-  // and a false mask value if the ray does not 'hit' the 2D manifold.
-
-  mask_t get_coordinate ( const crd3_v & crd3 , crd_v & crd ) const
-  {
-    // first, obtain the 'raw' 2D source coordinate
-
-    get_coordinate_nomask ( crd3 , crd ) ;
-
-    // test this coordinate against the boundaries of the image
-    // encoded in 'extent'
-
-    auto mask =    ( crd[0] >= extent.x0 )
-                && ( crd[0] <= extent.x1 )
-                && ( crd[1] >= extent.y0 )
-                && ( crd[1] <= extent.y1 ) ;
-
-    // only for rectilinear images: clear the mask where the z
-    // coordinate of the ray is zero or negative
-
-    if constexpr ( P == RECTILINEAR )
-    {
-      mask &= ( crd3[2] > 0.0f ) ;
-    }
-
-    // now, where the mask is not set, assign 'center' to the
-    // 2D coordinate - this is a safe value avoiding problems
-    // if this value is used e.g. to produce a pixel value.
-    // We trust that the mask will prevent such pixels from
-    // actually being used. So this is merely a precaution.
-
-    crd ( ! mask ) = center ;
-
-    // finally, we return the *mask* - the resulting 2D
-    // coordinate is passed back via the non-const reference
-    // we received as 'crd' argument
-
-    return mask ;
-  }
-
-  // get_mask does everything which get_coordinate does, minus
-  // the actual coordinate transformation. This seems to produce
-  // redundant work, but I trust the compiler will recognize the
-  // common subexpression.
-
-  mask_t get_mask ( const crd3_v & crd3 ) const
-  {
-    crd_v crd ;
-    get_coordinate_nomask ( crd3 , crd ) ;
-
-    auto mask =    ( crd[0] >= extent.x0 )
-                && ( crd[0] <= extent.x1 )
-                && ( crd[1] >= extent.y0 )
-                && ( crd[1] <= extent.y1 ) ;
-
-    if constexpr ( P == RECTILINEAR )
-      mask &= ( crd3[2] > 0.0f ) ;
-
-    return mask ;
-  }
-
-  // eval puts it all together and yields pixel sets with 'misses' masked
-  // out to zero.
-
-  mask_t eval ( const in_v & ray , px_v & px )
-  {
-    // the first three components have the 3D pickup coordinate itself
-
-    crd3_v crd3 { ray[0] , ray[1] , ray[2] } ;
-    crd_v crd ;
-
-    auto mask = get_coordinate ( crd3 , crd ) ;
-    if ( none_of ( mask ) )
-    {
-      px = 0.0f ;
-      return mask ;
-    }
-
-    px = shade ( crd ) ;
-
-    // mask out 'misses' to all-zero
-
-    if ( ! all_of ( mask ) )
-    {
-      px ( ! mask ) = 0.0f ;
-    }
-
-    return mask ;
-  }
-} ;
-
 /// for full spherical images, we have to perform the prefiltering and
 /// bracing of the b-splines 'manually', because these images don't fit
 /// any of vspline's standard modes. The problem is that while the images
@@ -685,6 +354,684 @@ void spherical_prefilter
   bspl.brace ( 0 ) ;
   bspl.prefiltered = true ;
 }
+
+// source_t provides pixel values from a mounted 2D manifold. The
+// incoming 2D coordinates are model space coordinates, output is
+// pixels with nchannels channels.
+// The c'tor of class source_t takes a facet_spec argument. Not all
+// facets will be made into source_t objects - cubemaps are treated
+// separately by the calling object (class environment). so the facets
+// we'll process in source_t may be in of any of the other types of
+// single-image projections.
+// Internally, class source_t uses a b-spline to hold the data. Since
+// the b-spline is not seen or used from outside, it's easy to modify
+// data handling - e.g. by adding a fixed offset to 2D coordinates to
+// implement handling of cropped image input. class source_t also
+// handles all activities from obtaining the image data from a file
+// and potentially adding an alpha channel and populating it with
+// transparency where PTO masks or lens cropping require.
+
+template < std::size_t nchannels , std::size_t L >
+struct source_t
+: public zimt::unary_functor < zimt::xel_t < float , 2 > ,
+                               zimt::xel_t < float , nchannels > ,
+                               L
+                             >
+{
+  typedef zimt::unary_functor < zimt::xel_t < float , 2 > ,
+                                zimt::xel_t < float , nchannels > ,
+                                L
+                              > base_t ;
+
+  typedef zimt::xel_t < float , 2 > crd_t ;
+  typedef zimt::simdized_type < crd_t , L > crd_v ;
+
+  typedef zimt::xel_t < float , nchannels > px_t ;
+  typedef zimt::simdized_type < px_t , L > px_v ;
+
+  using typename base_t::in_ele_v ;
+  typedef typename in_ele_v::mask_type mask_t ;
+
+  int total_width ;
+  int total_height ;
+  extent_type total_extent ;
+
+  int window_width ;
+  int window_height ;
+  int window_x_offset ;
+  int window_y_offset ;
+  extent_type window_extent ;
+
+  bool full_environment ;
+
+  typedef zimt::bspline < px_t , 2 > spl_t ;
+  std::shared_ptr < spl_t > p_bspl ;
+  zimt::grok_type < crd_t , px_t , L > ev ;
+
+  // provides a safe 2D coordinate which other objects can use in
+  // coordinate slots which may be evaluated but not used (e.g. due
+  // to masking)
+
+  crd_t safe_crd ;
+
+  source_t ( const facet_spec & fct )
+  {
+    total_width = fct.width ;
+    total_height = fct.height ;
+    window_width = fct.window_width ;
+    window_height = fct.window_height ;
+    window_x_offset = fct.window_x_offset ;
+    window_y_offset = fct.window_y_offset ;
+  
+    static const std::size_t C = nchannels ;
+    typedef zimt::xel_t < float , C > in_px_t ;
+
+    // sneaky: this might as well be a member variable, but having
+    // it static to a member function saves the need for external
+    // instantiation
+
+    #define PSPL(NCH) std::shared_ptr \
+      < bspline < xel_t < float , NCH > , 2 > >
+
+    static std::map < std::string , PSPL(C) > spl_map ;
+
+    #undef PSPL
+
+    // for now, we use identical values for total_... and window_...
+
+    // total_width = window_width = fct.width ;
+    // total_height = window_height = fct.height ;
+
+    total_extent = get_extent ( fct.projection , fct.width ,
+                                fct.height , fct.hfov ) ;
+
+    // width and height of the total image in model space units:
+
+    double wx = total_extent.x1 - total_extent.x0 ;
+    double wy = total_extent.y1 - total_extent.y0 ;
+
+    // fraction which corresponds to distance to the window
+
+    double px = double ( window_x_offset ) / total_width ;
+    double py = double ( window_y_offset ) / total_width ;
+
+    // increase the x0/y0 values of the total image accordingly
+
+    window_extent.x0 = total_extent.x0 + px * wx ;
+    window_extent.y0 = total_extent.y0 + py * wy ;
+
+    // repeat for the left edge
+
+    px = double ( window_x_offset + window_width ) / total_width ;
+    py = double ( window_y_offset + window_width ) / total_width ;
+
+    window_extent.x1 = total_extent.x0 + px * wx ;
+    window_extent.y1 = total_extent.y0 + py * wy ;
+
+    // now we need to set up the spline. We check if the facet provides
+    // full 360X180 degree coverage, in which case we can use slightly
+    // more performant code (we need no SIMD masks to indicate where
+    // the facet provides data and where it doesn't).
+
+    shape_type shape { fct.window_width , fct.window_height } ;
+    full_environment = false ;
+
+    // most facets are rendered with REFLECT boundary conditions,
+    // but if the facet covers the full 360 degrees in the horiontal,
+    // we'll use PERIODIC boundary conditions instead.
+    // TODO: only use this for uncropped images
+
+    zimt::bc_code bc0 = zimt::REFLECT ;
+    if (    fct.projection == SPHERICAL
+         || fct.projection == CYLINDRICAL )
+    {
+      if ( fabs ( fct.hfov - 2.0 * M_PI ) < .000001 )
+        bc0 = PERIODIC ;
+    }
+
+    // fct.masked == -1 means 'normal operation': we set up a
+    // b-spline over the image data. The image data are also
+    // needed for a masking job for facets with alpha channel.
+    // masking jobs for images without an alpha channel don't
+    // need image data, so we don't set up a b-spline at all
+    // and leave p_bspl at it's default value of nullptr.
+    // for 'solo' jobs, it's also futile to load image data
+    // for all but the 'solo' facet, so if we have a 'solo'
+    // argument and the currently handled facet is not the solo
+    // facet, we also skip over the image-loading code and leave
+    // p_bspl nullptr.
+
+    bool load_facet = ( fct.masked == -1 || ( C == 2 || C == 4 ) ) ;
+
+    if ( args.solo >= 0 && fct.facet_no != args.solo )
+    {
+      load_facet = false ;
+      p_bspl = nullptr ;
+    }
+
+    if ( load_facet )
+    {
+      auto it = spl_map.find ( fct.asset_key ) ;
+
+      if ( it != spl_map.end() )
+      {
+        // we're in luck - this image file was already loaded
+        // into a b-spline previously.
+
+        if ( args.verbose )
+          std::cout << "asset " << fct.asset_key
+                    << " is already present in RAM" << std::endl ;
+
+        p_bspl = it->second ;
+      }
+      else
+      {
+        // no luck - we need to load the image data from disk
+
+        if ( args.verbose )
+          std::cout << "asset " << fct.asset_key
+                    << " is now loaded from disk" << std::endl ;
+
+        // currently building with raw::user_flip set to zero, to load
+        // raw images in memory order without EXIF rotation. This only
+        // affects raw images.
+
+        ImageSpec config;
+        config [ "raw:user_flip" ] = 0 ;
+        config [ "raw:ColorSpace" ] = "sRGB-linear" ;
+
+        auto inp = ImageInput::open ( fct.filename , &config ) ;
+
+        const ImageSpec &spec = inp->spec() ;
+
+        p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+                                    { bc0 , zimt::REFLECT } ) ) ;
+
+        bool success = inp->read_image (
+          0 , 0 , 0 , C ,
+          TypeDesc::FLOAT ,
+          p_bspl->core.data() ,
+          sizeof ( in_px_t ) ,
+          p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
+        assert ( success ) ;
+
+        inp->close() ;
+
+        int native_nchannels = spec.nchannels ;
+
+        if ( native_nchannels != fct.nchannels )
+        {
+          // this occurs only when cropping or masking affect the facet,
+          // in which case the facet's 'nchannels' value is raised from
+          // one to two or from three to four, to make room for an alpha
+          // channel if that isn't already present.
+
+          assert ( fct.has_lens_crop || fct.has_pto_mask ) ;
+
+          // we initialize the alpha channel to 1.0f
+
+          auto p_alpha_data = (float*) ( p_bspl->container.data() ) ;
+          p_alpha_data += ( C - 1 ) ;
+
+          view_t < 2 , float > alpha_view
+                        ( p_alpha_data ,
+                          p_bspl->container.strides * C ,
+                          p_bspl->container.shape ) ;
+
+          alpha_view.set_data ( 1.0f ) ;
+        }
+
+        // now we process masking and cropping information
+
+        if ( fct.has_lens_crop || fct.has_pto_mask )
+        {
+          assert ( C == 2 || C == 4 ) ;
+
+          array_t < 2 , float > alpha ( p_bspl->core.shape ) ;
+          alpha.set_data ( 1.0f ) ;
+
+          int w = alpha.shape[0] ;
+          int h = alpha.shape[1] ;
+
+          if ( fct.has_pto_mask )
+          {
+            auto clear = [&] ( int x , int y )
+            {
+              alpha [ { x , y } ] = 0.0f ;
+            } ;
+
+            for ( const auto & mask : fct.pto_mask_v )
+            {
+              if ( mask.variant == 0 )
+              {
+                fill_polygon ( mask.vx , mask.vy ,
+                               0 , 0 , w , h , clear ) ;
+              }
+            }
+          }
+  
+          if ( fct.has_lens_crop )
+          {
+            float a = fabs ( fct.crop_x1 - fct.crop_x0 ) / 2.0 ;
+            float b = fabs ( fct.crop_y1 - fct.crop_y0 ) / 2.0 ;
+
+            int w = p_bspl->core.shape [ 0 ] ;
+            int h = p_bspl->core.shape [ 1 ] ;
+
+            if ( fct.projection == FISHEYE )
+            {
+              std::cout << "elliptic crop" << std::endl ;
+              float mx = ( fct.crop_x0 + fct.crop_x1 ) / 2.0 ;
+              float my = ( fct.crop_y0 + fct.crop_y1 ) / 2.0 ;
+              for ( int y = 0 ; y < h ; y++ )
+              {
+                auto dy = fabs ( y - my ) ;
+                // if the y coordinate is outside the ellipse, mask out
+                // the entire line
+                if ( dy > b )
+                {
+                  for ( int x = 0 ; x < w ; x++ )  
+                  {
+                    alpha [ { x , y } ] = 0 ;
+                  }
+                  continue ;
+                }
+                // else, find the half width of the ellipse at given y and
+                // mask out points with x outside
+                // for the ellipse, we have x*x / a*a + y*y / b*b = 1, hence
+
+                float xmargin = sqrt ( ( a * a ) * ( 1.0 - ( dy * dy ) / ( b * b ) ) ) ;
+                for ( int x = 0 ; x < w ; x++ )
+          
+                {
+                  auto dx = fabs ( x - mx ) ;
+                  if ( dx > xmargin )
+                    alpha [ { x , y } ] = 0 ;
+                }
+              }
+            }
+            else
+            {
+              std::cout << "rectangular crop" << std::endl ;
+              for ( int y = 0 ; y < h ; y++ )
+              {
+                for ( int x = 0 ; x < w ; x++ )
+                {
+                  if (   ( x < fct.crop_x0 )
+                      || ( x >= fct.crop_x1 )
+                      || ( y < fct.crop_y0 )
+                      || ( y >= fct.crop_y1 ) )
+                    alpha [ { x , y } ] = 0 ;
+                }
+              }
+            }
+          }
+
+          // finally, apply a low pass filter to the masking alpha channel
+          // this mitigates the issue of the hard mask boundaries, but it
+          // will 'pull in' a bit of masked-out content, so if the mask is
+          // cut very close to unwanted features, they may bleed in. The
+          // large-ish binomial is tentative, but seems to work quite well.
+
+          convolve
+          ( alpha ,
+            alpha ,
+            { REFLECT , REFLECT } ,
+            { 1.0 / 16.0 ,
+              4.0 / 16.0 ,
+              6.0 / 16.0 ,
+              4.0 / 16.0 ,
+              1.0 / 16.0
+            } ,
+            2 ) ;
+
+          // we might use a loop to apply the alpha mask, like this:
+
+          // for ( std::size_t y = 0 ; y < h ; y++ )
+          // {
+          //   for ( std::size_t x = 0 ; x < w ; x++ )
+          //   {
+          //     p_bspl->core [ { x , y } ] *= alpha [ { x , y } ] ;
+          //   }
+          // }
+
+          // but we can do better and do the job in multithreaded
+          // SIMD code using zimt:
+
+          // we set up two loaders, one for the image data in the
+          // b-spline's core, one for the alpha mask we've just made.
+          
+          loader < float , C , 2 , LANES > ldpx ( p_bspl->core ) ;
+          loader < float , 1 , 2 , LANES > lda ( alpha ) ;
+          
+          // we use a synopsis-forming lambda which produces the
+          // product of it's two inputs
+          
+          auto syn = [] ( const px_v & v1 , const f_v & v2 ,
+                          px_v & v3 , std::size_t cap = LANES )
+          {
+            v3 = v1 * v2 ;
+          } ;
+          
+          // and set up a zip_t wiring the two loaders and the
+          // synopsis object to produce the masked image data
+          
+          zip_t < float , C , 2 , LANES , decltype ( syn ) ,
+                  float , 1 , float , C > zip ( ldpx , lda , syn ) ;
+          
+          // the act functor is not used
+          
+          pass_through < float , C , LANES > pass ;
+          
+          // the masked image data go back into the b-spline's core
+          
+          storer < float , C , 2 , LANES > store ( p_bspl->core ) ;
+          
+          // showtime
+          
+          process ( alpha.shape , zip , pass , store ) ;
+        }
+
+        // we save the shared_ptr to the newly made b-spline in
+        // spl_map, to make it available for reuse if needed.
+
+        spl_map [ fct.asset_key ] = p_bspl ;
+
+        // the spline needs to be prefiltered appropriately.
+        // TODO: only use this for uncropped images
+
+        if (    fct.projection == SPHERICAL
+            && fabs ( fct.hfov - 2.0 * M_PI ) < .000001
+            && fct.width == 2 * fct.height )
+        {
+          // assume the mounted image is a full spherical
+
+          p_bspl->spline_degree = args.prefilter_degree ;
+          spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
+          p_bspl->spline_degree = args.spline_degree ;
+          full_environment = true ;
+        }
+        else
+        {
+          // assume it's a partial spherical, use ordinary
+          // prefilter. Note that we may prefilter with a
+          // different degree (prefilter_degree) if that was
+          // specified in args.
+
+          p_bspl->spline_degree = args.prefilter_degree ;
+          p_bspl->prefilter() ;
+          p_bspl->spline_degree = args.spline_degree ;
+        }
+      }
+    }
+
+    // now we have the b-spline - either found in spl_map or
+    // freshly made from image data. If p_bspl is nullptr at this
+    // point, we have a masking job without alpha channel, where
+    // the image data aren't looked at. In that case, ev remains
+    // in it's default-initialized state - it won't be called.
+
+    if ( fct.masked == -1 )
+    {
+      if ( p_bspl )
+        ev = make_safe_evaluator < spl_t , float , L > ( *p_bspl ) ;
+    }
+    else if ( nchannels == 1 || nchannels == 3 )
+    {
+      ev = masking_t < 2 , nchannels , L > ( fct.masked ) ;
+    }
+    else
+    {
+      if ( p_bspl )
+        ev = alpha_masking_t < nchannels , L >
+                 ( fct.masked , p_bspl ) ;
+    }
+  }
+
+  // test_crd checks 2D model space coordinates and returns a true
+  // mask lane for coordinates for which the source_t can provide
+  // image data. The range test is for the extent of the source_t's
+  // window, which may be smaller than the total extent if the image
+  // is a cropped representation.
+
+  mask_t test_crd ( crd_v & crd ) const
+  {
+    auto mask =    ( crd[0] >= window_extent.x0 )
+                && ( crd[0] <= window_extent.x1 )
+                && ( crd[1] >= window_extent.y0 )
+                && ( crd[1] <= window_extent.y1 ) ;
+
+    return mask ;
+  }
+
+  // eval takes model space coordinates, converts them to spline
+  // coordinates and returns pixel values. The evaluation is
+  // unconditional - the caller is expected to have inspected the
+  // coordinate and made sure that the coordinate is in-range.
+  // currently, we use a safe evaluator, so out-of-range coordinates
+  // will not result in memory faults, but I'd prefer to switch to
+  // plain evaluators to save cycles.
+
+  void md_to_spline ( const crd_v & crd_md , crd_v & crd_spl ) const
+  {
+    crd_v image_crd ;
+
+    image_crd[0] = crd_md[0] - total_extent.x0 ;
+    image_crd[0] /= float ( total_extent.x1 - total_extent.x0 ) ;
+    image_crd[0] *= total_width ;
+    image_crd[0] -= .5f ;
+    
+    image_crd[1] = crd_md[1] - total_extent.y0 ;
+    image_crd[1] /= float ( total_extent.y1 - total_extent.y0 ) ;
+    image_crd[1] *= total_height ;
+    image_crd[1] -= .5f ;
+
+    crd_spl = image_crd ;
+
+    crd_spl[0] = image_crd[0] - window_x_offset ;
+    crd_spl[1] = image_crd[1] - window_y_offset ;
+  }
+
+  void eval ( const crd_v & _crd , px_v & px )
+  {
+    crd_v crd ;
+    md_to_spline ( _crd , crd ) ;
+    ev.eval ( crd , px ) ;
+  }
+} ;
+
+// struct mount_t provides data from a rectangular 2D manifold holding
+// pixel data in a given projection which may not cover the entire
+// 360X180 degree environment. Typical candidates would be rectilinear
+// patches or cropped images. This class handles channel counts up to
+// four and paints pixels outside the covered range black. For RGBA
+// pixels, 'outside' pixels are painted 0000, assuming associated alpha.
+// The 'ncrd' template argument is either three for lookups without
+// or nine for lookups with two next neighbour's coordinates which
+// can be used to find derivatives. This class relies on an 'inner'
+// functor of class source_t to actually provide pixel data, this here
+// class deals with the geometrical transformations needed for the
+// different types of projections which the mounted images can have,
+// and with masking out parts where the mounted image has no data.
+
+template < std::size_t nchannels ,
+           projection_t P ,
+           std::size_t L >
+struct mount_t
+: public zimt::unary_functor < zimt::xel_t < float , 3 > ,
+                               zimt::xel_t < float , nchannels > ,
+                               L
+                             >
+{
+  typedef zimt::unary_functor < zimt::xel_t < float , 3 > ,
+                                zimt::xel_t < float , nchannels > ,
+                                L
+                              > base_t ;
+
+  typedef zimt::xel_t < float , 3 > ray_t ;
+  typedef zimt::simdized_type < ray_t , L > ray_v ;
+  typedef zimt::xel_t < float , 2 > crd_t ;
+  typedef zimt::xel_t < float , 3 > crd3_t ;
+  typedef zimt::simdized_type < crd_t , L > crd_v ;
+  typedef zimt::simdized_type < crd3_t , L > crd3_v ;
+  typedef zimt::xel_t < float , nchannels > px_t ;
+  typedef zimt::simdized_type < px_t , L > px_v ;
+
+  using typename base_t::in_v ;
+  using typename base_t::in_ele_v ;
+  typedef typename in_ele_v::mask_type mask_t ;
+  typedef std::function < void ( crd_v & ) > planar_f ;
+
+  source_t < nchannels , L > inner ;
+  planar_f pf ;
+
+  static_assert (    P == SPHERICAL
+                  || P == CYLINDRICAL
+                  || P == RECTILINEAR
+                  || P == STEREOGRAPHIC
+                  || P == FISHEYE ) ;
+
+  mount_t ( const facet_spec & fct ,
+            const planar_f & _pf = [] ( crd_v & ) { } )
+  : inner ( fct ) ,
+    pf ( _pf )
+  { }
+
+  // mount_t ( extent_type _extent ,
+  //           source_t < nchannels , L > & _inner ,
+  //           const planar_f & _pf = [] ( crd_v & ) { } )
+  // : extent ( _extent ) ,
+  //   center ( get_center ( _inner , _extent ) ) ,
+  //   rgirth ( get_rgirth ( _inner , _extent ) ) ,
+  //   inner ( _inner ) ,
+  //   pf ( _pf )
+  // { }
+
+  // plain coordinate transformation without masking. The mask is
+  // calculated one function down. The geometrical transformations
+  // are coded in 'geometry.h'.
+  
+  void get_coordinate_nomask ( const crd3_v & crd3 , crd_v & crd ) const
+  {
+    // depending on the source image's geometry, we convert the
+    // incoming 3D ray coordinate to a planar coordinate pertaining
+    // to the source image plane
+
+    if constexpr ( P == RECTILINEAR )
+    {
+      ray_to_rect_t<float,L>::eval ( crd3 , crd ) ;
+    }
+    else if constexpr ( P == SPHERICAL )
+    {
+      ray_to_ll_t<float,L>::eval ( crd3 , crd ) ;
+    }
+    else if constexpr ( P == CYLINDRICAL )
+    {
+      ray_to_cyl_t<float,L>::eval ( crd3 , crd ) ;
+    }
+    else if constexpr ( P == STEREOGRAPHIC )
+    {
+      ray_to_ster_t<float,L>::eval ( crd3 , crd ) ;
+    }
+    else if constexpr ( P == FISHEYE )
+    {
+      ray_to_fish_t<float,L>::eval ( crd3 , crd ) ;
+    }
+
+    // we now have the 'raw' 2D coordinate in 'crd'. The last step
+    // applies an optional in-plane transformation, which is used
+    // for stuff like lens correction and shear.
+
+    pf ( crd ) ;
+  }
+
+  // get_coordinate yields a coordinate into the mounted 2D manifold
+  // and a true mask value if the ray passes through the draped 2D
+  // manifold, or a valid coordinate (e.g. center of the 'extent')
+  // and a false mask value if the ray does not 'hit' the 2D manifold.
+  // The resulting 2D coordinate is in model space units.
+
+  mask_t get_coordinate ( const crd3_v & crd3 , crd_v & crd ) const
+  {
+    // first, obtain the 'raw' 2D source coordinate
+
+    get_coordinate_nomask ( crd3 , crd ) ;
+
+    // test this coordinate against the boundaries of the image
+    // encoded in 'extent'
+
+    auto mask = inner.test_crd ( crd ) ;
+
+    // only for rectilinear images: clear the mask where the z
+    // coordinate of the ray is zero or negative
+
+    if constexpr ( P == RECTILINEAR )
+    {
+      mask &= ( crd3[2] > 0.0f ) ;
+    }
+
+    // now, where the mask is not set, assign 'safe_crd' to the
+    // 2D coordinate - this is a safe value avoiding problems
+    // if this value is used e.g. to produce a pixel value.
+    // We trust that the mask will prevent such pixels from
+    // actually being used. So this is merely a precaution.
+
+    crd ( ! mask ) = inner.safe_crd ;
+
+    // finally, we return the *mask* - the resulting 2D
+    // coordinate is passed back via the non-const reference
+    // we received as 'crd' argument
+
+    return mask ;
+  }
+
+  // get_mask does everything which get_coordinate does, minus
+  // the actual coordinate transformation. This seems to produce
+  // redundant work, but I trust the compiler will recognize the
+  // common subexpression.
+
+  mask_t get_mask ( const crd3_v & crd3 ) const
+  {
+    crd_v crd ;
+    get_coordinate_nomask ( crd3 , crd ) ;
+
+    auto mask = inner.test_crd ( crd ) ;
+
+    if constexpr ( P == RECTILINEAR )
+      mask &= ( crd3[2] > 0.0f ) ;
+
+    return mask ;
+  }
+
+  // eval puts it all together and yields pixel sets with 'misses' masked
+  // out to zero.
+
+  mask_t eval ( const in_v & ray , px_v & px )
+  {
+    // the first three components have the 3D pickup coordinate itself
+
+    crd3_v crd3 { ray[0] , ray[1] , ray[2] } ;
+    crd_v crd ;
+
+    auto mask = get_coordinate ( crd3 , crd ) ;
+    if ( none_of ( mask ) )
+    {
+      px = 0.0f ;
+      return mask ;
+    }
+
+    inner.eval ( crd , px) ;
+
+    // mask out 'misses' to all-zero
+
+    if ( ! all_of ( mask ) )
+    {
+      px ( ! mask ) = 0.0f ;
+    }
+
+    return mask ;
+  }
+} ;
 
 // this class translates from pixels with N channels to pixels with
 // M channels. It's silently assumed that incoming two- and four-
@@ -1171,297 +1518,7 @@ struct _environment
       return ;
     }
 
-    // the facet isn't a cubemap. First we check if the facet provides
-    // full 360X180 degree coverage, in which case we can use slightly
-    // more performant code (we need no SIMD masks to indicate where
-    // the facet provides data and where it doesn't).
 
-    shape_type shape { fct.width , fct.height } ;
-    bool full_environment = false ;
-
-    // most facets are rendered with REFLECT boundary conditions,
-    // but if the facet covers the full 360 degrees in the horiontal,
-    // we'll use PERIODIC boundary conditions instead.
-
-    zimt::bc_code bc0 = zimt::REFLECT ;
-    if (    fct.projection == SPHERICAL
-         || fct.projection == CYLINDRICAL )
-    {
-      if ( fabs ( fct.hfov - 2.0 * M_PI ) < .000001 )
-        bc0 = PERIODIC ;
-    }
-
-    // fct.masked == -1 means 'normal operation': we set up a
-    // b-spline over the image data. The image data are also
-    // needed for a masking job for facets with alpha channel.
-    // masking jobs for images without an alpha channel don't
-    // need image data, so we don't set up a b-spline at all
-    // and leave p_bspl at it's default value of nullptr.
-    // for 'solo' jobs, it's also futile to load image data
-    // for all but the 'solo' facet, so if we have a 'solo'
-    // argument and the currently handled facet is not the solo
-    // facet, we also skip over the image-loading code and leave
-    // p_bspl nullptr.
-
-    bool load_facet = ( fct.masked == -1 || ( C == 2 || C == 4 ) ) ;
-
-    if ( args.solo >= 0 && fct.facet_no != args.solo )
-      load_facet = false ;
-
-    if ( load_facet )
-    {
-      auto it = spl_map.find ( fct.asset_key ) ;
-
-      if ( it != spl_map.end() ) // && alpha_modified == false )
-      {
-        // we're in luck - this image file was already loaded
-        // into a b-spline previously.
-
-        if ( args.verbose )
-          std::cout << "asset " << fct.asset_key
-                    << " is already present in RAM" << std::endl ;
-
-        p_bspl = it->second ;
-      }
-      else
-      {
-        // no luck - we need to load the image data from disk
-
-        if ( args.verbose )
-          std::cout << "asset " << fct.asset_key
-                    << " is now loaded from disk" << std::endl ;
-
-        // currently building with raw::user_flip set to zero, to load
-        // raw images in memory order without EXIF rotation. This only
-        // affects raw images.
-
-        ImageSpec config;
-        config [ "raw:user_flip" ] = 0 ;
-        config [ "raw:ColorSpace" ] = "sRGB-linear" ;
-
-        auto inp = ImageInput::open ( fct.filename , &config ) ;
-
-        const ImageSpec &spec = inp->spec() ;
-
-        p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
-                                    { bc0 , zimt::REFLECT } ) ) ;
-
-        bool success = inp->read_image (
-          0 , 0 , 0 , C ,
-          TypeDesc::FLOAT ,
-          p_bspl->core.data() ,
-          sizeof ( in_px_t ) ,
-          p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
-        assert ( success ) ;
-
-        inp->close() ;
-
-        int native_nchannels = spec.nchannels ;
-
-        if ( native_nchannels != fct.nchannels )
-        {
-          // this occurs only when cropping or masking affect the facet,
-          // in which case the facet's 'nchannels' value is raised from
-          // one to two or from three to four, to make room for an alpha
-          // channel if that isn't already present.
-
-          assert ( fct.has_lens_crop || fct.has_pto_mask ) ;
-
-          // we initialize the alpha channel to 1.0f
-
-          auto p_alpha_data = (float*) ( p_bspl->container.data() ) ;
-          p_alpha_data += ( C - 1 ) ;
-
-          view_t < 2 , float > alpha_view
-                        ( p_alpha_data ,
-                          p_bspl->container.strides * C ,
-                          p_bspl->container.shape ) ;
-
-          alpha_view.set_data ( 1.0f ) ;
-        }
-
-        // now we process masking and cropping information
-
-        if ( fct.has_lens_crop || fct.has_pto_mask )
-        {
-          assert ( C == 2 || C == 4 ) ;
-
-          array_t < 2 , float > alpha ( p_bspl->core.shape ) ;
-          alpha.set_data ( 1.0f ) ;
-
-          int w = alpha.shape[0] ;
-          int h = alpha.shape[1] ;
-
-          if ( fct.has_pto_mask )
-          {
-            auto clear = [&] ( int x , int y )
-            {
-              alpha [ { x , y } ] = 0.0f ;
-            } ;
-
-            for ( const auto & mask : fct.pto_mask_v )
-            {
-              if ( mask.variant == 0 )
-              {
-                fill_polygon ( mask.vx , mask.vy ,
-                               0 , 0 , w , h , clear ) ;
-              }
-            }
-          }
-  
-          if ( fct.has_lens_crop )
-          {
-            float a = fabs ( fct.crop_x1 - fct.crop_x0 ) / 2.0 ;
-            float b = fabs ( fct.crop_y1 - fct.crop_y0 ) / 2.0 ;
-
-            int w = p_bspl->core.shape [ 0 ] ;
-            int h = p_bspl->core.shape [ 1 ] ;
-
-            if ( fct.projection == FISHEYE )
-            {
-              std::cout << "elliptic crop" << std::endl ;
-              float mx = ( fct.crop_x0 + fct.crop_x1 ) / 2.0 ;
-              float my = ( fct.crop_y0 + fct.crop_y1 ) / 2.0 ;
-              for ( int y = 0 ; y < h ; y++ )
-              {
-                auto dy = fabs ( y - my ) ;
-                // if the y coordinate is outside the ellipse, mask out
-                // the entire line
-                if ( dy > b )
-                {
-                  for ( int x = 0 ; x < w ; x++ )  
-                  {
-                    alpha [ { x , y } ] = 0 ;
-                  }
-                  continue ;
-                }
-                // else, find the half width of the ellipse at given y and
-                // mask out points with x outside
-                // for the ellipse, we have x*x / a*a + y*y / b*b = 1, hence
-
-                float xmargin = sqrt ( ( a * a ) * ( 1.0 - ( dy * dy ) / ( b * b ) ) ) ;
-                for ( int x = 0 ; x < w ; x++ )
-          
-                {
-                  auto dx = fabs ( x - mx ) ;
-                  if ( dx > xmargin )
-                    alpha [ { x , y } ] = 0 ;
-                }
-              }
-            }
-            else
-            {
-              std::cout << "rectangular crop" << std::endl ;
-              for ( int y = 0 ; y < h ; y++ )
-              {
-                for ( int x = 0 ; x < w ; x++ )
-                {
-                  if (   ( x < fct.crop_x0 )
-                      || ( x >= fct.crop_x1 )
-                      || ( y < fct.crop_y0 )
-                      || ( y >= fct.crop_y1 ) )
-                    alpha [ { x , y } ] = 0 ;
-                }
-              }
-            }
-          }
-
-          // finally, apply a low pass filter to the masking alpha channel
-          // this mitigates the issue of the hard mask boundaries, but it
-          // will 'pull in' a bit of masked-out content, so if the mask is
-          // cut very close to unwanted features, they may bleed in. The
-          // large-ish binomial is tentative, but seems to work quite well.
-
-          convolve
-          ( alpha ,
-            alpha ,
-            { REFLECT , REFLECT } ,
-            { 1.0 / 16.0 ,
-              4.0 / 16.0 ,
-              6.0 / 16.0 ,
-              4.0 / 16.0 ,
-              1.0 / 16.0
-            } ,
-            2 ) ;
-
-          // we might use a loop to apply the alpha mask, like this:
-
-          // for ( std::size_t y = 0 ; y < h ; y++ )
-          // {
-          //   for ( std::size_t x = 0 ; x < w ; x++ )
-          //   {
-          //     p_bspl->core [ { x , y } ] *= alpha [ { x , y } ] ;
-          //   }
-          // }
-
-          // but we can do better and do the job in multithreaded
-          // SIMD code using zimt:
-
-          // we set up two loaders, one for the image data in the
-          // b-spline's core, one for the alpha mask we've just made.
-          
-          loader < float , C , 2 , LANES > ldpx ( p_bspl->core ) ;
-          loader < float , 1 , 2 , LANES > lda ( alpha ) ;
-          
-          // we use a synopsis-forming lambda which produces the
-          // product of it's two inputs
-          
-          auto syn = [] ( const px_v & v1 , const f_v & v2 ,
-                          px_v & v3 , std::size_t cap = LANES )
-          {
-            v3 = v1 * v2 ;
-          } ;
-          
-          // and set up a zip_t wiring the two loaders and the
-          // synopsis object to produce the masked image data
-          
-          zip_t < float , C , 2 , LANES , decltype ( syn ) ,
-                  float , 1 , float , C > zip ( ldpx , lda , syn ) ;
-          
-          // the act functor is not used
-          
-          pass_through < float , C , LANES > pass ;
-          
-          // the masked image data go back into the b-spline's core
-          
-          storer < float , C , 2 , LANES > store ( p_bspl->core ) ;
-          
-          // showtime
-          
-          process ( alpha.shape , zip , pass , store ) ;
-        }
-
-        // we save the shared_ptr to the newly made b-spline in
-        // spl_map, to make it available for reuse if needed.
-
-        spl_map [ fct.asset_key ] = p_bspl ;
-
-        // the spline needs to be prefiltered appropriately.
-
-        if (    fct.projection == SPHERICAL
-            && fabs ( fct.hfov - 2.0 * M_PI ) < .000001
-            && fct.width == 2 * fct.height )
-        {
-          // assume the mounted image is a full spherical
-
-          p_bspl->spline_degree = args.prefilter_degree ;
-          spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
-          p_bspl->spline_degree = args.spline_degree ;
-          full_environment = true ;
-        }
-        else
-        {
-          // assume it's a partial spherical, use ordinary
-          // prefilter. Note that we may prefilter with a
-          // different degree (prefilter_degree) if that was
-          // specified in args.
-
-          p_bspl->spline_degree = args.prefilter_degree ;
-          p_bspl->prefilter() ;
-          p_bspl->spline_degree = args.spline_degree ;
-        }
-      }
-    }
 
     // if we're making a mask for an image without alpha channel,
     // p_bspl is nullptr (we don't need image data), and fct.masked
@@ -1471,13 +1528,13 @@ struct _environment
     // For 'normal' operation and masking jobs for images with
     // alpha channel, p_bspl points to a b-spline.
 
-    source_t < C , 2 , L > src ( p_bspl , fct.masked ) ;
+    source_t < C , L > src ( fct ) ;
 
     // for now, we mount images to the center; other types of cropping
     // might be added by providing suitable parameterization.
 
-    auto extent = get_extent ( fct.projection , fct.width ,
-                               fct.height , fct.hfov ) ;
+    // auto extent = get_extent ( fct.projection , fct.width ,
+    //                            fct.height , fct.hfov ) ;
 
     // Some facets require additional processing of the planar (image)
     // coordinates which the source_t object receives. This is needed
@@ -1496,14 +1553,6 @@ struct _environment
     {
       pf = pto_planar < float , LANES > ( fct ) ;
     }
-    // else if ( fct.shear_g != 0.0 || fct.shear_t != 0.0 )
-    // {
-    //   pf = [=] ( crd_v & crd )
-    //   {
-    //     crd = {  crd[0] + ( crd[1] * fct.shear_g ) ,
-    //              crd[1] + ( crd[0] * fct.shear_t ) } ;
-    //   } ;
-    // }
 
     // we fix the projection as a template argument to class mount_t,
     // passing the planar function as well. Then we also set up the
@@ -1515,7 +1564,7 @@ struct _environment
     {
       case RECTILINEAR:
       {
-        mount_t < C , RECTILINEAR , L > mnt ( extent , src , pf ) ;
+        mount_t < C , RECTILINEAR , L > mnt ( fct , pf ) ;
         env = mnt ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
@@ -1523,19 +1572,20 @@ struct _environment
       }
       case SPHERICAL:
       {
-        mount_t < C , SPHERICAL , L > mnt ( extent , src , pf ) ;
+        mount_t < C , SPHERICAL , L > mnt ( fct , pf ) ;
         env = mnt ;
-        if ( full_environment )
-          get_mask = []( const ray_v & ray )
-            { return mask_t ( true ) ; } ;
-        else
+        // TODO:
+        // if ( full_environment )
+        //   get_mask = []( const ray_v & ray )
+        //     { return mask_t ( true ) ; } ;
+        // else
           get_mask = [=] ( const in_v & crd3 )
             { return mnt.get_mask ( crd3 ) ; } ;
         break ;
       }
       case CYLINDRICAL:
       {
-        mount_t < C , CYLINDRICAL , L > mnt ( extent , src , pf ) ;
+        mount_t < C , CYLINDRICAL , L > mnt ( fct , pf ) ;
         env = mnt ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
@@ -1543,7 +1593,7 @@ struct _environment
       }
       case STEREOGRAPHIC:
       {
-        mount_t < C , STEREOGRAPHIC , L > mnt ( extent , src , pf ) ;
+        mount_t < C , STEREOGRAPHIC , L > mnt ( fct , pf ) ;
         env = mnt ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
@@ -1551,7 +1601,7 @@ struct _environment
       }
       case FISHEYE:
       {
-        mount_t < C , FISHEYE , L > mnt ( extent , src , pf ) ;
+        mount_t < C , FISHEYE , L > mnt ( fct , pf ) ;
         env = mnt ;
         if ( fct.hfov >= M_PI * 2.0 )
           get_mask = []( const ray_v & ray )
