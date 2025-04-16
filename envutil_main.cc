@@ -294,25 +294,25 @@ void arguments::init ( int argc , const char ** argv )
     .help("high end of the vertical range")
     .metavar("EXTENT");
 
-  // parameters for multi-image and video output
-
-  ap.separator("  additional parameters for multi-image and video output:");
-
-  ap.arg("--seqfile SEQFILE")
-    .help("image sequence file name (optional)")
-    .metavar("SEQFILE");
-
-  ap.arg("--codec CODEC")
-    .help("video codec for video sequence output (default: libx265)")
-    .metavar("CODEC");
-
-  ap.arg("--mbps MBPS")
-    .help("output video with MBPS Mbit/sec (default: 8)")
-    .metavar("MBPS");
-
-  ap.arg("--fps FPS")
-    .help("output video FPS frames/sec (default: 60)")
-    .metavar("FPS");
+  // // parameters for multi-image and video output
+  // 
+  // ap.separator("  additional parameters for multi-image and video output:");
+  // 
+  // ap.arg("--seqfile SEQFILE")
+  //   .help("image sequence file name (optional)")
+  //   .metavar("SEQFILE");
+  // 
+  // ap.arg("--codec CODEC")
+  //   .help("video codec for video sequence output (default: libx265)")
+  //   .metavar("CODEC");
+  // 
+  // ap.arg("--mbps MBPS")
+  //   .help("output video with MBPS Mbit/sec (default: 8)")
+  //   .metavar("MBPS");
+  // 
+  // ap.arg("--fps FPS")
+  //   .help("output video FPS frames/sec (default: 60)")
+  //   .metavar("FPS");
 
   // interpolation options
 
@@ -399,14 +399,14 @@ void arguments::init ( int argc , const char ** argv )
   // extract the arguments from the argparser, parse the projection
 
   output = ap["output"].as_string ( "" ) ;
-  seqfile = ap["seqfile"].as_string ( "" ) ;
+  // seqfile = ap["seqfile"].as_string ( "" ) ;
   pto_file = ap["pto"].as_string ( "" ) ;
   twf_file = ap["twf_file"].as_string ( "" ) ;
   split = ap["split"].as_string ( "" ) ;
   // fct_file = ap["fct_file"].as_string ( "" ) ;
-  codec = ap["codec"].as_string ( "libx265" ) ; 
-  mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
-  fps = ap["fps"].get<int>(60);
+  // codec = ap["codec"].as_string ( "libx265" ) ; 
+  // mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
+  // fps = ap["fps"].get<int>(60);
   prefilter_degree = ap["prefilter"].get<int>(-1);
   spline_degree = ap["degree"].get<int>(1);
   twine = ap["twine"].get<int>(-1);
@@ -1454,22 +1454,24 @@ void arguments::twine_setup()
 
 long rt_cumulated = 0 ;
 
-int main ( int argc , const char ** argv )
+// 'core' is like a 'main' function, but only for a single job;
+// typically the rendition of a single image or a split job. If
+// the command line does not terminate with a single '-', 'core'
+// is only called once with all arguments from the command line.
+// If there is a trailing '-', envutil reads batches of arguments
+// from cin, one line at a time. The batch of arguments is prepended
+// with any arguments which may have occured before the '-' and the
+// combined argument list is passed to 'core'. So the original CL
+// arguments are repeated for each call of 'core'.
+// This new modus operandi makes 'seqfiles' obsolete - the new
+// method is much more flexible and powerful.
+
+int core ( int argc , const char ** argv )
 {
   // process command line arguments - the result is held in a bunch
   // of member variables in the global 'args' object
 
   args.init ( argc , argv ) ;
-
-  // are we to process a sequence file? If so, open the file
-
-  bool have_seq = ( args.seqfile != std::string() ) ;
-  std::ifstream seqstream ;
-  if ( have_seq )
-  {
-    seqstream.open ( args.seqfile ) ;
-    assert ( seqstream.good() ) ;
-  }
 
   // obtain a dispatch_base pointer to the ISA-specific code.
   // get_dispatch is in envutil_dispatch.cc
@@ -1484,116 +1486,118 @@ int main ( int argc , const char ** argv )
   // If we're not running a sequence, there will only be one
   // iteration.
 
-  int twine_as_passed = args.twine ;
+  args.twine_setup() ;
 
-  std::size_t frames = 0 ;
-  do
+  // find the parameters which are type-relevant to route to
+  // the specialized code above. There are several stages of
+  // 'roll_out' which move the parameterization given by run-time
+  // arguments into type information.
+
+  int nch = args.nchannels ;
+  int ninp = ( args.twine == 0 ) ? 3 : 9 ;
+  projection_t prj = args.projection ;
+
+  // now call the ISA-specific rendering code via the dispatch_base
+  // pointer received from get_dispatch.
+
+  if ( args.split != std::string() )
   {
-    // if we're running a sequence, we'll overwrite a few variables
-    // in 'args' with values derived from the current line of input
-    // read from the sequence file.
+    image_series split_name ( args.split ) ;
 
-    if ( have_seq )
+    for ( int i = 0 ; i < args.nfacets ; i++ )
     {
-      double seq_hfov , seq_yaw , seq_pitch , seq_roll ;
-      seqstream >> seq_hfov >> seq_yaw >> seq_pitch >> seq_roll ;
-      if ( ! seqstream.good() )
-        break ;
-      std::cout << "from seqfile: hfov: " << seq_hfov
-                << " yaw: " << seq_yaw << " pitch: " << seq_pitch
-                << " roll: " << seq_roll << std::endl ;
-      args.hfov = seq_hfov * M_PI / 180.0 ;
-      args.yaw = seq_yaw * M_PI / 180.0 ;
-      args.pitch = seq_pitch * M_PI / 180.0 ;
-      args.roll = seq_roll * M_PI / 180.0 ;
-    
-      (extent_type &) args = get_extent ( args.projection , args.width ,
-                                          args.height , args.hfov  ) ;
-      assert ( args.x0 < args.x1 ) ;
-      assert ( args.y0 < args.y1 ) ;
-      args.step = ( args.x1 - args.x0 ) / args.width ;
+      // if 'solo' is set (it would be -1 otherwise) we skip the
+      // solo facet as a target - we already have it, so there's
+      // little point in re-creating it.
 
-      // (re-) set 'twine' to the value which was passed to envutil
-      // initially. This is to trigger recalculation of the twining
-      // parameters to adapt to possible changes in the course of
-      // the sequence.
+      if ( i == args.solo )
+        continue ;
 
-      args.twine = twine_as_passed ;
-    }
+      // for all other facets, we take the facet's geometry (encoded
+      // in it's base class facet_base) over as target geometry and
+      // then run a 'single' job with that target, which recreates
+      // the facet from either the solo image (if that was given)
+      // or from the synopsis formed from all source facets. The
+      // latter variant (no solo facet) will show stitching artifacts
+      // depending on the stitching process, and the 're-created'
+      // facets will look as if they had been 're-created' from a
+      // stitch done with envutil with the current settings. As of
+      // this writing, this is quite rough-and-ready - it's
+      // geometrically correct, but the facet's aren't blended,
+      // so the seams may be visible.
 
-    args.twine_setup() ;
+      const auto & fspec = args.facet_spec_v [ i ] ;
 
-    // find the parameters which are type-relevant to route to
-    // the specialized code above. There are several stages of
-    // 'roll_out' which move the parameterization given by run-time
-    // arguments into type information.
+      // take over the facet's geometry to the target geometry in args
 
-    int nch = args.nchannels ;
-    int ninp = ( args.twine == 0 ) ? 3 : 9 ;
-    projection_t prj = args.projection ;
+      (facet_base&) args = fspec ;
 
-    // now call the ISA-specific rendering code via the dispatch_base
-    // pointer received from get_dispatch.
+      // request a 'single' job
 
-    if ( args.split != std::string() )
-    {
-      image_series split_name ( args.split ) ;
+      args.single = i ;
+      args.store_cropped = false ;
 
-      for ( int i = 0 ; i < args.nfacets ; i++ )
-      {
-        // if 'solo' is set (it would be -1 otherwise) we skip the
-        // solo facet as a target - we already have it, so there's
-        // little point in re-creating it.
+      // save the target with this filename:
 
-        if ( i == args.solo )
-          continue ;
+      args.output = split_name[i] ;
 
-        // for all other facets, we take the facet's geometry (encoded
-        // in it's base class facet_base) over as target geometry and
-        // then run a 'single' job with that target, which recreates
-        // the facet from either the solo image (if that was given)
-        // or from the synopsis formed from all source facets. The
-        // latter variant (no solo facet) will show stitching artifacts
-        // depending on the stitching process, and the 're-created'
-        // facets will look as if they had been 're-created' from a
-        // stitch done with envutil with the current settings. As of
-        // this writing, this is quite rough-and-ready - it's
-        // geometrically correct, but the facet's aren't blended,
-        // so the seams may be visible.
-
-        const auto & fspec = args.facet_spec_v [ i ] ;
-
-        // take over the facet's geometry to the target geometry in args
-
-        (facet_base&) args = fspec ;
-
-        // request a 'single' job
-
-        args.single = i ;
-        args.store_cropped = false ;
-
-        // save the target with this filename:
-
-        args.output = split_name[i] ;
-
-        dp->payload ( nch , ninp , prj ) ;
-      }
-    }
-    else
-    {
-      if ( args.single != -1 )
-        args.store_cropped = false ;
       dp->payload ( nch , ninp , prj ) ;
     }
-    ++frames ;
   }
-  while ( have_seq ) ; // loop criterion for 'do' loop
-
-  if ( args.verbose && have_seq )
+  else
   {
-    double rt_avg = rt_cumulated ;
-    rt_avg /= frames ;
-    std::cout << "average frame rendering time: " << rt_avg
-              << " msec" << std::endl ;
+    if ( args.single != -1 )
+      args.store_cropped = false ;
+    dp->payload ( nch , ninp , prj ) ;
   }
+
+  return 0 ;
+}
+
+// the simple tokenizer for arguments is in envutil_basic.cc
+
+extern std::vector < std::string > tokenize ( const std::string input ) ;
+
+// main handles command line and piped arguments and calls 'core',
+// possibly several times, if a trailing '-' switches envutil into
+// 'pipe' mode.
+
+int main ( int argc , const char ** argv )
+{
+  if ( std::string ( argv [ argc - 1 ] ) != "-" )
+    core ( argc , argv ) ;
+  else
+  {
+    argc-- ;
+    std::vector < std::string > sv ;
+    std::vector < const char * > av ;
+    while ( true )
+    {
+      std::string str ;
+      if ( std::cin.eof() )
+      {
+        std::cout << "pipe has reached EOF" << std::endl ;
+        break ;
+      }
+      else
+      {
+        if ( std::getline ( std::cin , str ) )
+        {
+          av.clear() ;
+          args = arguments() ;
+          sv = tokenize ( str ) ;
+          for ( int i = 0 ; i < argc ; i++ )
+            av.push_back ( argv[i] ) ;
+          for ( const auto & t : sv )
+          {
+            std::cout << " <" << t << ">" ;
+            av.push_back ( t.c_str() ) ;
+          }
+          std::cout << std::endl ;
+          core ( av.size() , av.data() ) ;
+        }
+      }
+    }
+  }
+  return 0 ;
 }

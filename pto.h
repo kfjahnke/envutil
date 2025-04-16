@@ -101,7 +101,7 @@ struct pto_parser_type
     auto success = std::regex_match ( s , parts , pto_line_regex ) ;
     if ( ! success )
     {
-      std::cout << "parser ignores: " << s << std::endl ;
+      // std::cout << "parser ignores: " << s << std::endl ;
       return true ;
     }
 

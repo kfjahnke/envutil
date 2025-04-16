@@ -319,3 +319,92 @@ void fill_polygon ( const std::vector<float> & px ,
   }
 }
 
+// simple tokenizer: the input is split into words separated by white
+// space. Single and double quotes are recognized and quoted strings
+// may contain white space. Inside quotes, the quote sign can be
+// carried into the token if it's preceded by a backslash.
+// This was fun: it's a good old finite automaton :D
+
+std::vector < std::string > tokenize ( const std::string input )
+{
+  std::vector < std::string > result ;
+  enum { NO_TOKEN , IN_TOKEN , IN_Q } ;
+  auto state = NO_TOKEN ;
+  const char * cp = input.c_str() ;
+  std::string token ;
+  char quote ;
+
+  while ( *cp )
+  {
+    switch ( state )
+    {
+      case NO_TOKEN:
+      {
+        switch ( *cp )
+        {
+          case ' ' :
+          case '\t' :
+          case '\n' :
+          case '\r' :
+            break ;
+          case '"' :
+          case '\'' :
+            state = IN_Q ;
+            quote = *cp ;
+            break ;
+          default:
+            state = IN_TOKEN ;
+            token += *cp ;
+            break ;
+        }
+        break ;
+      }
+      case IN_TOKEN:
+      {
+        switch ( *cp )
+        {
+          case ' ' :
+          case '\t' :
+          case '\n' :
+          case '\r' :
+            result.push_back ( token ) ;
+            token.clear() ;
+            state = NO_TOKEN ;
+            break ;
+          case '"' :
+          case '\'' :
+            state = IN_Q ;
+            quote = *cp ;
+            break ;
+          default:
+            token += *cp ;
+            break ;
+        }
+        break ;
+      }
+      case IN_Q:
+      {
+        if ( *cp == quote )
+        {
+          state = IN_TOKEN ;
+          break ;
+        }
+        switch ( *cp )
+        {
+          case '\\' :
+            if ( *(cp+1) == quote )
+              ++cp ;
+          default:
+            token += *cp ;
+            break ;
+        }
+        break ;
+      }
+    }
+    ++cp ;
+  }
+  if ( token != std::string() )
+    result.push_back ( token ) ;
+
+  return result ;
+}

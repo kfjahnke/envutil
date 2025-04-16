@@ -329,11 +329,11 @@ void work ( get_t & get , act_t & act )
   // store the result to disk - either as a single frame added
   // to the video file, or as a single image stored individually.
 
-  if ( args.seqfile != std::string() )
-  {
-    push_video_frame ( trg ) ;
-  }
-  else
+  // if ( args.seqfile != std::string() )
+  // {
+  //   push_video_frame ( trg ) ;
+  // }
+  // else
   {
     if ( args.verbose )
       std::cout << "saving output image: " << args.output << std::endl ;
@@ -1664,7 +1664,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-// #define NARROW_SCOPE
+#define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate

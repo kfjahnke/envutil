@@ -14,7 +14,8 @@ orientation, projection, field of view and extent. For CL arguments, try
 Cubemaps are rarely used in panorama photography, but I aim at reviving
 them by building a code base to process them efficiently, honing the
 standard, and integrating processing of single-image cubemap format
-(as it is used by envutil) into [lux](https://bitbucket.org/kfj/pv), my image and panorama viewer.
+(as it is used by envutil) into [lux](https://bitbucket.org/kfj/pv), my
+image and panorama viewer.
 The single-image cubemap format I process in envutil leans on the
 openEXR standard as far as the order and orientation of the cube
 face images is concerned: the images are expected stacked vertically (in
@@ -69,20 +70,6 @@ voronoi diagram. Where facets have transparency, content which would
 be obscured by an opaque facet will shine through even if it does
 not qualify as 'winner'.
 
-envutil can also produce image series. The individual images are all
-created from the same environment, but the horizontal field of view
-and yaw, pitch and roll of the virtual camera for each image are taken
-from a 'sequence file', passed as --seqfile. The four values are given
-four in a line, each line provides settings for one image. If you
-pass a format string for the output, the images will be named accordingly;
-use format specs like %03d (to make the images lexically sortable).
-If output is not a format string, it's interpreted as a video file name,
-and the consecutive images are used to create a video with ffmpeg.
-This is a handy way to create video sequences of zooms and pans,
-but you'll want a script to produce the seqfile - it's a bit like a
-slicer file for a 3D printer - you don't want to write that by hand,
-either. Default is H265 with 60 fps and 8 Mbit/sec.
-
 You can choose several different interpolation methods. The default
 is to use 'twining' - oversampling with subsequent weighted pixel
 binning. The default with this method is to use a simple box filter
@@ -99,12 +86,9 @@ new and this is a first approach. The method is intrinsically very
 flexible (it's based on a generalization of convolution), and the full
 flexibility isn't accessible in 'envutil' with the parameterization
 as it stands now, but it's already quite useful with the few parameters
-I offer. Automatic twining is also used for video output, where fixed
-twining parameters would fail to adapt to changing hfov. Use of twining
-is strongly recommended for video output to avoid aliasing. You may
-switch twining off by passing --twine 1. The b-spline used as 'ground
-truth' can be parameterized with the --degree and --prefilter arguments,
-see there.
+I offer. You can switch twining off by passing --twine 0. The b-spline
+used as 'ground truth' can be parameterized with the --degree and
+--prefilter arguments, see there.
 
 There is also code to read the twining filter kernel from a file
 (use --twf_file); this filter can be scaled by additionally passing
@@ -156,11 +140,9 @@ back-end. Pass -DUSE_GOADING=ON to make the build ignore explicit SIMD
 libraries (highway, Vc or std::simd) which would otherwise be used in
 this order of preference.
 
-The only mandatory dependency is [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) - OIIO in short. envutil also
-links to some ffmpeg libraries, but these should come with an installation
-of OpenImageIO - OIIO can use ffmpeg to open videos, but at the time of
-this writing it could not write to videos, so I had to do it 'by hand',
-using ffmpeg code directly.
+The only mandatory dependency is [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) - OIIO in short. Using highway
+for SIMD is highly recommended, and some other needed libraries may not
+be readily available, even though they should come with OpenImageIO.
 
 It's recommended to build with clang++
 
@@ -181,39 +163,42 @@ the last option is only useful if you want to build debian packages with
 'make package'. Compilation with g++/gcc may or may not work - I don't check
 regularly.
 
+Building with highway is highly recommended. I tried the highway coming with
+the package manager on debian12, but that did not work - building highway from
+source is easy, though. Another hickough I experienced on debian12 was the
+default clang++, which is only v14. That did not work either - I installed
+clang-19, and that did the trick. Imath may also not be available, and
+OpenImageIO did not work without also installing it's CL tools. With all
+dependencies met, the build went without errors or warnings. I could also
+build a debian package (I did install the debhelper package), but the resulting
+package seems to be missing licensing information - it was flagged as
+'proprietary' when I installed it, even though I set the license to MIT.
+
 With version 0.1.1, on top of building on debian12,  I have also managed to
 build envutil on on an intel mac running macOS 12.7.5 (using macPorts for the
-dependencies) and on windows 11 using mingw64. I haven't yet managed to produce
-video files with the mac build which played on my mac, but otherwise the builds
-seem viable.
+dependencies) and on windows 11 using mingw64.
     
 'make' should produce a binary named 'envutil' or 'envutil.exe''.
 
 envutil --help gives a summary of command line options:
 
-    --help                         Print help message
-    -v                             Verbose output
-
+      --help                   Print help message
+      -v                       Verbose output
     mandatory options:
-      --output OUTPUT                output file name (mandatory)
-
-    parameters for mounted (facet) image input:
-      --pto PTOFILE            panotools script in hugin PTO dialect (optional)
-      --pto_line LINE          add (trailing) line of PTO code
-      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
-                              load oriented non-environment source image
-      --solo FACET_INDEX      show content only from this facet
-      --mask_for FACET_INDEX   paint this facet white, all others black
-      --nchannels CHANNELS     produce output with CHANNELS channels (1-4)
-
+      --output OUTPUT          output file name (mandatory)
     important options which have defaults:
-      --projection PRJ               projection used for the output image(s) (default: rectilinear)
-      --hfov ANGLE                   horiziontal field of view of the output (default: 90)
-      --width EXTENT                 width of the output (default: 1024)
-      --height EXTENT                height of the output (default: same as width)
-
+      --projection PRJ         projection used for the output image(s)
+                                (default: rectilinear)
+      --hfov ANGLE             horiziontal field of view of the output
+                                (default: 90)
+      --width EXTENT           width of the output (default: 1024)
+      --height EXTENT          height of the output (default: same as width)
+      --support_min EXTENT     minimal additional support around the cube
+                                face proper
+      --tile_size EXTENT       tile size for the internal representation image
     additional parameters for single-image output:
       --single FACET           render an image like facet FACET
+      --split FORMAT_STRING    create a 'single' facet for all facets in a PTO
       --yaw ANGLE              yaw of the virtual camera
       --pitch ANGLE            pitch of the virtual camera
       --roll ANGLE             roll of the virtual camera
@@ -221,27 +206,37 @@ envutil --help gives a summary of command line options:
       --x1 EXTENT              high end of the horizontal range
       --y0 EXTENT              low end of the vertical range
       --y1 EXTENT              high end of the vertical range
-
-    additional parameters for multi-image and video output:
-      --seqfile SEQFILE              image sequence file name (optional)
-      --codec CODEC                  video codec for video sequence output (default: libx265)
-      --mbps MBPS                    output video with MBPS Mbit/sec (default: 8)
-      --fps FPS                      output video FPS frames/sec (default: 60)
-
     interpolation options:
-      --prefilter DEG                prefilter degree for the b-spline (>= 0)
-      --degree DEG                   degree of the b-spline (>= 0)
+      --prefilter DEG          prefilter degree (>= 0) for b-spline-based
+                                interpolations
+      --degree DEG             degree of the spline (>= 0) for b-spline-based
+                                interpolations
+    parameters for twining (--twine 0 switches twining off)
+      --twine TWINE            use twine*twine oversampling - omit this arg
+                                for automatic twining
+      --twf_file TWF_FILE      read twining filter kernel from TWF_FILE
+                                (switches twining on)
+      --twine_normalize        normalize twining filter weights gleaned from
+                                a file
+      --twine_precise          project twining basis vectors to tangent plane
+      --twine_width WIDTH      widen the pick-up area of the twining filter
+      --twine_density DENSITY  increase tap count of an 'automatic' twining
+                                filter
+      --twine_sigma SIGMA      use a truncated gaussian for the twining
+                                filter (default: don't)
+      --twine_threshold THR    discard twining filter taps below this
+                                threshold
+    parameters for mounted (facet) image input:
+      --pto PTOFILE            panotools script in hugin PTO dialect
+                                (optional)
+      --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
+                              load oriented non-environment source image
+      --pto_line LINE          add (trailing) line of PTO code
+      --solo FACET_INDEX       show only this facet (indexes starting from
+                                zero)
+      --mask_for FACET_INDEX   paint this facet white, all others black
+      --nchannels CHANNELS     produce output with CHANNELS channels (1-4)
 
-    parameters for twining:
-      --twine TWINE                  use twine*twine oversampling - default: automatic settings
-      --twf_file TWF_FILE            read twining filter kernel from TWF_FILE
-      --twine_normalize              normalize twining filter weights gleaned from a file
-      --twine_precise                project twining basis vectors to tangent plane
-      --twine_width WIDTH            widen the pick-up area of the twining filter
-      --twine_density DENSITY        increase tap count of an 'automatic' twining filter
-      --twine_sigma SIGMA            use a truncated gaussian for the twining filter (default: don't)
-      --twine_threshold THR          discard twining filter taps below this threshold
-    
 Input images can be lat/lon environment images (a.k.a. 'full spherical'
 or 'full equirect' or '360X180 degree panorama'), 'cubemaps' - a set of 
 six square images in rectilinear projection showing the view to the six cardinal
@@ -610,13 +605,6 @@ The output will be stored under this name. If you are generating cubemaps
 You'll get six separate cube face images instead of the single-image cubemap.
 This also works with --prjection biatan6 - you'll get six cube face images
 with the 'biatan6' reprojection applied.
-When generating image sequences and you want single-image output, you also
-have to pass a format string, but with a format element specifying an integer.
-This is replaced with the output image's sequential number. Use a format
-element like %03d to get alphabetically sortable images - in preference to
-e.g. %d which does not produce leading zeroes. If you are generating image
-sequences and your output parameter is *not* a format string, envutil will
-produce video output to the given filename.
 
 ## --projection PRJ  target projection
 
@@ -787,76 +775,6 @@ parameter, given a specific projection. This can help you figure out specific
 values you may want to pass, e.g. to produce anisotropic output or cropped
 images.
 
-# Parameters for Multi-Image and Video Output
-
-## --seq SEQFILE         image sequence file name
-
-Alternative output of an image sequence with hfov, yaw, pitch and roll given
-as four consecutive numbers per line, one line per image. This is a new
-experimental feature, output files are numbered consecutively when 'output'
-can be interpreted as a format string (use something like --output img%03d.jpg).
-If 'output' is not a format string, it's interpreted as the name of a video
-file, which is put together from the image sequence using ffmpeg and the
-codec given with --codec (default is libx265).
-
-Single images can be combined into a video with ffmpeg, like so:
-
-ffmpeg -f image2 -pattern_type glob -framerate 60 -i 'seq*.jpg' -s 960x540
-       -c:v libx264 foo.mp4
-
-This may be preferable, because all ffmpeg's options can be exploited that way,
-and the code in envutil is derived from a very old example program which may
-not be at the height of time, and my understanding of ffmpeg is not very good.
-On my system, the native video player displays the video, but vlc and lux
-don't - obviously I am missing something, and help with ffmpeg would be welcome!
-This feature might be modified slightly to accept parameter sets from a stream.
-Here's an example of the first few lines of a seqfile for a plain pan with
-camera hfov of 90 degrees in 1-degree steps (second column):
-
-    90 0 0 0
-    90 1 0 0
-    90 2 0 0
-    90 3 0 0
-    90 4 0 0
-    90 5 0 0
-    90 6 0 0
-    90 7 0 0
-    90 8 0 0
-    90 9 0 0
-    90 10 0 0
-    90 11 0 0
-    90 12 0 0
-  
-Since every frame is represented by a single line, this format is quite verbose,
-requiring 60 lines per second for 60 fps video - you obviously don't want to
-hand-code such files, but rather generate them with software. It's a bit like
-slicer format for 3D printers, which you also don't want to write manually.
-The format might be beefed up (e.g. 'progressing' variables, switch of source
-image and other parameterization) - the current status quo is just to show
-that it can be done and to check that anti-aliasing works as expected - to see
-the effect of aliasing, still images aren't usually sufficient.
-
-## --codec CODEC         video codec for video sequence output (default: libx265)
-
-This is a string passed to ffmpeg to specify the video codec. Internally, frames
-for video are encoded in YUV, which may not work with other codecs than the
-hevc family (H264, H265). If direct video output fails, pass a format string
-as output and then combine the separate images with ffmpeg (see --seqfile, above)
-for H264 output, pass libx264. This is a bit enigmatic - I haven't yet figured
-out which strings to pass here for all the codecs which ffmpeg supports, and
-which of the codecs work with the pixel type I supply.
-
-## --mbps MBPS           output video with MBPS Mbit/sec (default: 8.0)
-
-Megabits/second value for the codec. This determines how much the data will be
-compressed by the video codec. Note that this only affects video output - if you
-generate separate images, they aren't affected by this parameter.
-
-## --fps FPS             output video FPS frames/sec (default: 60)
-
-This does not change the image sequence, but it changes the speed of the video
-when it's displayed.
-
 # Interpolation Options
 
 envutil will use 'twining' with automatic settings as it's default
@@ -943,9 +861,7 @@ for 'trilinear interpolation'). twining, which uses a scalable filter,
 can adapt the filter size to the change in resolution, so it doesn't use
 this method. Image pyramids are useful when scaled-down content can be
 reused often (e.g. in animated sequences in lux where 60 fps are needed
-and rendering must be as fast as possible). This would also be the case
-in envutil when multiple-image or video output is made, but I don't exploit
-this scheme in envutil.
+and rendering must be as fast as possible).
 
 ##  --degree DEG      degree of the b-spline (>= 0)
 ##  --prefilter DEG   prefilter degree (>= 0) for the b-spline
@@ -1190,12 +1106,6 @@ noticeable blurring. Try a b-spline with proper prefiltering and no twining
 (--twine 1 -degree 3) to see the difference - you'll see no blurring, but if
 the view magnifies and the signal isn't band-limited, you may see ringing
 artifacts.
-
-The twine_width parameter also only affects single-image output - for image
-sequences, it's set automatically to fit the relation of input and output.
-If --twine is not passed (or passed 0) this parameter will be calculated
-automatically, and any value passed here is then overridden by the
-automatics.
 
 ## --twine_sigma TWINE_SIGMA  use a truncated gaussian for the twining filter (default: don't)
 
