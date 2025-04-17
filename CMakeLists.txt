@@ -308,6 +308,7 @@ target_link_libraries( envutil ${required_libraries} pthread)
 # install the 'useful' binaries (stepper is only a demo)
 
 install(TARGETS envutil DESTINATION bin)
+install(FILES copyright LICENSE DESTINATION share/doc/envutil)
 
 # Some more options for building debian packages. The first one - with
 
