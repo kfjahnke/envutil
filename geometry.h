@@ -500,7 +500,7 @@ struct ster_to_ray_t
     // TODO: test
 
     auto r = sqrt ( horizontal * horizontal + vertical * vertical ) ;
-    auto theta = atan ( r / 2.0 ) * 2.0f ;
+    auto theta = atan ( r / T(2) ) * T(2) ;
     auto phi = atan2 ( horizontal , - vertical ) ;
 
     forward = cos ( theta ) ;
@@ -597,23 +597,23 @@ struct in_face_to_ray
     {
       crd3[RIGHT]   =   crd2[RIGHT] ;
       crd3[DOWN]    =   crd2[DOWN]  ;
-      crd3[FORWARD] =   1.0f ;
+      crd3[FORWARD] =   1 ;
     }
     else if constexpr ( F == CM_BACK )
     {
       crd3[RIGHT]   = - crd2[RIGHT] ;
       crd3[DOWN]    =   crd2[DOWN]  ;
-      crd3[FORWARD] = - 1.0f ;
+      crd3[FORWARD] = - 1 ;
     }
     else if constexpr ( F == CM_RIGHT )
     {
-      crd3[RIGHT] =     1.0f ;
+      crd3[RIGHT] =     1 ;
       crd3[DOWN] =      crd2[DOWN]  ;
       crd3[FORWARD] = - crd2[RIGHT] ;
     }
     else if constexpr ( F == CM_LEFT )
     {
-      crd3[RIGHT] =   - 1.0f ;
+      crd3[RIGHT] =   - 1 ;
       crd3[DOWN] =      crd2[DOWN]  ;
       crd3[FORWARD] =   crd2[RIGHT] ;
     }
@@ -624,13 +624,13 @@ struct in_face_to_ray
     else if constexpr ( F == CM_BOTTOM )
     {
       crd3[RIGHT] =   - crd2[RIGHT] ;
-      crd3[DOWN] =      1.0f ;
+      crd3[DOWN] =      1 ;
       crd3[FORWARD] =   crd2[DOWN]  ;
     }
     else if constexpr ( F == CM_TOP )
     {
       crd3[RIGHT] =   - crd2[RIGHT] ;
-      crd3[DOWN] =    - 1.0f ;
+      crd3[DOWN] =    - 1 ;
       crd3[FORWARD] = - crd2[DOWN]  ;
     }
   }
@@ -724,14 +724,14 @@ struct ir_to_ray_t
       auto m = ( section == CM_RIGHT ) ;
       if ( any_of ( m ) )
       {
-        crd3[RIGHT](m) =     1.0f ;
+        crd3[RIGHT](m) =     1 ;
         crd3[DOWN](m) =      crd2[DOWN] ;
         crd3[FORWARD](m) = - crd2[RIGHT] ;
       }
       m = ( section == CM_LEFT ) ;
       if ( any_of ( m ) )
       {
-        crd3[RIGHT](m) =   - 1.0f ;
+        crd3[RIGHT](m) =   - 1 ;
         crd3[DOWN](m) =      crd2[DOWN] ;
         crd3[FORWARD](m) =   crd2[RIGHT] ;
       }
@@ -742,14 +742,14 @@ struct ir_to_ray_t
       if ( any_of ( m ) )
       {
         crd3[RIGHT](m) =   - crd2[RIGHT] ;
-        crd3[DOWN](m) =      1.0f ;
+        crd3[DOWN](m) =      1 ;
         crd3[FORWARD](m) =   crd2[DOWN] ;
       }
       m = ( section == CM_TOP ) ;
       if ( any_of ( m ) )
       {
         crd3[RIGHT](m) =   - crd2[RIGHT] ;
-        crd3[DOWN](m) =    - 1.0f ;
+        crd3[DOWN](m) =    - 1 ;
         crd3[FORWARD](m) = - crd2[DOWN] ;
       }
     }
@@ -760,14 +760,14 @@ struct ir_to_ray_t
       {
         crd3[RIGHT](m)   =   crd2[RIGHT] ;
         crd3[DOWN](m)    =   crd2[DOWN] ;
-        crd3[FORWARD](m) =   1.0f ;
+        crd3[FORWARD](m) =   1 ;
       }
       m = ( section == CM_BACK ) ;
       if ( any_of ( m ) )
       {
         crd3[RIGHT](m)   = - crd2[RIGHT] ;
         crd3[DOWN](m)    =   crd2[DOWN] ;
-        crd3[FORWARD](m) = - 1.0f ;
+        crd3[FORWARD](m) = - 1 ;
       }
     }
   }
@@ -807,13 +807,13 @@ struct ir_to_ray_t
     {
       if ( section == CM_RIGHT )
       {
-        crd3[RIGHT] =     1.0f ;
+        crd3[RIGHT] =     1 ;
         crd3[DOWN] =      crd2[DOWN] ;
         crd3[FORWARD] = - crd2[RIGHT] ;
       }
       else
       {
-        crd3[RIGHT] =   - 1.0f ;
+        crd3[RIGHT] =   - 1 ;
         crd3[DOWN] =      crd2[DOWN] ;
         crd3[FORWARD] =   crd2[RIGHT] ;
       }
@@ -823,13 +823,13 @@ struct ir_to_ray_t
       if ( section == CM_BOTTOM )
       {
         crd3[RIGHT] =   - crd2[RIGHT] ;
-        crd3[DOWN] =      1.0f ;
+        crd3[DOWN] =      1 ;
         crd3[FORWARD] =   crd2[DOWN] ;
       }
       else
       {
         crd3[RIGHT] =   - crd2[RIGHT] ;
-        crd3[DOWN] =    - 1.0f ;
+        crd3[DOWN] =    - 1 ;
         crd3[FORWARD] = - crd2[DOWN] ;
       }
     }
@@ -839,13 +839,13 @@ struct ir_to_ray_t
       {
         crd3[RIGHT]   =   crd2[RIGHT] ;
         crd3[DOWN]    =   crd2[DOWN] ;
-        crd3[FORWARD] =   1.0f ;
+        crd3[FORWARD] =   1 ;
       }
       else
       {
         crd3[RIGHT]   = - crd2[RIGHT] ;
         crd3[DOWN]    =   crd2[DOWN] ;
-        crd3[FORWARD] = - 1.0f ;
+        crd3[FORWARD] = - 1 ;
       }
     }
   }
@@ -909,7 +909,7 @@ struct ba6_to_ray_t
 
     // apply the in-plane biatan6 transformation
 
-    crd2 = tan ( crd2 * T ( M_PI / 4.0 ) ) ;
+    crd2 = tan ( crd2 * T ( M_PI / 4 ) ) ;
 
     // the section number can also yield the 'dominant' axis
     // by dividing the value by two (another property which is
@@ -925,14 +925,14 @@ struct ba6_to_ray_t
       auto m = ( section == CM_RIGHT ) ;
       if ( any_of ( m ) )
       {
-        crd3[RIGHT](m) =     1.0f ;
+        crd3[RIGHT](m) =     1 ;
         crd3[DOWN](m) =      crd2[DOWN] ;
         crd3[FORWARD](m) = - crd2[RIGHT] ;
       }
       m = ( section == CM_LEFT ) ;
       if ( any_of ( m ) )
       {
-        crd3[RIGHT](m) =   - 1.0f ;
+        crd3[RIGHT](m) =   - 1 ;
         crd3[DOWN](m) =      crd2[DOWN] ;
         crd3[FORWARD](m) =   crd2[RIGHT] ;
       }
@@ -943,14 +943,14 @@ struct ba6_to_ray_t
       if ( any_of ( m ) )
       {
         crd3[RIGHT](m) =   - crd2[RIGHT] ;
-        crd3[DOWN](m) =      1.0f ;
+        crd3[DOWN](m) =      1 ;
         crd3[FORWARD](m) =   crd2[DOWN] ;
       }
       m = ( section == CM_TOP ) ;
       if ( any_of ( m ) )
       {
         crd3[RIGHT](m) =   - crd2[RIGHT] ;
-        crd3[DOWN](m) =    - 1.0f ;
+        crd3[DOWN](m) =    - 1 ;
         crd3[FORWARD](m) = - crd2[DOWN] ;
       }
     }
@@ -961,14 +961,14 @@ struct ba6_to_ray_t
       {
         crd3[RIGHT](m)   =   crd2[RIGHT] ;
         crd3[DOWN](m)    =   crd2[DOWN] ;
-        crd3[FORWARD](m) =   1.0f ;
+        crd3[FORWARD](m) =   1 ;
       }
       m = ( section == CM_BACK ) ;
       if ( any_of ( m ) )
       {
         crd3[RIGHT](m)   = - crd2[RIGHT] ;
         crd3[DOWN](m)    =   crd2[DOWN] ;
-        crd3[FORWARD](m) = - 1.0f ;
+        crd3[FORWARD](m) = - 1 ;
       }
     }
   }
@@ -997,7 +997,7 @@ struct ba6_to_ray_t
 
     // apply the in-plane biatan6 transformation
 
-    crd2 = tan ( crd2 * T ( M_PI / 4.0 ) ) ;
+    crd2 = tan ( crd2 * T ( M_PI / 4 ) ) ;
 
     // the section number can also yield the 'dominant' axis
     // by dividing the value by two (another property which is
@@ -1012,13 +1012,13 @@ struct ba6_to_ray_t
     {
       if ( section == CM_RIGHT )
       {
-        crd3[RIGHT] =     1.0f ;
+        crd3[RIGHT] =     1 ;
         crd3[DOWN] =      crd2[DOWN] ;
         crd3[FORWARD] = - crd2[RIGHT] ;
       }
       else
       {
-        crd3[RIGHT] =   - 1.0f ;
+        crd3[RIGHT] =   - 1 ;
         crd3[DOWN] =      crd2[DOWN] ;
         crd3[FORWARD] =   crd2[RIGHT] ;
       }
@@ -1028,13 +1028,13 @@ struct ba6_to_ray_t
       if ( section == CM_BOTTOM )
       {
         crd3[RIGHT] =   - crd2[RIGHT] ;
-        crd3[DOWN] =      1.0f ;
+        crd3[DOWN] =      1 ;
         crd3[FORWARD] =   crd2[DOWN] ;
       }
       else
       {
         crd3[RIGHT] =   - crd2[RIGHT] ;
-        crd3[DOWN] =    - 1.0f ;
+        crd3[DOWN] =    - 1 ;
         crd3[FORWARD] = - crd2[DOWN] ;
       }
     }
@@ -1044,13 +1044,13 @@ struct ba6_to_ray_t
       {
         crd3[RIGHT]   =   crd2[RIGHT] ;
         crd3[DOWN]    =   crd2[DOWN] ;
-        crd3[FORWARD] =   1.0f ;
+        crd3[FORWARD] =   1 ;
       }
       else
       {
         crd3[RIGHT]   = - crd2[RIGHT] ;
         crd3[DOWN]    =   crd2[DOWN] ;
-        crd3[FORWARD] = - 1.0f ;
+        crd3[FORWARD] = - 1 ;
       }
     }
   }
@@ -1570,7 +1570,7 @@ struct ray_to_ba6_t
 
     // perform the biatan6 in-plane transformation
 
-    ir_c = T( 4.0 / M_PI ) * atan ( ir_c ) ;
+    ir_c = T( 4 / M_PI ) * atan ( ir_c ) ;
 
     ir_c += refc_md ;
 
@@ -1593,7 +1593,7 @@ struct ray_to_ba6_t
 
     // perform the biatan6 in-plane transformation
 
-    ir_c = T ( 4.0 / M_PI ) * atan ( ir_c ) ;
+    ir_c = T ( 4 / M_PI ) * atan ( ir_c ) ;
 
     ir_c += refc_md ;
 
@@ -1915,7 +1915,7 @@ struct tf3d_t
       {
         out[0] /= out[2] ;
         out[1] /= out[2] ;
-        out[2] = 1.0f ;
+        out[2] = 1 ;
 
         // the scaling with dcp is only needed when recreating a
         // single source image with '--single' - for the 'normal'

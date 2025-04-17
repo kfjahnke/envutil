@@ -259,7 +259,7 @@ void work ( get_t & get , act_t & act )
   // zimt::process. This is the third component needed for
   // zimt::process - we already have the get_t and act.
   
-  zimt::storer < float , nchannels , 2 , 16 > cstor ( trg ) ;
+  zimt::storer < float , nchannels , 2 , LANES > cstor ( trg ) ;
   
   // use the get, act and put components with zimt::process
   // to produce the target images. This is the point where all
@@ -305,7 +305,7 @@ void work ( get_t & get , act_t & act )
     px_t amplify = unbrighten ;
     if ( nchannels == 2 || nchannels == 4 )
       amplify [ nchannels - 1 ] = 1.0 ;
-    amplify_type < px_t , px_t , px_t , 16 > amp ( amplify ) ;
+    amplify_type < px_t , px_t , px_t , LANES > amp ( amplify ) ;
     zimt::process ( trg.shape , get , act + amp , cstor , bill ) ;
   }
   else
@@ -415,14 +415,14 @@ template < typename ENV >
 struct voronoi_syn
 {
   typedef typename ENV::px_t px_t ;
-  typedef simdized_type < px_t , 16 > px_v ;
+  typedef simdized_type < px_t , LANES > px_v ;
   static const std::size_t nch = px_t::size() ;
   const int sz ;
   typedef zimt::xel_t < float , 3 > ray_t ;
   typedef zimt::xel_t < float , 9 > ninepack_t ;
-  typedef simdized_type < float , 16 > f_v ;
-  typedef simdized_type < ray_t , 16 > ray_v ;
-  typedef simdized_type < ninepack_t , 16 > ninepack_v ;
+  typedef simdized_type < float , LANES > f_v ;
+  typedef simdized_type < ray_t , LANES > ray_v ;
+  typedef simdized_type < ninepack_t , LANES > ninepack_v ;
 
   std::vector < ENV > & env_v ;
 
@@ -496,17 +496,17 @@ struct voronoi_syn
   void operator() (
         const std::vector < ray_v > & pv ,
         px_v & trg ,
-        const std::size_t & cap = 16 ) const
+        const std::size_t & cap = LANES ) const
   {
     // this vector will contain the index of the 'most suitable'
     // facet at the given location, according to the criterion.
 
-    simdized_type < int , 16 > champion_v ( -1 ) ;
+    simdized_type < int , LANES > champion_v ( -1 ) ;
 
     // we initialize 'max_z' to a very small value - no
     // 'real' z value can ever be this small.
 
-    simdized_type < float , 16 >
+    simdized_type < float , LANES >
       max_z ( std::numeric_limits<float>::lowest() ) ;
 
     // next_best starts out with an invalid facet index, and if this
@@ -552,7 +552,7 @@ struct voronoi_syn
       // 'max_z' encodes our 'quality' criterion: the largest z
       // we find is the best.
 
-      simdized_type < float , 16 >
+      simdized_type < float , LANES >
         current_z ( std::numeric_limits<float>::lowest() ) ;
 
       current_z ( valid ) = pv[i][2] * env_v[i].recip_step ;
@@ -652,11 +652,11 @@ struct voronoi_syn
 
   void operator() ( const std::vector < ninepack_v > & pv ,
                     px_v & trg ,
-                    const std::size_t & cap = 16 )
+                    const std::size_t & cap = LANES )
   {
-    typedef simdized_type < float , 16 > f_v ;
-    typedef simdized_type < zimt::xel_t < float , 3 > , 16 > ray_v ;
-    typedef simdized_type < zimt::xel_t < float , 9 > , 16 > ray9_v;
+    typedef simdized_type < float , LANES > f_v ;
+    typedef simdized_type < zimt::xel_t < float , 3 > , LANES > ray_v ;
+    typedef simdized_type < zimt::xel_t < float , 9 > , LANES > ray9_v;
 
     // trg is built up as a weighted sum of contributing values
     // resulting from the reaction with a given coefficient, so we
@@ -702,15 +702,15 @@ template < typename ENV , bool fix_duv = true >
 struct voronoi_syn_plus
 {
   typedef typename ENV::px_t px_t ;
-  typedef simdized_type < px_t , 16 > px_v ;
+  typedef simdized_type < px_t , LANES > px_v ;
   static const std::size_t nch = px_t::size() ;
   const int sz ;
   typedef zimt::xel_t < float , 3 > ray_t ;
   typedef zimt::xel_t < float , 9 > ninepack_t ;
-  typedef simdized_type < float , 16 > f_v ;
-  typedef simdized_type < ray_t , 16 > ray_v ;
-  typedef simdized_type < ninepack_t , 16 > ninepack_v ;
-  typedef simdized_type < int , 16 > index_v ;
+  typedef simdized_type < float , LANES > f_v ;
+  typedef simdized_type < ray_t , LANES > ray_v ;
+  typedef simdized_type < ninepack_t , LANES > ninepack_v ;
+  typedef simdized_type < int , LANES > index_v ;
 
   std::vector < ENV > & env_v ;
   std::vector < ray_v > scratch ;
@@ -761,7 +761,7 @@ struct voronoi_syn_plus
   void operator() (
         const std::vector < ray_v > & pv ,
         px_v & trg ,
-        const std::size_t & cap = 16 ) const
+        const std::size_t & cap = LANES ) const
   {
     // Here we have a set of sz index vectors to encode the
     // z-buffering. We'll use a 'trickle-up sort', and when
@@ -945,7 +945,7 @@ struct voronoi_syn_plus
       // we convert the vector of 'champion' indices into a set
       // of indexes for gathering from the pixel values in lv.
 
-      indexes *= ( 16 * nch ) ;
+      indexes *= int ( LANES * nch ) ;
       indexes += index_v::iota() ;
 
       // we gather into 'help' - after the gathering is complete,
@@ -956,7 +956,7 @@ struct voronoi_syn_plus
       px_v help ;
       float * pf = (float*) ( & ( lv[0] ) ) ;
       for ( int ch = 0 ; ch < nch ; ch++ )
-        help[ch].gather ( pf , indexes + ( ch * 16 ) ) ;
+        help[ch].gather ( pf , indexes + ( ch * LANES ) ) ;
 
       // if we're processing the top layer, we simply copy 'help'
       // - omitting lanes which don't comntribute
@@ -998,7 +998,7 @@ struct voronoi_syn_plus
 
   void operator() ( const std::vector < ninepack_v > & pv ,
                     px_v & trg ,
-                    const std::size_t & cap = 16 )
+                    const std::size_t & cap = LANES )
   {
     trg = 0.0f ;
 
@@ -1321,15 +1321,15 @@ template < int NCH ,
 void fuse ( int ninputs )
 {
   typedef zimt::xel_t < float , NCH > px_t ;
-  typedef simdized_type < px_t , 16 > px_v ;
+  typedef simdized_type < px_t , LANES > px_v ;
 
-  typedef grok_get_t < float , 3 , 2 , 16 > gg_t ;
-  typedef grok_get_t < float , 9 , 2 , 16 > gg9_t ;
+  typedef grok_get_t < float , 3 , 2 , LANES > gg_t ;
+  typedef grok_get_t < float , 9 , 2 , LANES > gg9_t ;
 
-  typedef environment < float , float , NCH , 16 > env_t ;
+  typedef environment < float , float , NCH , LANES > env_t ;
 
-  typedef fusion_t < float , NCH , 2 , 16 , float , 3 , SYN > fs_t ;
-  typedef fusion_t < float , NCH , 2 , 16 , float , 9 , SYN > fs9_t ;
+  typedef fusion_t < float , NCH , 2 , LANES , float , 3 , SYN > fs_t ;
+  typedef fusion_t < float , NCH , 2 , LANES , float , 9 , SYN > fs9_t ;
 
   typedef r3_t < double > r_t ;
 
@@ -1458,10 +1458,10 @@ void fuse ( int ninputs )
         // simply pass 'args' as target facet geometry in the call
         // to tf_ex_facet.
 
-        generic_stepper < float , 16 , false > get_ray
+        generic_stepper < float , LANES , false > get_ray
           ( args.width , args.height ,
             args.x0 , args.x1 , args.y0 , args.y1 ,
-            0 , 0 , tf_ex_facet < float , 16 > ( args , fct ) ) ;
+            0 , 0 , tf_ex_facet < float , LANES > ( args , fct ) ) ;
 
         work ( get_ray , env_v[f] ) ;
       }
@@ -1471,7 +1471,7 @@ void fuse ( int ninputs )
         // set, so we can use the 'fast lane', using the type of stepper
         // encoded in 'STP' in the calling function.
 
-        STP < float , 16 , false > get_ray
+        STP < float , LANES , false > get_ray
           ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
             args.width , args.height ,
             args.x0 , args.x1 , args.y0 , args.y1 ) ;
@@ -1502,15 +1502,15 @@ void fuse ( int ninputs )
 
         if ( generic_source || generic_target )
         {
-          generic_stepper < float , 16 , true > get_ray
+          generic_stepper < float , LANES , true > get_ray
             ( args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ,
-              0 , 0 , tf_ex_facet < float , 16 > ( args , fct ) ) ;
+              0 , 0 , tf_ex_facet < float , LANES > ( args , fct ) ) ;
           get_v.push_back ( get_ray ) ;
         }
         else
         {
-          STP < float , 16 , true > get_ray
+          STP < float , LANES , true > get_ray
             ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
@@ -1531,7 +1531,7 @@ void fuse ( int ninputs )
       // act functor, rather than having the interpolator step in the
       // act functor.
 
-      zimt::pass_through < float , NCH , 16 > act ;
+      zimt::pass_through < float , NCH , LANES > act ;
 
       work ( fs , act ) ;
     }
@@ -1564,20 +1564,20 @@ void fuse ( int ninputs )
 
       if ( generic_source || generic_target )
       {
-        deriv_stepper < float , 16 , generic_stepper , false > get_ray
+        deriv_stepper < float , LANES , generic_stepper , false > get_ray
           ( args.width , args.height ,
             args.x0 , args.x1 , args.y0 , args.y1 ,
-            tf_ex_facet < float , 16 > ( args , fct ) ) ;
-        twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
+            tf_ex_facet < float , LANES > ( args , fct ) ) ;
+        twine_t < NCH , LANES > twenv ( env_v[f] , args.twine_spread ) ;
         work ( get_ray , twenv ) ;
       }
       else
       {
-        deriv_stepper < float , 16 , STP , false > get_ray
+        deriv_stepper < float , LANES , STP , false > get_ray
             ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
-        twine_t < NCH , 16 > twenv ( env_v[f] , args.twine_spread ) ;
+        twine_t < NCH , LANES > twenv ( env_v[f] , args.twine_spread ) ;
         work ( get_ray , twenv ) ;
       }
     }
@@ -1596,15 +1596,15 @@ void fuse ( int ninputs )
 
         if ( generic_source || generic_target )
         {
-          deriv_stepper < float , 16 , generic_stepper , true > get_ray
+          deriv_stepper < float , LANES , generic_stepper , true > get_ray
             ( args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ,
-              tf_ex_facet < float , 16 > ( args , fct ) ) ;
+              tf_ex_facet < float , LANES > ( args , fct ) ) ;
           get_v.push_back ( get_ray ) ;
         }
         else
         {
-          deriv_stepper < float , 16 , STP , true > get_ray
+          deriv_stepper < float , LANES , STP , true > get_ray
               ( basis_v[i][0] , basis_v[i][1] , basis_v[i][2] ,
                 args.width , args.height ,
                 args.x0 , args.x1 , args.y0 , args.y1 ) ;
@@ -1625,7 +1625,7 @@ void fuse ( int ninputs )
       // which directly produces a pixel value, so we use a pass_through
       // act functor.
 
-      zimt::pass_through < float , NCH , 16 > act ;
+      zimt::pass_through < float , NCH , LANES > act ;
 
       work ( fs , act ) ;
     }
@@ -1648,7 +1648,7 @@ template < int NCH ,
            template < typename , std::size_t > class STP >
 void roll_out ( int ninputs )
 {
-  typedef environment < float , float , NCH , 16 > env_t ;
+  typedef environment < float , float , NCH , LANES > env_t ;
 
   // quick shot: assume one- and three-channel images are
   // without alpha channel, two- and four-channel images
@@ -1664,7 +1664,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-#define NARROW_SCOPE
+// #define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate
@@ -1719,7 +1719,7 @@ typedef zimt::xel_t < float , 2 > crd_t ;
 typedef zimt::xel_t < float , 3 > px_t ;
 
 struct fake_eval
-: public zimt::unary_functor < crd_t , px_t , 16 >
+: public zimt::unary_functor < crd_t , px_t , LANES >
 {
   template < typename in_t , typename out_t >
   void eval ( const in_t & in , out_t & out )

@@ -712,55 +712,55 @@ void convert ( const simd_t < SRC , vsize > & src , \
 // PROMOTE(bfloat16,float)
 // PROMOTE(float16,float)
 CV_PROMOTE(float,double)
-CV_PROMOTE(short,int)
-CV_PROMOTE(int,long)
-CV_PROMOTE(signed char,short)
-CV_PROMOTE(signed char,int)
-CV_PROMOTE(unsigned short,int)
-CV_PROMOTE(unsigned short,unsigned int)
-CV_PROMOTE(unsigned int,unsigned long)
-CV_PROMOTE(unsigned char,short)
-CV_PROMOTE(unsigned char,int)
-CV_PROMOTE(unsigned char,unsigned short)
-CV_PROMOTE(unsigned char,unsigned int)
+CV_PROMOTE(int16_t,int32_t)
+CV_PROMOTE(int32_t,int64_t)
+CV_PROMOTE(int8_t,int16_t)
+CV_PROMOTE(int8_t,int32_t)
+CV_PROMOTE(uint16_t,int32_t)
+CV_PROMOTE(uint16_t,uint32_t)
+CV_PROMOTE(uint32_t,uint64_t)
+CV_PROMOTE(uint8_t,int16_t)
+CV_PROMOTE(uint8_t,int32_t)
+CV_PROMOTE(uint8_t,uint16_t)
+CV_PROMOTE(uint8_t,uint32_t)
 
 // DemoteTo
 
 // DEMOTE(float,bfloat16)
 // DEMOTE(float,float16)
 CV_DEMOTE(double,float)
-CV_DEMOTE(double,int)
-CV_DEMOTE(short,signed char)
-CV_DEMOTE(short,unsigned char)
-CV_DEMOTE(int,short)
-CV_DEMOTE(int,signed char)
-CV_DEMOTE(int,unsigned short)
-CV_DEMOTE(int,unsigned char)
-CV_DEMOTE(long,short)
-CV_DEMOTE(long,int)
-CV_DEMOTE(long,signed char)
-CV_DEMOTE(long,unsigned short)
-CV_DEMOTE(long,unsigned int)
-CV_DEMOTE(long,unsigned char)
-CV_DEMOTE(unsigned short,signed char)
-CV_DEMOTE(unsigned short,unsigned char)
-CV_DEMOTE(unsigned int,short)
-CV_DEMOTE(unsigned int,signed char)
-CV_DEMOTE(unsigned int,unsigned short)
-CV_DEMOTE(unsigned int,unsigned char)
-CV_DEMOTE(unsigned long,short)
-CV_DEMOTE(unsigned long,int)
-CV_DEMOTE(unsigned long,signed char)
-CV_DEMOTE(unsigned long,unsigned short)
-CV_DEMOTE(unsigned long,unsigned int)
-CV_DEMOTE(unsigned long,unsigned char)
+CV_DEMOTE(double,int32_t)
+CV_DEMOTE(int16_t,int8_t)
+CV_DEMOTE(int16_t,uint8_t)
+CV_DEMOTE(int32_t,int16_t)
+CV_DEMOTE(int32_t,int8_t)
+CV_DEMOTE(int32_t,uint16_t)
+CV_DEMOTE(int32_t,uint8_t)
+CV_DEMOTE(int64_t,int16_t)
+CV_DEMOTE(int64_t,int32_t)
+CV_DEMOTE(int64_t,int8_t)
+CV_DEMOTE(int64_t,uint16_t)
+CV_DEMOTE(int64_t,uint32_t)
+CV_DEMOTE(int64_t,uint8_t)
+CV_DEMOTE(uint16_t,int8_t)
+CV_DEMOTE(uint16_t,uint8_t)
+CV_DEMOTE(uint32_t,int16_t)
+CV_DEMOTE(uint32_t,int8_t)
+CV_DEMOTE(uint32_t,uint16_t)
+CV_DEMOTE(uint32_t,uint8_t)
+CV_DEMOTE(uint64_t,int16_t)
+CV_DEMOTE(uint64_t,int32_t)
+CV_DEMOTE(uint64_t,int8_t)
+CV_DEMOTE(uint64_t,uint16_t)
+CV_DEMOTE(uint64_t,uint32_t)
+CV_DEMOTE(uint64_t,uint8_t)
 
 // ConvertTo
 
-CV_CONVERT(float,int)
-CV_CONVERT(double,long)
-CV_CONVERT(int,float)
-CV_CONVERT(long,double)
+CV_CONVERT(float,int32_t)
+CV_CONVERT(double,int64_t)
+CV_CONVERT(int32_t,float)
+CV_CONVERT(int64_t,double)
 
 #undef CV_PROMOTE
 #undef CV_DEMOTE
@@ -777,8 +777,8 @@ void convert ( const simd_t < double , vsize > & src ,
                      simd_t < T , vsize > & trg )
 {
   static_assert ( std::is_integral < T > :: value , "int only...!" ) ;
-  simd_t < long , vsize > l_src = src ;
-  simd_t < int , vsize > i_src = l_src ;
+  simd_t < int64_t , vsize > l_src = src ;
+  simd_t < int32_t , vsize > i_src = l_src ;
   convert ( i_src , trg ) ;
 }
 
@@ -787,8 +787,8 @@ void convert ( const simd_t < T , vsize > & src ,
                      simd_t < double , vsize > & trg )
 {
   static_assert ( std::is_integral < T > :: value , "int only...!" ) ;
-  simd_t < int , vsize > i_src = src ;
-  simd_t < long , vsize > l_src = i_src ;
+  simd_t < int32_t , vsize > i_src = src ;
+  simd_t < int64_t , vsize > l_src = i_src ;
   convert ( l_src , trg ) ;
 }
 
@@ -823,7 +823,7 @@ struct HWY_ALIGN simd_t
   // are interoperable without having to use half- or quarter-filled
   // vectors for size compatibility.
 
-  static const int vbytes = sizeof ( value_type ) * vsize ;
+  static const int32_t vbytes = sizeof ( value_type ) * vsize ;
 
   // we make sure vsize is a power of two - simd_traits in vector.h
   // does route non-power-of-two sizes to gen_simd_type, but
@@ -878,15 +878,15 @@ struct HWY_ALIGN simd_t
   // derive types used for masks and index vectors.
 
   // Since there is no gather/scatter for bytes and shorts,
-  // we code index_type as a vector of int - or long for
+  // we code index_type as a vector of int32_t - or int64_t for
   // 8-byte types. Further down, where index_type is used,
   // the gather/scatter code specializes to fall back to
   // goading for small fundamentals, hoping that the
   // compiler will step in and autovectorize the loop.
 
   typedef typename std::conditional < ( sizeof(T) > 4 ) ,
-                                      long ,
-                                      int > :: type index_ele_type ;
+                                      int64_t ,
+                                      int32_t > :: type index_ele_type ;
 
   typedef simd_t < index_ele_type , vsize > index_type ;
 
@@ -1250,7 +1250,7 @@ public:
 
   // mimick Vc's IndexesFromZero. This function produces an index
   // vector filled with indexes starting with zero. Because we use
-  // at least int and possibly long for indexes, we needn't check
+  // at least int32_t and possibly int64_t for indexes, we needn't check
   // whether the indexes can fit. User code might as well call
   // iota directly - this is for legacy code.
 
@@ -1266,8 +1266,8 @@ public:
   // and add an assertion to make sure the indexes we expect will
   // fit the range.
 
-  static const index_type IndexesFrom ( const long & start ,
-                                        const long & step = 1 )
+  static const index_type IndexesFrom ( const int64_t & start ,
+                                        const int64_t & step = 1 )
   {
     static const auto ceiling
       = std::numeric_limits < index_ele_type > :: max() ;
@@ -1353,10 +1353,10 @@ public:
       hn::Store ( yield ( i ) , D() , p_trg + i * Lanes ( D() ) ) ;
   }
 
-  // there are no gather/scatter operations for short or byte values,
+  // there are no gather/scatter operations for int16_t or byte values,
   // so I use goading to implement them.
 
-  // to gather larger-than-short data, use hwy g/s - index_type
+  // to gather larger-than-int16_t data, use hwy g/s - index_type
   // is made up from ints or longs, with the same number of bits
   // as value_type.
 
@@ -1421,7 +1421,7 @@ public:
   // providing operator[]. The loop construct may well be autovectorized,
   // but this can't be guaranteed. It's recommended to use the proper
   // index_type wherever possible - for small value_type, though, this
-  // is a vector of int and will be routed to goading code.
+  // is a vector of int32_t and will be routed to goading code.
 
   template < typename index_t >
   void gather ( const value_type * const & p_src ,
@@ -1457,7 +1457,7 @@ public:
   // family of functions.
 
   void rgather ( const value_type * const & p_src ,
-                 const long & step )
+                 const int64_t & step )
   {
     if ( step == 1 )
     {
@@ -1471,7 +1471,7 @@ public:
   }
 
   void rscatter ( value_type * const & p_trg ,
-                  const long & step ) const
+                  const int64_t & step ) const
   {
     if ( step == 1 )
     {

@@ -112,8 +112,12 @@ struct pto_planar
       }
       if ( has_shear )
       {
-        out = { out[0] + ( out[1] * shear_g ) ,
-                out[1] + ( out[0] * shear_t ) } ;
+        // out = { out[0] + ( out[1] * shear_g ) ,
+        //         out[1] + ( out[0] * shear_t ) } ;
+        auto help0 = out[0] + ( out[1] * shear_g ) ;
+        auto help1 = out[1] + ( out[0] * shear_t ) ;
+        out[0] = help0 ;
+        out[1] = help1 ;
       }
     }
     else

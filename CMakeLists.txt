@@ -303,8 +303,7 @@ else()
 
 endif()
 
-target_link_libraries( envutil ${required_libraries} 
-                       pthread avutil avcodec swscale)
+target_link_libraries( envutil ${required_libraries} pthread)
 
 # install the 'useful' binaries (stepper is only a demo)
 
@@ -313,7 +312,7 @@ install(TARGETS envutil DESTINATION bin)
 # Some more options for building debian packages. The first one - with
 
 set(CPACK_DEBIAN_PACKAGE_NAME "envutil")
-set(CPACK_DEBIAN_PACKAGE_VERSION "0.1.2")
+set(CPACK_DEBIAN_PACKAGE_VERSION "0.2.0")
 
 set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CMAKE_INSTALL_PREFIX})
 set(CPACK_SET_DESTDIR "ON")
@@ -330,7 +329,7 @@ set(CPACK_PACKAGE_DESCRIPTION_FILE
   "${CMAKE_SOURCE_DIR}/brief_description.txt")
 
 set(CPACK_DEBIAN_PACKAGE_DESCRIPTION
-  "envutil: utility program for 360X180 degree images")
+  "envutil: utility to process oriented images and environments")
 
 set(CPACK_DEBIAN_PACKAGE_SECTION "universe/graphics")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
@@ -358,6 +357,16 @@ set(CPACK_PACKAGE_CONTACT "Kay F. Jahnke <kfjahnke+envutil@gmail.com>")
 
 set(CPACK_PACKAGE_ICON scripts/PV_512x512x32.png)
 
+# envutil is MIT-licensed. The license info doesn't seem to make it
+# into the packet, though.
+
+set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
+
+set(CPACK_DEBIAN_PACKAGE_LICENSE mit)
+set(CPACK_PACKAGE_LICENSE mit)
+
+set(CPACK_DEBIAN_PACKAGE_DEBUG ON)
+
 install(FILES scripts/256X256/lux.png
         DESTINATION share/icons/hicolor/256x256/apps)
 
@@ -369,12 +378,6 @@ install(FILES scripts/1024X1024/lux.png
 
 install(FILES scripts/envutil.desktop 
         DESTINATION share/applications)
-
-# envutil is MIT-licensed
-
-set(CPACK_DEBIAN_PACKAGE_LICENSE "MIT License")
-set(CPACK_PACKAGE_LICENSE "MIT License")
-set(CPACK_DEBIAN_PACKAGE_DEBUG ON)
 
 message(STATUS "CMAKE_INSTALL_PREFIX = ${CMAKE_INSTALL_PREFIX}")
 include(CPack)
