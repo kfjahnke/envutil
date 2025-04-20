@@ -553,10 +553,7 @@ struct arguments
   std::size_t support_min ;
   std::size_t tile_size ;
   std::string pto_file ;
-  // std::string seqfile ;
-  // std::string codec ;
-  // float mbps ;
-  // int fps ;
+  std::string synopsis ;
   int prefilter_degree ;
   int spline_degree ;
   int twine  ;

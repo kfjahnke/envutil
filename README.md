@@ -149,7 +149,7 @@ CPUs - pass the ISA-specific flags to cmake with "ISA_SPECIFIC_ARGS".
 multi-ISA builds (the default) will produce binary for all ISAs which
 may occur in the given CPU family and dispatch to the variant which
 is best suited to the CPU detected at run-time. multi-ISA builds
-rquire highway. I am currently observing performance problems with
+rquire highway. I am currently observing performance drops with
 multi-ISA builds (in the OOM of 30 percent), so if speed is your
 priority, go for single-ISA builds until this is resolved.
 

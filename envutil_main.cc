@@ -252,6 +252,10 @@ void arguments::init ( int argc , const char ** argv )
     .help("tile size for the internal representation image")
     .metavar("EXTENT");
 
+  ap.arg("--synopsis MODE")
+    .help("mode of composing several images (panorama or hdr_merge)")
+    .metavar("MODE");
+
   // parameters for single-image output
 
   ap.separator("  additional parameters for single-image output:");
@@ -293,26 +297,6 @@ void arguments::init ( int argc , const char ** argv )
   ap.arg("--y1 EXTENT")
     .help("high end of the vertical range")
     .metavar("EXTENT");
-
-  // // parameters for multi-image and video output
-  // 
-  // ap.separator("  additional parameters for multi-image and video output:");
-  // 
-  // ap.arg("--seqfile SEQFILE")
-  //   .help("image sequence file name (optional)")
-  //   .metavar("SEQFILE");
-  // 
-  // ap.arg("--codec CODEC")
-  //   .help("video codec for video sequence output (default: libx265)")
-  //   .metavar("CODEC");
-  // 
-  // ap.arg("--mbps MBPS")
-  //   .help("output video with MBPS Mbit/sec (default: 8)")
-  //   .metavar("MBPS");
-  // 
-  // ap.arg("--fps FPS")
-  //   .help("output video FPS frames/sec (default: 60)")
-  //   .metavar("FPS");
 
   // interpolation options
 
@@ -403,6 +387,7 @@ void arguments::init ( int argc , const char ** argv )
   pto_file = ap["pto"].as_string ( "" ) ;
   twf_file = ap["twf_file"].as_string ( "" ) ;
   split = ap["split"].as_string ( "" ) ;
+  synopsis = ap["synopsis"].as_string ( "panorama" ) ;
   // fct_file = ap["fct_file"].as_string ( "" ) ;
   // codec = ap["codec"].as_string ( "libx265" ) ; 
   // mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
@@ -481,6 +466,7 @@ void arguments::init ( int argc , const char ** argv )
   std::size_t p_line_width ;
   std::size_t p_line_height ;
   double p_line_hfov ;
+  double p_line_eev ;
   float eev_sum = 0.0f ;
   int eev_count = 0 ;
 
@@ -548,9 +534,10 @@ void arguments::init ( int argc , const char ** argv )
 
           p_line_projection = PRJ_NONE ;
         }
-        p_line_width = std::stoi ( dir [ "w" ] ) ;
-        p_line_height = std::stoi ( dir [ "h" ] ) ;
-        p_line_hfov = ( M_PI / 180.0 ) * std::stod ( dir [ "v" ] ) ;
+        p_line_width = iglean ( dir [ "w" ] ) ;
+        p_line_height = iglean ( dir [ "h" ] ) ;
+        p_line_hfov = ( M_PI / 180.0 ) * glean ( dir [ "v" ] ) ;
+        p_line_eev = glean ( dir [ "Eev" ] ) ;
 
         std::string crop_str = dir [ "S" ] ;
         if ( crop_str != std::string() )
@@ -899,6 +886,19 @@ void arguments::init ( int argc , const char ** argv )
   if ( eev_count > 0 )
   {
     eev_sum /= eev_count ;
+  }
+  if ( p_line_eev != 0.0 )
+  {
+    if ( verbose )
+      std::cout << "p-line has Eev, hence Eev out = " << p_line_eev
+                << std::endl ;
+    eev_sum = p_line_eev ;
+  }
+  else
+  {
+    if ( verbose )
+      std::cout << "no p-line Eev, hence Eev out = " << eev_sum
+                << std::endl ;
   }
 
   for ( auto & m : facet_spec_v )

@@ -36,6 +36,13 @@
 /*                                                                      */
 /************************************************************************/
 
+// This header provides code for 'twining': inlined oversampling with
+// subsequent weighted averaging.
+
+#include <fstream>
+#include "envutil_basic.h"
+#include "zimt/unary_functor.h"
+
 #if defined(ENVUTIL_TWINING_H) == defined(HWY_TARGET_TOGGLE)
   #ifdef ENVUTIL_TWINING_H
     #undef ENVUTIL_TWINING_H
@@ -46,186 +53,12 @@
 HWY_BEFORE_NAMESPACE() ;
 BEGIN_ZIMT_SIMD_NAMESPACE(project)
 
-// This header provides code for 'twining': inlined oversampling with
-// subsequent weighted averaging.
-
-#include <fstream>
-#include "common.h"
-
-// two functions are now in envutil_main.cc and are invoked
-// directly during argument processing, hence:
-
-/*
-// this function sets up a simple box filter to use with the
-// twine_t functor above. The given w and h values determine
-// the number of pick-up points in the horizontal and vertical
-// direction - typically, you'd use the same value for both.
-// The deltas are set up so that, over all pick-ups, they produce
-// a uniform sampling.
-// additional parameters allow to apply gaussian weights and to
-// apply a threshold to suppress small weighting factors; in a
-// final step the weights are normalized.
-
-void make_spread ( std::vector < zimt::xel_t < float , 3 > > & trg ,
-                   int w = 2 ,
-                   int h = 0 ,
-                   float d = 1.0f ,
-                   float sigma = 0.0f ,
-                   float threshold = 0.0f )
-{
-  if ( w <= 2 )
-    w = 2 ;
-  if ( h <= 0 )
-    h = w ;
-  float wgt = 1.0 / ( w * h ) ;
-  double x0 = - ( w - 1.0 ) / ( 2.0 * w ) ;
-  double dx = 1.0 / w ;
-  double y0 = - ( h - 1.0 ) / ( 2.0 * h ) ;
-  double dy = 1.0 / h ;
-  trg.clear() ;
-  sigma *= - x0 ;
-  double sum = 0.0 ;
-
-  for ( int y = 0 ; y < h ; y++ )
-  {
-    for ( int x = 0 ; x < w ; x++ )
-    {
-      float wf = 1.0 ;
-      if ( sigma > 0.0 )
-      {
-        double wx = ( x0 + x * dx ) / sigma ;
-        double wy = ( y0 + y * dy ) / sigma ;
-        wf = exp ( - sqrt ( wx * wx + wy * wy ) ) ;
-      }
-      zimt::xel_t < float , 3 >
-        v { float ( d * ( x0 + x * dx ) ) ,
-            float ( d * ( y0 + y * dy ) ) ,
-            wf * wgt } ;
-      trg.push_back ( v ) ;
-      sum += wf * wgt ;
-    }
-  }
-
-  double th_sum = 0.0 ;
-  bool renormalize = false ;
-
-  if ( sigma != 0.0 )
-  {
-    for ( auto & v : trg )
-    {
-      v[2] /= sum ;
-      if ( v[2] >= threshold )
-      {        
-        th_sum += v[2] ;
-      }
-      else
-      {
-        renormalize = true ;
-        v[2] = 0.0f ;
-      }
-    }
-    if ( renormalize )
-    {
-      for ( auto & v : trg )
-      {
-        v[2] /= th_sum ;
-      }
-    }
-  }
-
-  if ( args.verbose )
-  {
-    if ( sigma != 0.0 )
-    {
-      std::cout << "using this twining filter kernel:" << std::endl ;
-      for ( int y = 0 ; y < h ; y++ )
-      {
-        for ( int x = 0 ; x < w ; x++ )
-        {
-          std::cout << '\t' << trg [ y * h + x ] [ 2 ] ;
-        }
-        std::cout << std::endl ;
-      }
-    }
-    else
-    {
-      std::cout << "using box filter for twining" << std::endl ;
-    }
-  }
-
-  if ( renormalize )
-  {
-    auto help = trg ;
-    trg.clear() ;
-    for ( auto v : help )
-    {
-      if ( v[2] > 0.0f )
-        trg.push_back ( v ) ;
-    }
-    if ( args.verbose )
-    {
-      std::cout << "twining filter taps after after thresholding: "
-                << trg.size() << std::endl ;
-    }
-  }
-}
-
-// read the twining filter from a twf-file.
-
-void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
-{
-  zimt::xel_t < float , 3 > c ;
-
-  std::ifstream ifs ( args.twf_file ) ;
-  assert ( ifs.good() ) ;
-
-  double sum = 0.0 ;
-
-  while ( ifs.good() )
-  {
-    ifs >> c[0] >> c[1] >> c[2] ;
-    if ( ifs.eof() )
-      break ;
-    trg.push_back ( c ) ;
-    sum += c[2] ;
-  }
-
-  for ( auto & c : trg )
-  {
-    c[0] *= args.twine_width ;
-    c[1] *= args.twine_width ;
-    if ( args.twine_normalize )
-      c[2] /= sum ;
-  }
-
-  if ( args.verbose )
-  {
-    std::cout << args.twf_file << " yields twining filter kernel:"
-              << std::endl ;
-    for ( const auto & c : trg )
-    {
-       std::cout << "x: " << c[0] << " y: " << c[1]
-                 << " w: " << c[2] << std::endl ;
-    }
-    if ( args.twine_normalize )
-    {
-      std::cout << "twining filter weights sum: 1.0" << std::endl ;
-    }
-    else
-    {
-      std::cout << "twining filter weights sum: " << sum << std::endl ;
-    }
-  }
-  ifs.close() ;
-}
-*/
-
 // this might go to environment.h
 
 // class twine_t takes data from a deriv_stepper which yields
 // 3D ray coordinates of the pick-up point and two more points
 // corresponding to the right and lower neighbours in the target
-// image - so, one 'canonical' step away. It wraps an 'act' type
+// image - a fractional step away. It wraps an 'act' type
 // functor which can produce pixels (with nchannel channels) from
 // 3D ray coordinates. The twine_t object receives the three ray
 // coordinates (the 'ninepack'), forms the two differences, and adds
@@ -302,7 +135,7 @@ struct twine_t
     crd_v pickup { in[0] , in[1] , in[2] } ;
 
     // we want the 'derivatives' in x and y directions. What we have
-    // are two additional rays pointing to the two next 'canonial'
+    // are two additional rays pointing to the two 'nearby'
     // neighbours of the 'central' pickup ray. If we're sloppy,
     // we can form the 'derivatives' by simple differencing, but
     // if the rays aren't very close together (they are, normally,
@@ -326,9 +159,7 @@ struct twine_t
     // pick-up points on the tangent plane or on a very slightly
     // tilted plane is negligible. Nevertheless, projecting the
     // neighbours to the tangent plane is mathematically sounder
-    // than using simple differencing, hence the default. If you're
-    // sure the neighbours are 'close enough' and processing speed
-    // is an issue, set deriv_tangential false.
+    // than using simple differencing.
     
     // dx and dy are the two 3D vectors which are multiplied with
     // successive x and y values from each filter coefficient,

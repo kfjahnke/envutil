@@ -128,7 +128,7 @@ struct rotate_t
 // some SIMDized types we'll use. I use 16 SIMD lanes for now,
 // which is also the lane count currently supported by OIIO.
 
-#define LANES 16
+#define LANES zimt::simd_traits < float > :: default_size
 
 typedef zimt::simdized_type < float , LANES > f_v ;
 typedef zimt::simdized_type < int , LANES > i_v ;
