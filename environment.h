@@ -64,6 +64,188 @@ using OIIO::ImageInput ;
 using OIIO::TypeDesc ;
 using OIIO::ImageSpec ;
 
+// class asset_handler_t holds std::shared_ptrs to b-spline objects
+// with the asset key used as key in a map. The mode of operation is
+// simple: unless 'cycle' or 'clear' are called, the key/value pairs
+// remain accessible with 'find'. When 'cycle' is called, the pairs
+// are moved to 'limbo'. A subsequent call to 'find' will also look
+// in 'limbo' and 'revive' the pair. But if no 'find' retrieves the
+// pair from limbo, the next call of 'cycle' will remove the asset,
+// and if it's needed again, it has to be reloaded from disk. The
+// idea is to keep a short 'context' of 'in-play images' but to
+// avoid too much build-up of assets in RAM. With this simple scheme,
+// you can e.g. keep a facet set 'afloat' for several outputs with
+// varying parameters.
+
+struct asset_handler_t
+{
+  #define PSPL(NCH) std::shared_ptr \
+    < bspline < xel_t < float , NCH > , 2 > >
+
+  std::map < std::string , PSPL(1) > map1 ;
+  std::map < std::string , PSPL(2) > map2 ;
+  std::map < std::string , PSPL(3) > map3 ;
+  std::map < std::string , PSPL(4) > map4 ;
+
+  std::map < std::string , PSPL(1) > bup1 ;
+  std::map < std::string , PSPL(2) > bup2 ;
+  std::map < std::string , PSPL(3) > bup3 ;
+  std::map < std::string , PSPL(4) > bup4 ;
+
+  // add a shared_ptr to a b-spline with the given asset key.
+  // this replaces a spline which is currently held by the same key.
+
+  template < std::size_t NCH >
+  void add ( std::string asset_key , PSPL(NCH) p_spl )
+  {
+    if constexpr ( NCH == 1 )
+      map1 [ asset_key ] = p_spl ;
+    else if constexpr ( NCH == 2 )
+      map2 [ asset_key ] = p_spl ;
+    else if constexpr ( NCH == 3 )
+      map3 [ asset_key ] = p_spl ;
+    else if constexpr ( NCH == 4 )
+      map4 [ asset_key ] = p_spl ;
+    else
+    {
+      std::cerr << "asset handler: can't store spline with NCH "
+                << NCH << std::endl ;
+      exit ( -1 ) ;
+    }
+  }
+
+  template < std::size_t NCH >
+  PSPL(NCH) find ( std::string asset_key )
+  {
+    if constexpr ( NCH == 1 )
+    {
+      if ( auto it = bup1.find ( asset_key ) ; it != bup1.end() )
+        return ( map1 [ asset_key ] = it->second ) ;
+      if ( auto it = map1.find ( asset_key ) ; it != map1.end() )
+        return it->second ;
+    }
+    else if constexpr ( NCH == 2 )
+    {
+      if ( auto it = bup2.find ( asset_key ) ; it != bup2.end() )
+        return ( map2 [ asset_key ] = it->second ) ;
+      if ( auto it = map2.find ( asset_key ) ; it != map2.end() )
+        return it->second ;
+    }
+    else if constexpr ( NCH == 3 )
+    {
+      if ( auto it = bup3.find ( asset_key ) ; it != bup3.end() )
+        return ( map3 [ asset_key ] = it->second ) ;
+      if ( auto it = map3.find ( asset_key ) ; it != map3.end() )
+        return it->second ;
+    }
+    else if constexpr ( NCH == 4 )
+    {
+      if ( auto it = bup4.find ( asset_key ) ; it != bup4.end() )
+        return ( map4 [ asset_key ] = it->second ) ;
+      if ( auto it = map4.find ( asset_key ) ; it != map4.end() )
+        return it->second ;
+    }
+    else
+    {
+      std::cerr << "asset handler: can't look up spline with NCH "
+                << NCH << std::endl ;
+      exit ( -1 ) ;
+    }
+    return nullptr ;
+  }
+
+  // remove the shared_ptr to a b-spline held with the given key.
+  // this also removes the ptr from limbo if it's still there.
+
+  template < std::size_t NCH >
+  void remove ( std::string asset_key )
+  {
+    if constexpr ( NCH == 1 )
+    {
+      map1.erase ( asset_key ) ;
+      bup1.erase ( asset_key ) ;
+    }
+    else if constexpr ( NCH == 2 )
+    {
+      map2.erase ( asset_key ) ;
+      bup2.erase ( asset_key ) ;
+    }
+    else if constexpr ( NCH == 3 )
+    {
+      map3.erase ( asset_key ) ;
+      bup3.erase ( asset_key ) ;
+    }
+    else if constexpr ( NCH == 4 )
+    {
+      map4.erase ( asset_key ) ;
+      bup4.erase ( asset_key ) ;
+    }
+    else
+    {
+      std::cerr << "asset handler: can't remove spline with NCH "
+                << NCH << std::endl ;
+      exit ( -1 ) ;
+    }
+  }
+
+  // clear all maps
+
+  void clear()
+  {
+    if ( args.verbose )
+      std::cout << "releasing all image data in RAM" << std::endl ;
+
+    map1.clear() ;
+    map2.clear() ;
+    map3.clear() ;
+    map4.clear() ;
+
+    bup1.clear() ;
+    bup2.clear() ;
+    bup3.clear() ;
+    bup4.clear() ;
+  }
+
+  // cycle clears all assets in 'limbo' and moves all assets which
+  // are currently active to limbo. This gets rid of assets which
+  // haven't been used in the current cycle - 'find' looks both in
+  // the active set and the limbo, and places an asset found in limbo
+  // back into the active set.
+
+  void cycle()
+  {
+    bup1.clear() ;
+    bup1 = map1 ;
+    map1.clear() ;
+
+    bup2.clear() ;
+    bup2 = map2 ;
+    map2.clear() ;
+
+    bup3.clear() ;
+    bup3 = map3 ;
+    map3.clear() ;
+
+    bup4.clear() ;
+    bup4 = map4 ;
+    map4.clear() ;
+  }
+
+  ~asset_handler_t()
+  {
+    clear() ;
+  }
+
+#undef PSPL
+} ;
+
+static asset_handler_t asset_handler ;
+
+void conclude_cycle()
+{
+  asset_handler.cycle() ;
+}
+
 // a class for the entire planar transformations occuring in PTO.
 // with 'invert' false, we have the 'normal' operation from target
 // to source coordinates. 'invert' true yields the inverse of that
@@ -430,16 +612,16 @@ struct source_t
     static const std::size_t C = nchannels ;
     typedef zimt::xel_t < float , C > in_px_t ;
 
-    // sneaky: this might as well be a member variable, but having
-    // it static to a member function saves the need for external
-    // instantiation
-
-    #define PSPL(NCH) std::shared_ptr \
-      < bspline < xel_t < float , NCH > , 2 > >
-
-    static std::map < std::string , PSPL(C) > spl_map ;
-
-    #undef PSPL
+    // // sneaky: this might as well be a member variable, but having
+    // // it static to a member function saves the need for external
+    // // instantiation
+    // 
+    // #define PSPL(NCH) std::shared_ptr \
+    //   < bspline < xel_t < float , NCH > , 2 > >
+    // 
+    // static std::map < std::string , PSPL(C) > spl_map ;
+    // 
+    // #undef PSPL
 
     // for now, we use identical values for total_... and window_...
 
@@ -515,9 +697,9 @@ struct source_t
 
     if ( load_facet )
     {
-      auto it = spl_map.find ( fct.asset_key ) ;
+      p_bspl = asset_handler.find<C> ( fct.asset_key ) ;
 
-      if ( it != spl_map.end() )
+      if ( p_bspl != nullptr )
       {
         // we're in luck - this image file was already loaded
         // into a b-spline previously.
@@ -525,8 +707,6 @@ struct source_t
         if ( args.verbose )
           std::cout << "asset " << fct.asset_key
                     << " is already present in RAM" << std::endl ;
-
-        p_bspl = it->second ;
       }
       else
       {
@@ -536,13 +716,69 @@ struct source_t
           std::cout << "asset " << fct.asset_key
                     << " is now loaded from disk" << std::endl ;
 
-        // currently building with raw::user_flip set to zero, to load
-        // raw images in memory order without EXIF rotation. This only
-        // affects raw images.
+        ImageSpec config ;
+        for ( const auto & attr : args.oiio_option_v )
+        {
+          std::string oiio_arg , oiio_type , oiio_val ;
 
-        ImageSpec config;
-        config [ "raw:user_flip" ] = 0 ;
-        config [ "raw:ColorSpace" ] = "sRGB-linear" ;
+          auto pos = attr.find_first_of ( "=" ) ;
+          if ( pos != attr.npos )
+          {
+            auto lhs = attr.substr ( 0 , pos ) ;
+            auto at_pos = lhs.find_first_of ( "@" ) ;
+            if ( at_pos != lhs.npos )
+            {
+              // this argument is suffixed with an OIIO typestring
+              oiio_arg = lhs.substr ( 0 , at_pos ) ;
+              oiio_type = lhs.substr ( at_pos + 1 ) ;
+            }
+            else
+            {
+              // no typestring
+              oiio_arg = lhs ;
+              oiio_type = std::string() ;
+            }
+            // take the remainder after the '=' as the attribute's value
+            oiio_val = attr.substr ( pos + 1 ) ;
+          }
+          else
+          {
+            oiio_arg = attr ;
+            oiio_type = std::string() ;
+            oiio_val = std::string() ;
+          }
+          if ( oiio_type.size() )
+          {
+            if ( args.verbose )
+              std::cout << "processing typed oiio argument: " << oiio_arg
+                        << " type: " << oiio_type
+                        << " value: " << oiio_val
+                        << std::endl ;
+
+            // typed argument. OIIO recognizes it's own brand of
+            // typestring.
+
+            auto typedesc = TypeDesc ( oiio_type ) ;
+
+            // with a type descriptor, we can process the value
+            // in string form. The user should separate individual
+            // values of multi-value rhs with space or tab.
+
+            config.attribute ( oiio_arg , typedesc , oiio_val ) ;
+          }
+          else
+          {
+            if ( args.verbose )
+              std::cout << "processing untyped oiio argument: "
+                        << oiio_arg
+                        << " value: " << oiio_val
+                        << std::endl ;
+
+            // untyped argument
+
+            config [ oiio_arg ] = oiio_val ;
+          }
+        }
 
         auto inp = ImageInput::open ( fct.filename , &config ) ;
 
@@ -737,9 +973,9 @@ struct source_t
         }
 
         // we save the shared_ptr to the newly made b-spline in
-        // spl_map, to make it available for reuse if needed.
+        // asset_handler, to make it available for reuse if needed.
 
-        spl_map [ fct.asset_key ] = p_bspl ;
+        asset_handler.add<C> ( fct.asset_key , p_bspl ) ;
 
         // the spline needs to be prefiltered appropriately.
         // TODO: only use this for uncropped images
@@ -769,7 +1005,7 @@ struct source_t
       }
     }
 
-    // now we have the b-spline - either found in spl_map or
+    // now we have the b-spline - either found in asset_handler or
     // freshly made from image data. If p_bspl is nullptr at this
     // point, we have a masking job without alpha channel, where
     // the image data aren't looked at. In that case, ev remains
@@ -900,16 +1136,6 @@ struct mount_t
   : inner ( fct ) ,
     pf ( _pf )
   { }
-
-  // mount_t ( extent_type _extent ,
-  //           source_t < nchannels , L > & _inner ,
-  //           const planar_f & _pf = [] ( crd_v & ) { } )
-  // : extent ( _extent ) ,
-  //   center ( get_center ( _inner , _extent ) ) ,
-  //   rgirth ( get_rgirth ( _inner , _extent ) ) ,
-  //   inner ( _inner ) ,
-  //   pf ( _pf )
-  // { }
 
   // plain coordinate transformation without masking. The mask is
   // calculated one function down. The geometrical transformations
@@ -1388,16 +1614,16 @@ struct _environment
 
   _environment ( const facet_spec & fct )
   {
-    // sneaky: this might as well be a member variable, but having
-    // it static to a member function saves the need for external
-    // instantiation
-
-    #define PSPL(NCH) std::shared_ptr \
-      < bspline < xel_t < float , NCH > , 2 > >
-
-    static std::map < std::string , PSPL(C) > spl_map ;
-
-    #undef PSPL
+    // // sneaky: this might as well be a member variable, but having
+    // // it static to a member function saves the need for external
+    // // instantiation
+    // 
+    // #define PSPL(NCH) std::shared_ptr \
+    //   < bspline < xel_t < float , NCH > , 2 > >
+    // 
+    // static std::map < std::string , PSPL(C) > spl_map ;
+    // 
+    // #undef PSPL
 
     // if the facet is in a cubemap format, we special-case here
     // and directly form a cubemap_t object with the facet_spec
@@ -1438,17 +1664,17 @@ struct _environment
       {
         // for 'normal' operation, and also for masking jobs with
         // facets with alpha channel, we actually need image data.
-        // image data are valuable assets, so we keep track of
-        // images we load in 'spl_map' and reuse the data in RAM
+        // image data are valuable assets, so we keep track of images
+        // images we load in asset_handler and reuse the data in RAM
         // if we already have them.
         // Note: for cubemaps, masking and cropping are not available,
         // we assume that cubemaps always have complete, opaque data.
         // So we reuse cubemap image data if the name matches. Normal
         // facets arealways reloaded if they have cropping or masking. 
 
-        auto it = spl_map.find ( fct.asset_key ) ;
+        p_bspl = asset_handler.find<C> ( fct.asset_key ) ;
 
-        if ( ( it == spl_map.end() ) )
+        if ( p_bspl == nullptr )
         {
           if ( args.verbose )
             std::cout << "cubemap " << fct.asset_key
@@ -1469,7 +1695,6 @@ struct _environment
                                             args.tile_size ) ;
             cbm.load ( fct.filename ) ;
             p_bspl = cbm.p_bsp ;
-            spl_map [ fct.asset_key ] = p_bspl ;
           }
           else
           {
@@ -1478,8 +1703,9 @@ struct _environment
                                             args.tile_size ) ;
             cbm.load ( fct.filename ) ;
             p_bspl = cbm.p_bsp ;
-            spl_map [ fct.asset_key ] = p_bspl ;
           }
+
+          asset_handler.add<C> ( fct.asset_key , p_bspl ) ;
         }
         else
         {
@@ -1490,8 +1716,6 @@ struct _environment
           if ( args.verbose )
             std::cout << "cubemap " << fct.filename
                       << " is already present in RAM" << std::endl ;
-
-          p_bspl = it->second ;
         }
 
         // now that we have the b-spline, we can set up a cubemap_view_t.
@@ -1521,24 +1745,6 @@ struct _environment
 
       return ;
     }
-
-
-
-    // if we're making a mask for an image without alpha channel,
-    // p_bspl is nullptr (we don't need image data), and fct.masked
-    // is 1 for the facet for which we make the mask and zero for
-    // all other facets. source_t's c'tor will result in a suitable
-    // functor: one producing only zero, or one, respectively.
-    // For 'normal' operation and masking jobs for images with
-    // alpha channel, p_bspl points to a b-spline.
-
-    source_t < C , L > src ( fct ) ;
-
-    // for now, we mount images to the center; other types of cropping
-    // might be added by providing suitable parameterization.
-
-    // auto extent = get_extent ( fct.projection , fct.width ,
-    //                            fct.height , fct.hfov ) ;
 
     // Some facets require additional processing of the planar (image)
     // coordinates which the source_t object receives. This is needed

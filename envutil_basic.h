@@ -550,6 +550,7 @@ struct arguments
   std::string output ;
   std::string pano ;
   std::string split ;
+  std::vector < std::string > oiio_option_v ;
   std::size_t support_min ;
   std::size_t tile_size ;
   std::string pto_file ;

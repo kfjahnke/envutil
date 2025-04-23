@@ -345,7 +345,11 @@ void arguments::init ( int argc , const char ** argv )
     .metavar("THR");
 
   ap.separator("  parameters for mounted (facet) image input:");
-  
+
+  // tentative:
+  ap.arg( "--oiio %L:OPTION" , &oiio_option_v )
+    .help("pass option to configure OIIO plugin (may be used repeatedly)") ;
+
   ap.arg("--pto PTOFILE")
     .help("panotools script in hugin PTO dialect (optional)")
     .metavar("PTOFILE");
@@ -466,7 +470,7 @@ void arguments::init ( int argc , const char ** argv )
   std::size_t p_line_width ;
   std::size_t p_line_height ;
   double p_line_hfov ;
-  double p_line_eev ;
+  double p_line_eev = 0.0 ;
   float eev_sum = 0.0f ;
   int eev_count = 0 ;
 
@@ -619,7 +623,7 @@ void arguments::init ( int argc , const char ** argv )
           f.projection = RECTILINEAR ;
         else if ( prj == 1 )
           f.projection = CYLINDRICAL ;
-        else if ( prj == 2 || prj == 3 ) // TODO: elliptic crop f. 2
+        else if ( prj == 2 || prj == 3 )
           f.projection = FISHEYE ;
         else if ( prj == 4 )
           f.projection = SPHERICAL ;

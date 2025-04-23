@@ -444,6 +444,42 @@ arguments - this is relevant if you need to refer to source images
 by number. See the example given in the text for the --single
 option for an example!
 
+## --oiio PLUGIN:ATTRIBUTE{@TYPEDESC}=VALUE
+
+OIIO plugins can take a whole range of extra configuration
+arguments which instruct the plugins to behave in a certain way.
+envutil doesn't deal with all these arguments separately but uses
+OIIO infrastructure code to make them 'palatable' to OIIO.
+Most arguments are simple single values, and they can be passed
+as key-value assignments, like this: --oiio key=value
+Some arguments require additional type information - especially
+those which take several values. For these, lux uses a special
+syntax: an OIIO typestring is suffixed to the key, separated
+by an '@' sign, like "--oiio key@typestr=val val ..."
+note the quotes: if there are several values, they have to be
+separated by space or tab, so the entire argument is quoted to
+'hold it together'. Here's an example, configuring the libraw
+plugin to load an image without EXIF rotation applied and in
+sRGB:
+
+    envutil --facet IMG_1234.CR2 rectilinear 65 0 0 0 \
+            --oiio raw:user_flip=0 --oiio raw:ColorSpace=sRGB \
+            --output thumbnail.jpg --width 320
+
+This can become rather verbose, so if you have parameterization
+which re-occurs several times, you can put the arguments into a
+file - just put one in each line, no backslashes needed, and cat
+them into the argument list, like this:
+
+    envutil ... $(cat arglist.txt) ...
+
+Please consult the [OIIO documentation on class TypeDesc](https://openimageio.readthedocs.io/en/stable/imageioapi.html#data-type-descriptions-typedesc)
+about possible values for data types - most of the time, you can get by without passing a type, and the common types are simple lower-case strings
+like 'int'. Note that there is no check on the values you pass. If you
+don't get the expected behaviour, check for typos - OIIO will accept
+any arguments: if you pass a key which is not recognized, this will
+simply have no effect.
+
 ## --solo FACET_INDEX       show only this facet (indexes starting from zero)
 
 This is mostly useful when processing PTO files. envutil ignores all

@@ -253,7 +253,7 @@ void work ( get_t & get , act_t & act )
     h = args.height ;
   }
 
-   static zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
+  zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
   
   // set up a zimt::storer to populate the target array with
   // zimt::process. This is the third component needed for
@@ -342,6 +342,118 @@ void work ( get_t & get , act_t & act )
   }
 }
 
+// we'll use a common wrapper class for all synopsis-forming objects.
+// This class wraps a specific synopsis-forming object handling only
+// 'normal' ray coordinates as input and adds an operator() overload
+// which handles 'ninepack' arguments and twining, using operator()
+// of the 'wrappee' to evaluate individual rays in the twining spread.
+
+template < std::size_t NCH , template < std::size_t > class SF >
+struct synopsis_t
+: public SF < NCH >
+{
+  typedef SF < NCH > base_t ;
+  using base_t::sz ;
+  using base_t::operator() ;
+  using typename base_t::ray_v ;
+  using typename base_t::px_v ;
+  using typename base_t::env_t ;
+
+  typedef zimt::xel_t < float , 9 > ninepack_t ;
+  typedef simdized_type < ninepack_t , LANES > ninepack_v ;
+
+  // 'scratch' will hold all ray packets which will react with
+  // a given twining coefficient 'cf'
+  
+  std::vector < ray_v > scratch ;
+
+  // we hold a copy of the spread here, which is modified in the c'tor
+  // to incorporate the 'bias' values.
+
+  std::vector < zimt::xel_t < float , 3 > > spread ;
+
+  synopsis_t ( std::vector < env_t > & env_v ,
+               const float & bias = 4.0f )
+  : base_t ( env_v ) ,
+    scratch ( env_v.size() ) ,
+    spread ( args.twine_spread )
+  {
+    // we apply the 'bias' value to the twining coefficients, to avoid
+    // the multiplication with the dx/dy value which would be needed
+    // otherwise. This 'bias' is the reciprocal value of the 'bias_x'
+    // and 'bias_y' values used in steppers to form slightly
+    // offsetted planar coordinates for twining.
+
+    for ( auto & cf : spread )
+    {
+      cf[0] *= bias ;
+      cf[1] *= bias ;
+    }
+  }
+
+  // operator() for 'ninepacks'. This implements 'twining': evaluation
+  // at several rays in the vicinity of the central ray and formation
+  // of a weighted sum of these evaluations. The incoming 'ninepack'
+  // holds three concatenated vectorized rays: the 'central' rays,
+  // the rays which result from a discrete target coordinate set off
+  // by one to the right, and the rays which result from a discrete
+  // target coordinate set off one down. By differencing, we obtain
+  // two vectors representing 'canonical' steps in the target image's
+  // horizontal and vertical. We use these two vectors as a basis for
+  // the 'twining' operation: each twining coefficient has two factors
+  // describing it's spatial aspect, and multiplying them with the
+  // corresponding basis vectors and summing up produces the offset
+  // we need to add to the 'central' or 'pickup' ray to obtian a
+  // 'deflected' ray. The substrate is evaluated at each deflected
+  // ray, and the results are combined in a weighted sum, where the
+  // weight comes from the third factor in the twining coefficient.
+
+  void operator() ( const std::vector < ninepack_v > & pv ,
+                    px_v & trg ,
+                    const std::size_t & cap = LANES )
+  {
+    typedef simdized_type < float , LANES > f_v ;
+    typedef simdized_type < zimt::xel_t < float , 3 > , LANES > ray_v ;
+    typedef simdized_type < zimt::xel_t < float , 9 > , LANES > ray9_v;
+
+    // trg is built up as a weighted sum of contributing values
+    // resulting from the reaction with a given coefficient, so we
+    // clear it befor we begin.
+  
+    trg = 0.0f ;
+
+    // for each coefficient in the twining 'spread'
+
+    for ( const auto & cf : spread )
+    {
+      for ( std::size_t facet = 0 ; facet < sz ; facet++ )
+      {
+        const ray9_v & in ( pv[facet] ) ; // shorthand
+
+        ray_v p0 { in[0] ,         in[1] ,         in[2] } ;
+        ray_v du { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
+        ray_v dv { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
+
+        scratch [ facet ] = p0 + cf[0] * du + cf[1] * dv ;
+      }
+
+      // now we have sz entries in scratch, and we can call
+      // the three-component form above to produce a synopsis
+      // for the contributors reacting with the current coefficient
+
+      px_v help ;
+      base_t::operator() ( scratch , help , cap ) ;
+
+      // 'help' is the pixel value, which is weighted with the
+      // weighting value in the twining kernel and added to what's
+      // in trg already.
+
+      trg += cf[2] * help ;
+    }  
+    // and that's it - trg has the result.
+  }
+} ;
+
 // this class is an example for giving preference to one specific
 // facet - as opposed to code mixing several values. There are two
 // member functions. The first one processes a std::vector of simdized
@@ -411,50 +523,25 @@ void work ( get_t & get , act_t & act )
 
 // This aside, here goes: this is the code for fully opaque facets:
 
-template < typename ENV >
-struct voronoi_syn
+template < std::size_t NCH >
+struct _voronoi_syn
 {
-  typedef typename ENV::px_t px_t ;
+  typedef environment < float , float , NCH , LANES > env_t ;
+
+  typedef typename env_t::px_t px_t ;
   typedef simdized_type < px_t , LANES > px_v ;
   static const std::size_t nch = px_t::size() ;
   const int sz ;
   typedef zimt::xel_t < float , 3 > ray_t ;
-  typedef zimt::xel_t < float , 9 > ninepack_t ;
   typedef simdized_type < float , LANES > f_v ;
   typedef simdized_type < ray_t , LANES > ray_v ;
-  typedef simdized_type < ninepack_t , LANES > ninepack_v ;
 
-  std::vector < ENV > & env_v ;
+  std::vector < env_t > & env_v ;
 
-  // 'scratch' will hold all ray packets which will react with
-  // a given twining coefficient 'cf'
-  
-  std::vector < ray_v > scratch ;
-
-  // we hold a copy of the spread here, which is modified in the c'tor
-  // to incorporate the 'bias' values.
-
-  std::vector < zimt::xel_t < float , 3 > > spread ;
-
-  voronoi_syn ( std::vector < ENV > & _env_v ,
-                float bias = 4.0 )
+  _voronoi_syn ( std::vector < env_t > & _env_v )
   : env_v ( _env_v ) ,
-    sz ( _env_v.size() ) ,
-    scratch ( _env_v.size() ) ,
-    spread ( args.twine_spread )
-  {
-    // we apply the 'bias' value to the twining coefficients, to avoid
-    // the multiplication with the dx/dy value which would be needed
-    // otherwise. This 'bias' is the reciprocal value of the 'bias_x'
-    // and 'bias_y' values used in steppers to form slightly
-    // offsetted planar coordinates for twining.
-
-    for ( auto & cf : spread )
-    {
-      cf[0] *= bias ;
-      cf[1] *= bias ;
-    }
-  }
+    sz ( _env_v.size() )
+  { }
 
   // general calculation of the angles between rays:
   //
@@ -490,8 +577,7 @@ struct voronoi_syn
   //   return acos ( a[2] / norm ( a ) ) ;
   // }
 
-  // this is the operator() overload for incoming ray data. The next
-  // one down is for 'ninepacks'.
+  // this is the operator() overload for incoming ray data.
 
   void operator() (
         const std::vector < ray_v > & pv ,
@@ -632,117 +718,33 @@ struct voronoi_syn
       }
     }
   }
-
-  // operator() for 'ninepacks'. This implements 'twining': evaluation
-  // at several rays in the vicinity of the central ray and formation
-  // of a weighted sum of these evaluations. The incoming 'ninepack'
-  // holds three concatenated vectorized rays: the 'central' rays,
-  // the rays which result from a discrete target coordinate set off
-  // by one to the right, and the rays which result from a discrete
-  // target coordinate set off one down. By differencing, we obtain
-  // two vectors representing 'canonical' steps in the target image's
-  // horizontal and vertical. We use these two vectors as a basis for
-  // the 'twining' operation: each twining coefficient has two factors
-  // describing it's spatial aspect, and multiplying them with the
-  // corresponding basis vectors and summing up produces the offset
-  // we need to add to the 'central' or 'pickup' ray to obtian a
-  // 'deflected' ray. The substrate is evaluated at each deflected
-  // ray, and the results are combined in a weighted sum, where the
-  // weight comes from the third factor in the twining coefficient.
-
-  void operator() ( const std::vector < ninepack_v > & pv ,
-                    px_v & trg ,
-                    const std::size_t & cap = LANES )
-  {
-    typedef simdized_type < float , LANES > f_v ;
-    typedef simdized_type < zimt::xel_t < float , 3 > , LANES > ray_v ;
-    typedef simdized_type < zimt::xel_t < float , 9 > , LANES > ray9_v;
-
-    // trg is built up as a weighted sum of contributing values
-    // resulting from the reaction with a given coefficient, so we
-    // clear it befor we begin.
-  
-    trg = 0.0f ;
-
-    // for each coefficient in the twining 'spread'
-
-    for ( const auto & cf : spread )
-    {
-      for ( std::size_t facet = 0 ; facet < sz ; facet++ )
-      {
-        const ray9_v & in ( pv[facet] ) ; // shorthand
-
-        ray_v p0 { in[0] ,         in[1] ,         in[2] } ;
-        ray_v du { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
-        ray_v dv { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
-
-        scratch [ facet ] = p0 + cf[0] * du + cf[1] * dv ;
-      }
-
-      // now we have sz entries in scratch, and we can call
-      // the three-component form above to produce a synopsis
-      // for the contributors reacting with the current coefficient
-
-      px_v help ;
-      operator() ( scratch , help , cap ) ;
-
-      // 'help' is the pixel value, which is weighted with the
-      // weighting value in the twining kernel and added to what's
-      // in trg already.
-
-      trg += cf[2] * help ;
-    }  
-    // and that's it - trg has the result.
-  }
 } ;
+
+template < std::size_t NCH >
+using voronoi_syn = synopsis_t < NCH , _voronoi_syn > ;
 
 // variant with z-buffering for facets with alpha channel:
 
-template < typename ENV , bool fix_duv = true >
-struct voronoi_syn_plus
+template < std::size_t NCH , bool fix_duv = true >
+struct _voronoi_syn_plus
 {
-  typedef typename ENV::px_t px_t ;
+  typedef environment < float , float , NCH , LANES > env_t ;
+
+  typedef typename env_t::px_t px_t ;
   typedef simdized_type < px_t , LANES > px_v ;
   static const std::size_t nch = px_t::size() ;
   const int sz ;
   typedef zimt::xel_t < float , 3 > ray_t ;
-  typedef zimt::xel_t < float , 9 > ninepack_t ;
   typedef simdized_type < float , LANES > f_v ;
   typedef simdized_type < ray_t , LANES > ray_v ;
-  typedef simdized_type < ninepack_t , LANES > ninepack_v ;
   typedef simdized_type < int , LANES > index_v ;
 
-  std::vector < ENV > & env_v ;
-  std::vector < ray_v > scratch ;
-  std::vector < zimt::xel_t < float , 3 > > spread ;
+  std::vector < env_t > & env_v ;
 
-  voronoi_syn_plus ( std::vector < ENV > & _env_v ,
-                     float bias = 4.0 )
+  _voronoi_syn_plus ( std::vector < env_t > & _env_v )
   : env_v ( _env_v ) ,
-    sz ( _env_v.size() ) ,
-    scratch ( _env_v.size() ) ,
-    spread ( args.twine_spread )
-  {
-    // we apply the 'bias' value to the twining coefficients, to avoid
-    // the multiplication with the dx/dy value which would be needed
-    // otherwise. This 'bias' is the reciprocal value of the 'bias_x'
-    // and 'bias_y' values used in steppers to form slightly
-    // offsetted planar coordinates for twining.
-
-    for ( auto & cf : spread )
-    {
-      cf[0] *= bias ;
-      cf[1] *= bias ;
-    }
-  }
-
-  // // this helper function calculates the vector of angles between
-  // // a vector of rays and (0,0,1) - unit forward in our CS.
-  // 
-  // f_v angle_against_001 ( const ray_v & a ) const
-  // {
-  //   return acos ( a[2] / norm ( a ) ) ;
-  // }
+    sz ( _env_v.size() )
+  { }
 
   // helper function to swap occupants in two vectorized objects
   // where a mask is true.
@@ -992,35 +994,10 @@ struct voronoi_syn_plus
     //   trg[ch] ( trg[nch-1] == 0.0f ) = 0.0f ;
     // }
   }
-    
-  // operator() for 'ninepacks'. This is the same as in voronoi_syn,
-  // see there for a commented version.
-
-  void operator() ( const std::vector < ninepack_v > & pv ,
-                    px_v & trg ,
-                    const std::size_t & cap = LANES )
-  {
-    trg = 0.0f ;
-
-    for ( const auto & cf : spread )
-    {
-      for ( std::size_t facet = 0 ; facet < sz ; facet++ )
-      {
-        const auto & in ( pv[facet] ) ; // shorthand
-
-        ray_v p0 { in[0] ,         in[1] ,         in[2] } ;
-        ray_v du { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
-        ray_v dv { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
-
-        scratch [ facet ] = p0 + cf[0] * du + cf[1] * dv ;
-      }
-
-      px_v help ;
-      operator() ( scratch , help , cap ) ;
-      trg += cf[2] * help ;
-    }  
-  }
 } ;
+
+template < std::size_t NCH >
+using voronoi_syn_plus = synopsis_t < NCH , _voronoi_syn_plus > ;
 
 // class hdr_merge_syn codes synopsis-forming objects which produce
 // HDR-merged output of the facets in facet_spec_v. It expects input
@@ -1065,17 +1042,28 @@ struct voronoi_syn_plus
 // (see my attempts here:https://bitbucket.org/kfj/oiio_fileio)
 // another good option is to convert the images to linear TIFF with a
 // raw converter like dcraw, which uses the same processing as OIIO's
-// libraw plugin.
+// libraw plugin. The resulting TIFFs will have the same geometry as
+// the RAW files, and if you have a PTO referring to these TIFFs, a
+// handy trick is to do a search/replace on such a TIFF, replacing
+// the TIFF extension by the original RAW file's extension. Such a
+// 'dubbed' PTO file can be used with lux or envutil, which use OIIO
+// for image IO, and can directly access the RAW file's content using
+// OIIO's libraw plugin.
+
 // Now for the technicalities. I mentioned that envutil does exclude
 // overexposed pixels. envutil is strict and 'bans' pixels even if only
 // one or two colour channels are overexposed. So it uses a stage of
 // 'grey projection' where the *maximum of all colour channels* is taken
-// as grey value, and this grey value is used to calculate the 'quality' // // criterion for each pixel.
-// The quality is provided by comparing the grey value to a reference
-// value - the 'optimum' value. This is the grey value bang in the
+// as grey value, and this grey value is used to calculate the 'quality'
+// criterion for each pixel. Another popular way to do the 'grey
+// projection' is to use the average of the colour channels, but this
+// can result in some overexposed content 'slipping into' the result,
+// which, I think, is best avoided.
+// The 'quality' is provided by comparing the grey value to a reference
+// value - the 'optimum' value. This is the grey value right in the
 // middle of the range of values found in the image data. Since we're
 // working with normalized intensity values and pre-brightening, the
-// 'optimum' is 0.5 times the brightening factor. The quality will be
+// 'optimum' is 0.5, times the brightening factor. The quality will be
 // 'high' for grey values near the 'optimum' and lower the further away
 // from the optimum it is. The 'quality' is also normalized, so that
 // grey values coinciding with the optimum receive quality 1.0, and
@@ -1098,48 +1086,27 @@ struct voronoi_syn_plus
 // (currently envutil does so) or a bell-shaped curve using a negative
 // exponential of the distance-to-optimum.
 
-template < typename ENV >
-struct hdr_merge_syn
+template < std::size_t NCH >
+struct _hdr_merge_syn
 {
-  typedef typename ENV::px_t px_t ;
+  typedef environment < float , float , NCH , LANES > env_t ;
+
+  typedef typename env_t::px_t px_t ;
   typedef simdized_type < px_t , LANES > px_v ;
   static const std::size_t nch = px_t::size() ;
   const int sz ;
   typedef zimt::xel_t < float , 3 > ray_t ;
-  typedef zimt::xel_t < float , 9 > ninepack_t ;
   typedef simdized_type < float , LANES > f_v ;
   typedef simdized_type < ray_t , LANES > ray_v ;
-  typedef simdized_type < ninepack_t , LANES > ninepack_v ;
 
-  std::vector < ENV > & env_v ;
-  std::vector < ray_v > scratch ;
+  std::vector < env_t > & env_v ;
   std::vector < float > optimum ;
 
-  // we hold a copy of the spread here, which is modified in the c'tor
-  // to incorporate the 'bias' values.
-
-  std::vector < zimt::xel_t < float , 3 > > spread ;
-
-  hdr_merge_syn ( std::vector < ENV > & _env_v ,
-                float bias = 4.0 )
+  _hdr_merge_syn ( std::vector < env_t > & _env_v )
   : env_v ( _env_v ) ,
     sz ( _env_v.size() ) ,
-    scratch ( _env_v.size() ) ,
-    optimum ( _env_v.size() ) ,
-    spread ( args.twine_spread )
+    optimum ( _env_v.size() )
   {
-    // we apply the 'bias' value to the twining coefficients, to avoid
-    // the multiplication with the dx/dy value which would be needed
-    // otherwise. This 'bias' is the reciprocal value of the 'bias_x'
-    // and 'bias_y' values used in steppers to form slightly
-    // offsetted planar coordinates for twining.
-
-    for ( auto & cf : spread )
-    {
-      cf[0] *= bias ;
-      cf[1] *= bias ;
-    }
-
     float lowest_brighten = 100000.0f ;
     float highest_brighten = -1.0f ;
     int lowest_brighten_fct ;
@@ -1148,11 +1115,6 @@ struct hdr_merge_syn
     for ( int i = 0 ; i < args.nfacets ; i++ )
     {
       const auto & fct ( args.facet_spec_v [ i ] ) ;
-      std::cout << "*** facet " << i << " has brighten " << fct.brighten
-                << std::endl ;
-      optimum[i] = .5f * fct.brighten ;
-      std::cout << "*** facet " << i << " optimum " << optimum[i]
-                << std::endl ;
       if ( fct.brighten < lowest_brighten )
       {
         lowest_brighten = fct.brighten ;
@@ -1164,30 +1126,27 @@ struct hdr_merge_syn
         highest_brighten_fct = i ;
       }
     }
-    std::cout << "*** facet " << lowest_brighten_fct
-              << " has lowest brighten " << lowest_brighten
-              << std::endl ;
-    std::cout << "*** facet " << highest_brighten_fct
-              << " has highest brighten " << highest_brighten
-              << std::endl ;
-
-    // optimum [ highest_brighten_fct ] += .01f ;
-    // optimum [ lowest_brighten_fct ] -= .01f ;
-    // 
-    // for ( int i = 0 ; i < args.nfacets ; i++ )
-    // {
-    //   const auto & fct ( args.facet_spec_v [ i ] ) ;
-    //   std::cout << "*** facet " << i << " revised optimum " << optimum[i]
-    //             << std::endl ;
-    // }
   }
 
+  // we have a two-stage process for obtaining a 'quality' value.
+  // These two functions calculate a 'quality' value for a grey value,
+  // either without or with alpha present. Below is the function
+  // processing pixel data - there, the grey value is formed and,
+  // if present, the alpha value extracted, then the grey-processing
+  // get_quality overload is called to produce the result.
+  // TODO: the simple triangular function I use doesn't work so
+  // well for the dark areas - I think content from long exposures
+  // must be suppressed more for the dark areas, so I divide by
+  // optimum squared. the extra division by optimum boosts long
+  // exposures (they have low optimum).
+  
   f_v get_quality ( f_v _m , float optimum ) const
   {
-    f_v m = _m ;
-    m -= optimum ;
-    m = optimum - abs ( m ) ;
-    m /= optimum ;
+    f_v grey = _m ;
+    grey -= optimum ;
+    grey = optimum - abs ( grey ) ;
+    grey /= ( optimum * optimum ) ;
+
     // incoming _m is either the single grey channel or the maximum
     // of R, G and B. The three operations above have yielded a
     // quality value which is 1.0 for 'optimum' _m and near zero
@@ -1196,19 +1155,20 @@ struct hdr_merge_syn
     // to make the result come out at full intensity, hence the final
     // multiplication with _m. If _m is at the lower end (black pixel)
     // the final multiplication will result in zero quality.
-    m ( m < 0.00001f ) = 0.00001f * _m ;
-    return m ;
+
+    grey ( grey < 0.00001f ) = 0.00001f * _m ;
+    return grey ;
   }
 
-  f_v get_quality ( f_v _m , f_v alpha , float optimum ) const
+  f_v get_quality ( f_v _grey , f_v alpha , float optimum ) const
   {
-    f_v m = _m ;
+    f_v grey = _grey ;
     auto ao = alpha * optimum ;
-    m -= ao ;
-    m = ao - abs ( m ) ;
-    m /= ao ;
-    m ( ! ( m > 0.00001f ) ) = 0.00001f * _m ;
-    return m ;
+    grey -= ao ;
+    grey = ao - abs ( grey ) ;
+    grey /= ( ao * ao ) ;
+    grey ( ! ( grey > 0.00001f ) ) = 0.00001f * _grey ;
+    return grey ;
   }
 
   f_v get_quality ( const px_v & px , float optimum ) const
@@ -1221,23 +1181,27 @@ struct hdr_merge_syn
     }
     else if constexpr ( px_v::size() == 3 )
     {
-      f_v m = max ( px[0] , px[1] ) ;
-      m = max ( m , px[2] ) ;
-      f_v q = get_quality ( m , optimum ) ;
+      // grey projection picks the maximum of R, G and B:
+      f_v grey = max ( px[0] , px[1] ) ;
+      grey = max ( grey , px[2] ) ;
+      f_v q = get_quality ( grey , optimum ) ;
       return q ;
     }
     else if constexpr ( px_v::size() == 2 )
     {
+      // alpha is in the last channel
       f_v alpha = px[1] ;
       f_v q = get_quality ( px[0] , alpha , optimum ) ;
       return q ;
     }
     else if constexpr ( px_v::size() == 4 )
     {
+      // alpha is in the last channel
       f_v alpha = px[3] ;
-      f_v m = max ( px[0] , px[1] ) ;
-      m = max ( m , px[2] ) ;
-      f_v q = get_quality ( m , alpha , optimum ) ;
+      // grey projection picks the maximum of R, G and B:
+      f_v grey = max ( px[0] , px[1] ) ;
+      grey = max ( grey , px[2] ) ;
+      f_v q = get_quality ( grey , alpha , optimum ) ;
       return q ;
     }
   }
@@ -1251,131 +1215,115 @@ struct hdr_merge_syn
         const std::size_t & cap = LANES ) const
   {
     // go through the facets in turn and evaluate the env, calculate
-    // the quality criterion, form a weighted sum
+    // the quality criterion, form a weighted sum of the input pixels
 
     trg = 0.0f ;
     f_v qsum ( 0.0f ) ;
 
     for ( int i = 0 ; i < sz ; i++ )
     {
+      // evaluate the environment object in env_v[i]
+
       px_v px ;
       env_v [ i ] . eval ( pv [ i ] , px ) ;
+
+      // calculate the 'quality' value for the pixel data
+
       f_v quality = get_quality ( px , optimum[i] ) ;
+
+      // add it to qsum, to normalize in the final step
+
       qsum += quality ;
+
+      // we use 'if constexpr' to code for the variants in one
+      // function:
+
       if constexpr ( px_v::size() == 1 || px_v::size() == 3 )
       {
+        // no alpha present. this is simple:
+
         trg += ( px * quality ) ;
       }
       else if constexpr ( px_v::size() == 2 )
       {
-        // deassociate
+        // two channels, interpreted as grey + alpha
+
+        // deassociate. we're assuming alpha is associated!
+
         f_v grey = 0.0f ;
         grey ( px[1] > 0.000001f ) = px[0] / px[1] ;
+
         // apply weight to grey channel and sum up
+
         trg[0] += ( grey * quality ) ;
+
         // result alpha is max of alpha of all pixels
+
         trg[1] = max ( trg[1] , px[1] ) ;
       }
       else if constexpr ( px_v::size() == 4 )
       {
         // deassociate
+
         xel_t < f_v , 3 > rgb = f_v ( 0.0f ) ;
+
         rgb[0] ( px[3] > 0.000001f ) = px[0] / px[3] ;
         rgb[1] ( px[3] > 0.000001f ) = px[1] / px[3] ;
         rgb[2] ( px[3] > 0.000001f ) = px[2] / px[3] ;
+
         // apply weight to colour channels and sum up
+
         trg[0] += ( rgb[0] * quality ) ;
         trg[1] += ( rgb[1] * quality ) ;
         trg[2] += ( rgb[2] * quality ) ;
+
         // result alpha is max of alpha of all pixels
+
         trg[3] = max ( trg[3] , px[3] ) ;
       }
     }
+
+    // final stage: normalization and re-association of alpha. Note
+    // that the output will be set to zero where the sum of quality
+    // values for all facets doesn't exceed zero. The formulation
+    // with the negated mask is to mask out nan pixels as well.
+
     if constexpr ( px_v::size() == 1 || px_v::size() == 3 )
     {
       trg /= qsum ;      // normalize
+      trg ( ! ( qsum > 0.0f ) ) = 0.0f ; // suppress bad q
     }
     else if constexpr ( px_v::size() == 2 )
     {
       trg[0] /= qsum ;   // normalize
+      trg[0] ( ! ( qsum > 0.0f ) ) = 0.0f ; // suppress bad q
       trg[0] *= trg[1] ; // reassociate
     }
     else if constexpr ( px_v::size() == 4 )
     {
-      trg[0] /= qsum ;   // normalize
+      // normalize
+
+      trg[0] /= qsum ;
       trg[1] /= qsum ;
       trg[2] /= qsum ;
-      // trg[0] ( qsum == 0.0f ) = 0.0f ;
-      // trg[1] ( qsum == 0.0f ) = 0.0f ;
-      // trg[2] ( qsum == 0.0f ) = 0.0f ;
-      trg[0] *= trg[3] ; // reassociate
+
+      // suppress low q values
+
+      trg[0] ( ! ( qsum > 0.0f ) ) = 0.0f ;
+      trg[1] ( ! ( qsum > 0.0f ) ) = 0.0f ;
+      trg[2] ( ! ( qsum > 0.0f ) ) = 0.0f ;
+
+      // reassociate alpha
+
+      trg[0] *= trg[3] ;
       trg[1] *= trg[3] ;
       trg[2] *= trg[3] ;
     }
   }
-
-  // operator() for 'ninepacks'. This implements 'twining': evaluation
-  // at several rays in the vicinity of the central ray and formation
-  // of a weighted sum of these evaluations. The incoming 'ninepack'
-  // holds three concatenated vectorized rays: the 'central' rays,
-  // the rays which result from a discrete target coordinate set off
-  // by one to the right, and the rays which result from a discrete
-  // target coordinate set off one down. By differencing, we obtain
-  // two vectors representing 'canonical' steps in the target image's
-  // horizontal and vertical. We use these two vectors as a basis for
-  // the 'twining' operation: each twining coefficient has two factors
-  // describing it's spatial aspect, and multiplying them with the
-  // corresponding basis vectors and summing up produces the offset
-  // we need to add to the 'central' or 'pickup' ray to obtian a
-  // 'deflected' ray. The substrate is evaluated at each deflected
-  // ray, and the results are combined in a weighted sum, where the
-  // weight comes from the third factor in the twining coefficient.
-
-  void operator() ( const std::vector < ninepack_v > & pv ,
-                    px_v & trg ,
-                    const std::size_t & cap = LANES )
-  {
-    typedef simdized_type < float , LANES > f_v ;
-    typedef simdized_type < zimt::xel_t < float , 3 > , LANES > ray_v ;
-    typedef simdized_type < zimt::xel_t < float , 9 > , LANES > ray9_v;
-
-    // trg is built up as a weighted sum of contributing values
-    // resulting from the reaction with a given coefficient, so we
-    // clear it befor we begin.
-  
-    trg = 0.0f ;
-
-    // for each coefficient in the twining 'spread'
-
-    for ( const auto & cf : spread )
-    {
-      for ( std::size_t facet = 0 ; facet < sz ; facet++ )
-      {
-        const ray9_v & in ( pv[facet] ) ; // shorthand
-
-        ray_v p0 { in[0] ,         in[1] ,         in[2] } ;
-        ray_v du { in[3] - in[0] , in[4] - in[1] , in[5] - in[2] } ;
-        ray_v dv { in[6] - in[0] , in[7] - in[1] , in[8] - in[2] } ;
-
-        scratch [ facet ] = p0 + cf[0] * du + cf[1] * dv ;
-      }
-
-      // now we have sz entries in scratch, and we can call
-      // the three-component form above to produce a synopsis
-      // for the contributors reacting with the current coefficient
-
-      px_v help ;
-      operator() ( scratch , help , cap ) ;
-
-      // 'help' is the pixel value, which is weighted with the
-      // weighting value in the twining kernel and added to what's
-      // in trg already.
-
-      trg += cf[2] * help ;
-    }  
-    // and that's it - trg has the result.
-  }
 } ;
+
+template < std::size_t NCH >
+using hdr_merge_syn = synopsis_t < NCH , _hdr_merge_syn > ;
 
 template < typename T , std::size_t L >
 struct generic_r3
@@ -1572,42 +1520,6 @@ struct generic_r3
     ev.eval ( in , out ) ;
   }
 } ;
-
-// this functor handles the transformation of 2D model space coordinates
-// pertaining to an output image to 3D ray coordinates. here, we take the
-// parameters for the target image from 'args'. one down is a variant
-// using a facet_spec object to parameterize the target image.
-
-// template < typename T , std::size_t L >
-// struct tf_ex_args
-// : public unary_functor < xel_t < T , 2 > ,
-//                          xel_t < T , 3 > ,
-//                          L >
-// {
-//   // 2D->3D transformation as per the facet's projection.
-// 
-//   grok_type < xel_t < T , 2 > , xel_t < T , 3 > , L > tf23 ;
-// 
-//   // 3D->3D transformation, may contain inverse translation
-// 
-//   generic_r3 < T , L > tf33 ;
-// 
-//   tf_ex_args ( const facet_spec & fs )
-//   : tf23 ( roll_out_23 < T , L > ( args.projection ) ) ,
-//     tf33 ( fs )
-//   { }
-// 
-//   // eval puts the two steps together and provides a ray coordinate
-//   // in the source facet's CS.
-// 
-//   template < typename I , typename O >
-//   void eval ( const I & _in , O & out )
-//   {
-//     tf23.eval ( _in , out ) ;
-//     tf33.eval ( out , out ) ;
-//   }
-// } ;
-// 
 
 // this functor handles the transformation of 2D model space coordinates
 // pertaining to an output image to 3D ray coordinates. The speciality
@@ -2003,11 +1915,9 @@ template < int NCH ,
            template < typename , std::size_t > class STP >
 void roll_out ( int ninputs )
 {
-  typedef environment < float , float , NCH , LANES > env_t ;
-
   if ( args.synopsis == "hdr_merge" )
   {
-    fuse < NCH , STP , hdr_merge_syn < env_t > > ( ninputs ) ;
+    fuse < NCH , STP , hdr_merge_syn < NCH > > ( ninputs ) ;
   }
   else if ( args.synopsis == "panorama" )
   {
@@ -2015,9 +1925,9 @@ void roll_out ( int ninputs )
     // channel, two- and four-channel images are with alpha channel.
 
     if constexpr ( NCH == 1 || NCH == 3 )
-      fuse < NCH , STP , voronoi_syn < env_t > > ( ninputs ) ;
+      fuse < NCH , STP , voronoi_syn < NCH > > ( ninputs ) ;
     else
-      fuse < NCH , STP , voronoi_syn_plus < env_t > > ( ninputs ) ;
+      fuse < NCH , STP , voronoi_syn_plus < NCH > > ( ninputs ) ;
   }
   else
   {
@@ -2029,7 +1939,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-// #define NARROW_SCOPE
+#define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate
@@ -2138,6 +2048,7 @@ struct dispatch
       std::cerr << "unhandled channel count " << nchannels
                 << std::endl ;
     }
+    conclude_cycle() ;
     return 0 ;
   }
 } ;
