@@ -25,7 +25,7 @@ camera image formats like CR2, using OpenImageIO's libraw plugin.
 envutil has limited stitching capabilities, roughly what hugin's helper
 program 'nona' would offer. The images are put together in a way which
 resembles a spherical voronoi diagram, there is no seam optimization or
-feathering.
+feathering. envutil can also hdr-merge exposure brackets.
 
 Panorama photographers may not be familiar with the term 'lat/lon
 environment' - to them, this is a 'full spherical panorama' or
@@ -52,10 +52,9 @@ from openEXR's standard - I measure cube face image field of view
 X degrees field of view extend over just as many of these small areas as
 the image is wide and high. A different notion is 'center-to-center'
 measuring, where the X degrees refer to the area enclosed between the
-marginal pixels seen as points in space (the convex hull). Cubemaps with
-this type of field of view mesurement can be processed by passing --ctc 1
-(for 'center-to-center'). envutil can also process cubemaps with cube face
-images with larger field of view than ninety degrees (pass --cmbfov). 
+marginal pixels seen as points in space (the convex hull).
+envutil can also process cubemaps with cube face
+images with larger field of view than ninety degrees (pass --fov). 
 Cubemaps can also be passed as six single cube face images. The images
 have to follow a naming scheme which the caller passes via a format
 string. You pass the format string as input, and it's used to generate six

@@ -76,21 +76,26 @@ using OIIO::ImageSpec ;
 // avoid too much build-up of assets in RAM. With this simple scheme,
 // you can e.g. keep a facet set 'afloat' for several outputs with
 // varying parameters.
+// we'll handle splines with pixels of up to four channels - if more
+// is needed, add to the CHAIN and ECHAIN macros, they'll roll it out.
 
 struct asset_handler_t
 {
   #define PSPL(NCH) std::shared_ptr \
     < bspline < xel_t < float , NCH > , 2 > >
 
-  std::map < std::string , PSPL(1) > map1 ;
-  std::map < std::string , PSPL(2) > map2 ;
-  std::map < std::string , PSPL(3) > map3 ;
-  std::map < std::string , PSPL(4) > map4 ;
+  #define CHAIN(WHAT) WHAT(1) WHAT(2) WHAT(3) WHAT(4)
 
-  std::map < std::string , PSPL(1) > bup1 ;
-  std::map < std::string , PSPL(2) > bup2 ;
-  std::map < std::string , PSPL(3) > bup3 ;
-  std::map < std::string , PSPL(4) > bup4 ;
+  #define ECHAIN(WHAT) WHAT(1) else WHAT(2) else WHAT(3) else WHAT(4)
+
+#define OP(K)                                   \
+                                                \
+  std::map < std::string , PSPL(K) > map ## K ; \
+  std::map < std::string , PSPL(K) > bup ## K ;
+
+  CHAIN(OP)
+
+#undef OP
 
   // add a shared_ptr to a b-spline with the given asset key.
   // this replaces a spline which is currently held by the same key.
@@ -98,14 +103,17 @@ struct asset_handler_t
   template < std::size_t NCH >
   void add ( std::string asset_key , PSPL(NCH) p_spl )
   {
-    if constexpr ( NCH == 1 )
-      map1 [ asset_key ] = p_spl ;
-    else if constexpr ( NCH == 2 )
-      map2 [ asset_key ] = p_spl ;
-    else if constexpr ( NCH == 3 )
-      map3 [ asset_key ] = p_spl ;
-    else if constexpr ( NCH == 4 )
-      map4 [ asset_key ] = p_spl ;
+    #define OP(K)                      \
+                                       \
+    if constexpr ( K == NCH )          \
+    {                                  \
+      map ## K [ asset_key ] = p_spl ; \
+    }
+
+    ECHAIN(OP)
+
+    #undef OP
+
     else
     {
       std::cerr << "asset handler: can't store spline with NCH "
@@ -117,34 +125,20 @@ struct asset_handler_t
   template < std::size_t NCH >
   PSPL(NCH) find ( std::string asset_key )
   {
-    if constexpr ( NCH == 1 )
-    {
-      if ( auto it = bup1.find ( asset_key ) ; it != bup1.end() )
-        return ( map1 [ asset_key ] = it->second ) ;
-      if ( auto it = map1.find ( asset_key ) ; it != map1.end() )
-        return it->second ;
+    #define OP(K)                     \
+                                      \
+    if constexpr ( K == NCH )         \
+    {                                 \
+      if ( auto it = bup ## K.find ( asset_key ) ; it != bup ## K.end() ) \
+        return ( map ## K [ asset_key ] = it->second ) ;                  \
+      if ( auto it = map ## K.find ( asset_key ) ; it != map ## K.end() ) \
+        return it->second ;                                               \
     }
-    else if constexpr ( NCH == 2 )
-    {
-      if ( auto it = bup2.find ( asset_key ) ; it != bup2.end() )
-        return ( map2 [ asset_key ] = it->second ) ;
-      if ( auto it = map2.find ( asset_key ) ; it != map2.end() )
-        return it->second ;
-    }
-    else if constexpr ( NCH == 3 )
-    {
-      if ( auto it = bup3.find ( asset_key ) ; it != bup3.end() )
-        return ( map3 [ asset_key ] = it->second ) ;
-      if ( auto it = map3.find ( asset_key ) ; it != map3.end() )
-        return it->second ;
-    }
-    else if constexpr ( NCH == 4 )
-    {
-      if ( auto it = bup4.find ( asset_key ) ; it != bup4.end() )
-        return ( map4 [ asset_key ] = it->second ) ;
-      if ( auto it = map4.find ( asset_key ) ; it != map4.end() )
-        return it->second ;
-    }
+
+    ECHAIN(OP)
+
+    #undef OP
+
     else
     {
       std::cerr << "asset handler: can't look up spline with NCH "
@@ -160,26 +154,18 @@ struct asset_handler_t
   template < std::size_t NCH >
   void remove ( std::string asset_key )
   {
-    if constexpr ( NCH == 1 )
-    {
-      map1.erase ( asset_key ) ;
-      bup1.erase ( asset_key ) ;
+    #define OP(K)                     \
+                                      \
+    if constexpr ( K == NCH )         \
+    {                                 \
+      map ## K.erase ( asset_key ) ;  \
+      bup ## K.erase ( asset_key ) ;  \
     }
-    else if constexpr ( NCH == 2 )
-    {
-      map2.erase ( asset_key ) ;
-      bup2.erase ( asset_key ) ;
-    }
-    else if constexpr ( NCH == 3 )
-    {
-      map3.erase ( asset_key ) ;
-      bup3.erase ( asset_key ) ;
-    }
-    else if constexpr ( NCH == 4 )
-    {
-      map4.erase ( asset_key ) ;
-      bup4.erase ( asset_key ) ;
-    }
+
+    ECHAIN(OP)
+
+    #undef OP
+
     else
     {
       std::cerr << "asset handler: can't remove spline with NCH "
@@ -195,15 +181,14 @@ struct asset_handler_t
     if ( args.verbose )
       std::cout << "releasing all image data in RAM" << std::endl ;
 
-    map1.clear() ;
-    map2.clear() ;
-    map3.clear() ;
-    map4.clear() ;
+    #define OP(K)      \
+                       \
+    map ## K.clear() ; \
+    bup ## K.clear() ;
 
-    bup1.clear() ;
-    bup2.clear() ;
-    bup3.clear() ;
-    bup4.clear() ;
+    CHAIN(OP)
+
+    #undef OP
   }
 
   // cycle clears all assets in 'limbo' and moves all assets which
@@ -214,21 +199,14 @@ struct asset_handler_t
 
   void cycle()
   {
-    bup1.clear() ;
-    bup1 = map1 ;
-    map1.clear() ;
+    #define OP(K)         \
+                          \
+    bup ## K = map ## K ; \
+    map ## K.clear() ;
 
-    bup2.clear() ;
-    bup2 = map2 ;
-    map2.clear() ;
+    CHAIN(OP)
 
-    bup3.clear() ;
-    bup3 = map3 ;
-    map3.clear() ;
-
-    bup4.clear() ;
-    bup4 = map4 ;
-    map4.clear() ;
+    #undef OP
   }
 
   ~asset_handler_t()
