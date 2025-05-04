@@ -160,10 +160,21 @@ bool facet_spec::init ( int argc , const char ** argv )
       return false ;
   }
 
+  bool read_hfov = false ;
+  bool read_projection = false ;
+
   if ( hfov <= 0.0 )
   {
-    std::cerr << "facet hfov invalid: " << hfov << std::endl ;
-    return false ;
+    if ( hfov == -1.0 )
+    {
+      // glean hfov from  image metadata
+      read_hfov = true ;
+    }
+    else
+    {
+      std::cerr << "facet hfov invalid: " << hfov << std::endl ;
+      return false ;
+    }
   }
 
   // initially, the asset key is just the filename.
@@ -171,7 +182,17 @@ bool facet_spec::init ( int argc , const char ** argv )
   asset_key = filename ;
 
   // determine facet image's projection
+
   int prj = 0 ;
+  if ( projection_str == "metadata" )
+  {
+    read_projection = true ;
+  }
+
+  // all seems well so far, let's open the image
+
+  get_image_metrics ( read_hfov , read_projection ) ;
+
   for ( const auto & p : projection_name )
   {
     if ( p == projection_str )
@@ -184,10 +205,6 @@ bool facet_spec::init ( int argc , const char ** argv )
     std::cerr << "facet projection invalid: " << projection_str << std::endl ;
     return false ;
   }
-
-  // all seems well so far, let's open the image
-
-  get_image_metrics() ;
 
   brighten = 1.0f ;
 
@@ -260,14 +277,12 @@ void arguments::init ( int argc , const char ** argv )
 
   ap.separator("  additional parameters for single-image output:");
 
-  // tentative:
-
   ap.arg("--single FACET")
     .help("render an image like facet FACET")
     .metavar("FACET");
 
   ap.arg("--split FORMAT_STRING")
-    .help("create a 'single' facet for all facets in a PTO")
+    .help("create a 'single' image for all facets in a PTO")
     .metavar("FORMAT_STRING");
 
   ap.arg("--yaw ANGLE")
@@ -346,17 +361,21 @@ void arguments::init ( int argc , const char ** argv )
 
   ap.separator("  parameters for mounted (facet) image input:");
 
-  // tentative:
+  // tentative
+
+  ap.add_argument("--photo %L:IMAGE", &photo_name_v )
+    .help("load photographic image, interpreting metadata") ;
+
+  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL",
+                  &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v )
+    .help("load oriented non-environment source image") ;
+
   ap.arg( "--oiio %L:OPTION" , &oiio_option_v )
     .help("pass option to configure OIIO plugin (may be used repeatedly)") ;
 
   ap.arg("--pto PTOFILE")
     .help("panotools script in hugin PTO dialect (optional)")
     .metavar("PTOFILE");
-
-  ap.add_argument("--facet %L:IMAGE %L:PROJECTION %L:HFOV %L:YAW %L:PITCH %L:ROLL",
-                  &facet_name_v , &facet_projection_v, &facet_hfov_v, &facet_yaw_v, &facet_pitch_v, &facet_roll_v )
-    .help("load oriented non-environment source image") ;
 
   ap.add_argument("--pto_line %L:LINE", &addenda )
     .help("add (trailing) line of PTO code") ;
@@ -433,7 +452,7 @@ void arguments::init ( int argc , const char ** argv )
   projection = projection_t ( prj ) ;
 
   if ( pto_file == std::string() && addenda.size() == 0 )
-    assert ( args.facet_name_v.size() > 0 ) ;
+    assert ( args.facet_name_v.size() > 0 || args.photo_name_v.size() > 0 ) ;
   assert ( output != std::string() || split != std::string() ) ;
 
   bool ignore_p_line = false ;
@@ -808,6 +827,19 @@ void arguments::init ( int argc , const char ** argv )
     if ( store_cropped )
       std::cout << "p-line crop: " << p_crop_x0 << " " << p_crop_x1
                 << " " << p_crop_y0 << " " << p_crop_y1 << std::endl ;
+  }
+
+  // TODO: process image metadata. For now all 'photos' are taken as
+  // head-on 90-degree rectilinear.
+
+  for ( const auto & filename : photo_name_v )
+  {
+    facet_name_v.push_back ( filename ) ;
+    facet_projection_v.push_back ( "metadata" ) ; // use metadata
+    facet_hfov_v.push_back ( "-1" ) ;             // use metadata
+    facet_yaw_v.push_back ( "0" ) ;
+    facet_pitch_v.push_back ( "0" ) ;
+    facet_roll_v.push_back ( "0" ) ;
   }
 
   // add facets given as single --facet arguments. Even if the argument

@@ -185,6 +185,8 @@ extent_type get_extent ( projection_t projection ,
 
 #include <regex>
 #include <OpenImageIO/imageio.h>
+#include <OpenImageIO/imagebuf.h>
+#include <OpenImageIO/imagebufalgo.h>
 
 using OIIO::ImageInput ;
 using OIIO::ImageOutput ;
@@ -516,7 +518,8 @@ struct facet_spec
     cap_radius = sqrt ( d1 ) ;
   }
 
-  void get_image_metrics()
+  void get_image_metrics ( bool read_hfov = false ,
+                           bool read_projection = false )
   {
     // currently building with raw::user_flip set to zero, to load
     // raw images in memory order without EXIF rotation. This only
@@ -539,6 +542,47 @@ struct facet_spec
     height = window_height = spec.height ;
     window_x_offset = window_y_offset = 0 ;
     nchannels = spec.nchannels ;
+
+    if ( read_hfov )
+    {
+      std::cout << "***** try read hfov metadatum" << std::endl ;
+      // glean projection and hfov from metadata
+      float fv ;
+      bool ok = spec.getattribute ( "Hfov", OIIO::TypeFloat, &fv ) ;
+      if ( ok )
+      {
+        std::cout << "found hfov in metadata: " << fv << std::endl ;
+        hfov = fv ;
+      }
+      else
+      {
+        std::cout << "no 'Hfov' metadatum found; assuming 65 degrees"
+                  << std::endl ;
+        hfov = 65.0 ;
+      }
+    }
+    if ( read_projection )
+    {
+      std::cout << "***** try read projection metadatum" << std::endl ;
+      // glean projection and hfov from metadata
+      std::string metadatum ;
+      metadatum = spec [ "Projection" ] ;
+      if ( metadatum != std::string() )
+      {
+        projection_str = metadatum ;
+        std::cout << "found projection in metadata: "
+                  << projection_str << std::endl ;
+      }
+      else
+      {
+        std::cout << "no 'Projection' metadatum found; assuming 'rectilinear'"
+                  << std::endl ;
+
+        projection_str = "rectilinear" ;
+        projection = RECTILINEAR ;
+      }
+    }
+
     inp->close() ;
   }
 } ;
@@ -580,7 +624,7 @@ struct arguments
   std::vector < std::string > facet_yaw_v ;
   std::vector < std::string > facet_pitch_v ;
   std::vector < std::string > facet_roll_v ;
-
+  std::vector < std::string > photo_name_v ;
   std::vector < std::string > addenda ;
 
   std::vector < facet_spec > facet_spec_v ;
@@ -609,15 +653,28 @@ struct arguments
 
 extern arguments args ;
 
+template < class VT , class NT = float >
+VT RGB2sRGB ( VT value )
+{
+  VT result = NT(1.055) * pow ( value , NT(0.41666666666666667) ) - 0.055 ;
+
+  // using vspline::assign_if to code uniformly for scalar and vectorized VT:
+
+  if ( value <= NT(0.0031308) )
+    result = NT(12.92) * value ;
+
+  return result ;
+}
+
 // helper function to save a zimt array of pixels to an image file, or
 // to a set of six cube face images, if 'output' has a format string.
 
 template < std::size_t nchannels >
 void save_array ( const std::string & filename ,
-                  const zimt::view_t
+                  zimt::view_t
                     < 2 ,
                       zimt::xel_t < float , nchannels >
-                    > & pixels ,
+                    > pixels ,
                   bool is_latlon = false )
 {
   if ( args.projection == CUBEMAP || args.projection == BIATAN6 )
@@ -665,15 +722,50 @@ void save_array ( const std::string & filename ,
 
   // if we land here, we're supposed to store an ordinary single image
 
-  auto out = ImageOutput::create ( filename );
-  assert ( out != nullptr ) ;
   ImageSpec ospec ( pixels.shape[0] , pixels.shape[1] ,
-                    nchannels , TypeDesc::HALF ) ;
-  out->open ( filename , ospec ) ;
+                    nchannels , TypeDesc::FLOAT ) ;
 
-  auto success = out->write_image ( TypeDesc::FLOAT , pixels.data() ) ;
+  ospec["ImageDescription"] = "image processed by envutil";
+  ospec["Projection"] = projection_name [ args.projection ] ;
+  ospec["Hfov"] = ( 180.0 / M_PI ) * args.hfov ;
+
+  // we wrap the pixel data in on OIIO ImageBuf. OIIO uses byte
+  // strides, so we need to scale up the pixel strides.
+
+  static const size_t px_bytes = sizeof ( float ) * nchannels ;
+
+  OIIO::ImageBuf out_buf ( ospec ,
+                           pixels.data() ,
+                           pixels.strides[0] * px_bytes ,
+                           pixels.strides[1] * px_bytes ) ;
+
+  auto sz = filename.size() ;
+  assert ( sz > 4 ) ;
+  auto extension = filename.substr ( sz - 4 , sz ) ;
+
+  // special treatment for jpeg output: convert to sRGB
+
+  if ( extension == ".JPG" || extension == ".jpg" )
+  {
+    // internally, we're working in the ACEScg colour space, but jpeg
+    // files must be in sRGB. So we use OIIO's 'colorconvert', which
+    // in turn uses OCIO. Using this code is still tentative, it may
+    // be more appropriate to use a different variant of OCIO code
+    // - I feel the images come out quite flat, so maybe an additional
+    // display transform is needed.
+
+    if ( args.verbose )
+      std::cout << "converting from internal ACEScg to sRGB"
+                << std::endl ;
+
+    OIIO::ImageBufAlgo::colorconvert
+      ( out_buf , out_buf ,
+        "ACEScg" ,
+        "sRGB - Display" ) ;
+  }
+
+  auto success = out_buf.write ( filename ) ;
   assert ( success ) ;
-  out->close();
 }
 
 #endif // #ifndef ENVUTIL_BASIC_H

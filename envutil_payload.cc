@@ -1099,8 +1099,13 @@ struct _hdr_merge_syn
   typedef simdized_type < float , LANES > f_v ;
   typedef simdized_type < ray_t , LANES > ray_v ;
 
+  typedef enum { LOW , MIDDLE , HIGH } kind_t ;
+
   std::vector < env_t > & env_v ;
   std::vector < float > optimum ;
+
+  int lowest_brighten_fct ;
+  int highest_brighten_fct ;
 
   _hdr_merge_syn ( std::vector < env_t > & _env_v )
   : env_v ( _env_v ) ,
@@ -1109,12 +1114,18 @@ struct _hdr_merge_syn
   {
     float lowest_brighten = 100000.0f ;
     float highest_brighten = -1.0f ;
-    int lowest_brighten_fct ;
-    int highest_brighten_fct ;
 
     for ( int i = 0 ; i < args.nfacets ; i++ )
     {
+      // shorthand
+
       const auto & fct ( args.facet_spec_v [ i ] ) ;
+
+      // we assume that the brightened/darkened half maximal
+      // intensity has optimal quality
+
+      optimum [ i ] = 0.5f * fct.brighten ;
+
       if ( fct.brighten < lowest_brighten )
       {
         lowest_brighten = fct.brighten ;
@@ -1140,58 +1151,101 @@ struct _hdr_merge_syn
   // optimum squared. the extra division by optimum boosts long
   // exposures (they have low optimum).
   
-  f_v get_quality ( f_v _m , float optimum ) const
+  f_v get_quality ( f_v grey ,
+                    float optimum , kind_t kind ) const
   {
-    f_v grey = _m ;
-    grey -= optimum ;
-    grey = optimum - abs ( grey ) ;
-    grey /= ( optimum * optimum ) ;
+    // we take note of the placement of the grey value relative
+    // to 'optimum': is it smaller or larger?
 
-    // incoming _m is either the single grey channel or the maximum
-    // of R, G and B. The three operations above have yielded a
-    // quality value which is 1.0 for 'optimum' _m and near zero
-    // for _m at either end of the range. We want to produce a small
-    // quality value only if we're at the upper end (_m overexposed)
-    // to make the result come out at full intensity, hence the final
-    // multiplication with _m. If _m is at the lower end (black pixel)
-    // the final multiplication will result in zero quality.
+    auto grey_is_large = ( grey > optimum ) ;
 
-    grey ( grey < 0.00001f ) = 0.00001f * _m ;
-    return grey ;
+    // the 'distance' is the difference in intensity between the
+    // incoming 'grey' value and the optimum for the facet we're
+    // looking at. If the optimum is small (long exposure, 'bright'
+    // image, hence dimmed, so that 0.5 * brighten, the optimum,
+    // is small) the distance values are als small. distance ranges
+    // in [0...optimum].
+
+    f_v distance = abs ( optimum - grey ) ;
+
+    // we treat the darkest and brightest facet specially: the
+    // brightest facet (kind LOW, because the optimum is low)
+    // receives zero distance for small grey values (it rules
+    // the shadows) and the drkest facet (kind HIGH, because the
+    // optimum is high) receives zero distance for large grey
+    // values (it rules the highlights).
+
+    switch ( kind )
+    {
+      case LOW:
+        distance ( ! grey_is_large ) = 0.0f ;
+        break ;
+      case HIGH:
+        distance ( grey_is_large ) = 0.0f ;
+        break ;
+      case MIDDLE:
+      default:
+        break ;
+    }
+
+    // now we subtract this value from 'optimum' and receive
+    // a maximum at the optimum position (where distance is zero);
+    // the magnitude of the maximum is equal to optimum, so the
+    // range is the same, only the values are mirrored vertically.
+
+    auto proximity = optimum - distance ;
+
+    // if we were to use 'proximity' directly as a quality criterion,
+    // we'd get little response from bright facets, because their
+    // optimum is small. We want the opposite: where we have data
+    // from bright facets (long exposures) which are not overexposed
+    // (we've discarded those) they should be considered high-quality.
+    // So we divide by the optimum, once to get the value into [0...1],
+    // then *again* to get it into the range of [0...1/optimum]
+
+    auto quality = proximity / ( optimum * optimum ) ;
+
+    return quality ;
   }
 
-  f_v get_quality ( f_v _grey , f_v alpha , float optimum ) const
+  f_v get_quality ( f_v grey , f_v alpha ,
+                    float optimum , kind_t kind ) const
   {
-    f_v grey = _grey ;
-    auto ao = alpha * optimum ;
-    grey -= ao ;
-    grey = ao - abs ( grey ) ;
-    grey /= ( ao * ao ) ;
-    grey ( ! ( grey > 0.00001f ) ) = 0.00001f * _grey ;
-    return grey ;
+    if ( all_of ( alpha == 0.0f ) )
+      return 0.0f ;
+
+    auto grey_quality = get_quality ( grey , optimum , kind ) ;
+    return alpha * grey_quality ;
   }
 
-  f_v get_quality ( const px_v & px , float optimum ) const
+  f_v grey_project ( const f_v & r ,
+                     const f_v & g ,
+                     const f_v & b ) const
+  {
+    // return ( r + g + b ) / 3.0f ; // average of r,g,b
+    return max ( r , max ( g , b ) ) ; // maximum of r,g,b
+  }
+
+  f_v get_quality ( const px_v & px , float optimum , kind_t kind ) const
   {
 
     if constexpr ( px_v::size() == 1 )
     {
-      f_v q = get_quality ( px[0] , optimum ) ;
+      f_v q = get_quality ( px[0] , optimum , kind ) ;
       return q ;
     }
     else if constexpr ( px_v::size() == 3 )
     {
       // grey projection picks the maximum of R, G and B:
-      f_v grey = max ( px[0] , px[1] ) ;
-      grey = max ( grey , px[2] ) ;
-      f_v q = get_quality ( grey , optimum ) ;
+      f_v grey = grey_project ( px[0] , px[1] , px[2] ) ;
+      f_v q = get_quality ( grey , optimum , kind ) ;
       return q ;
     }
     else if constexpr ( px_v::size() == 2 )
     {
       // alpha is in the last channel
       f_v alpha = px[1] ;
-      f_v q = get_quality ( px[0] , alpha , optimum ) ;
+      f_v q = get_quality ( px[0] , alpha , optimum , kind ) ;
       return q ;
     }
     else if constexpr ( px_v::size() == 4 )
@@ -1199,9 +1253,8 @@ struct _hdr_merge_syn
       // alpha is in the last channel
       f_v alpha = px[3] ;
       // grey projection picks the maximum of R, G and B:
-      f_v grey = max ( px[0] , px[1] ) ;
-      grey = max ( grey , px[2] ) ;
-      f_v q = get_quality ( grey , alpha , optimum ) ;
+      f_v grey = grey_project ( px[0] , px[1] , px[2] ) ;
+      f_v q = get_quality ( grey , alpha , optimum , kind ) ;
       return q ;
     }
   }
@@ -1227,11 +1280,23 @@ struct _hdr_merge_syn
       px_v px ;
       env_v [ i ] . eval ( pv [ i ] , px ) ;
 
-      // calculate the 'quality' value for the pixel data
+      // is the current facet the darkest or brightest exposure?
 
-      f_v quality = get_quality ( px , optimum[i] ) ;
+      kind_t kind = MIDDLE ;
 
-      // add it to qsum, to normalize in the final step
+      if ( i == lowest_brighten_fct )
+        kind = LOW ;
+      else if ( i == highest_brighten_fct )
+        kind = HIGH ;
+
+      // calculate the 'quality' value for the pixel data, with
+      // special consideration for the brightest/darkest facet:
+      // the brightest facet 'rules the shades', the darkest facet
+      // 'rules the highlights'.
+
+      f_v quality = get_quality ( px , optimum[i] , kind ) ;
+
+      // add it to qsum, to be able to normalize in the final step
 
       qsum += quality ;
 

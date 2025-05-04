@@ -264,6 +264,8 @@ envutil --help gives a summary of command line options:
       --twine_threshold THR    discard twining filter taps below this
                                 threshold
     parameters for mounted (facet) image input:
+      --oiio OPTION            pass option to configure OIIO plugin
+                               (may be used repeatedly)
       --pto PTOFILE            panotools script in hugin PTO dialect
                                 (optional)
       --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
@@ -449,33 +451,33 @@ OIIO plugins can take a whole range of extra configuration
 arguments which instruct the plugins to behave in a certain way.
 envutil doesn't deal with all these arguments separately but uses
 OIIO infrastructure code to make them 'palatable' to OIIO.
-Most arguments are simple single values, and they can be passed
-as key-value assignments, like this: --oiio key=value
-Some arguments require additional type information - especially
-those which take several values. For these, lux uses a special
-syntax: an OIIO typestring is suffixed to the key, separated
-by an '@' sign, like "--oiio key@typestr=val val ..."
-note the quotes: if there are several values, they have to be
-separated by space or tab, so the entire argument is quoted to
-'hold it together'. Here's an example, configuring the libraw
-plugin to load an image without EXIF rotation applied and in
-sRGB:
+envutil can accept such parameters and pass them on to OIIO.
+To pass OIIO configuration parameters, pass one or several '--oiio'
+parameters. The OPTION part is usually of the form
 
-    envutil --facet IMG_1234.CR2 rectilinear 65 0 0 0 \
-            --oiio raw:user_flip=0 --oiio raw:ColorSpace=sRGB \
-            --output thumbnail.jpg --width 320
+    <plugin>:<attribute>=<value>
 
-This can become rather verbose, so if you have parameterization
-which re-occurs several times, you can put the arguments into a
-file - just put one in each line, no backslashes needed, and cat
-them into the argument list, like this:
+so you'd pass this to envutil:
 
-    envutil ... $(cat arglist.txt) ...
+    --oiio raw:ColorSpace=sRGB
+
+This would instruct the libraw plugin to produce pixels in sRGB
+when loading raw images. Internally, the datum is treated as a mere
+key/value pair; typos do not necessarily trigger an error but may
+result in the desired option not being set, so check carefully.
+Some options require additional information about the data type
+of the value - especially when it's a datum consisting of several
+values (e.g. an ROI specification). OIIO can accept type information,
+and envutil has special syntax to pass it to a plugin: an OIIO
+typestring is suffixed to the key, separated by an '@' sign,
+like "--oiio key@typestr=val val ..." note the quotes: if there are
+several values, they have to be separated by space or tab, so the
+entire argument is quoted to 'hold it together'.
 
 Please consult the [OIIO documentation on class TypeDesc](https://openimageio.readthedocs.io/en/stable/imageioapi.html#data-type-descriptions-typedesc)
 about possible values for data types - most of the time, you can get by without passing a type, and the common types are simple lower-case strings
-like 'int'. Note that there is no check on the values you pass. If you
-don't get the expected behaviour, check for typos - OIIO will accept
+like 'int'. Note again that there is no check on the values you pass. If
+you don't get the expected behaviour, check for typos - OIIO will accept
 any arguments: if you pass a key which is not recognized, this will
 simply have no effect.
 

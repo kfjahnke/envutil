@@ -45,6 +45,8 @@
 
 #include <filesystem>
 #include <OpenImageIO/imageio.h>
+#include <OpenImageIO/imagebuf.h>
+#include <OpenImageIO/imagebufalgo.h>
 
 #include "zimt/prefilter.h"
 #include "zimt/bspline.h"
@@ -519,6 +521,17 @@ void spherical_prefilter
   bspl.prefiltered = true ;
 }
 
+template < class VT , class NT = float >
+VT sRGB2RGB ( VT value )
+{
+  VT result = pow ( ( value + NT(0.055) ) / NT(1.055) , NT(2.4) ) ;
+
+  if ( value <= NT(0.04045) )
+    result = value / NT(12.92) ;
+
+  return result ;
+}
+
 // source_t provides pixel values from a mounted 2D manifold. The
 // incoming 2D coordinates are model space coordinates, output is
 // pixels with nchannels channels.
@@ -758,22 +771,80 @@ struct source_t
           }
         }
 
-        auto inp = ImageInput::open ( fct.filename , &config ) ;
+        // we set up an OIIO ImageBuf to pull in the image data
 
-        const ImageSpec &spec = inp->spec() ;
+        OIIO::ImageBuf in_buf
+          ( fct.filename , 0 , 0 , nullptr , &config ) ;
 
+        const ImageSpec &spec = in_buf.spec() ;
+
+        auto csp = spec.get_string_attribute ( "oiio:ColorSpace" ) ;
+        if ( args.verbose )
+          std::cout << "detected input colour space: "
+                    << csp << std::endl ;
+
+        if ( csp == "sRGB" )
+        {
+          if ( args.verbose )
+            std::cout << "converting from sRGB to internal ACEScg"
+              << std::endl ;
+
+          // I think this may be missing the inverse display transform:
+        
+          OIIO::ImageBufAlgo::colorconvert
+            ( in_buf , in_buf ,
+              "sRGB - Display" ,
+              "ACEScg" ) ;
+        }
+        
         p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
                                     { bc0 , zimt::REFLECT } ) ) ;
 
-        bool success = inp->read_image (
-          0 , 0 , 0 , C ,
-          TypeDesc::FLOAT ,
-          p_bspl->core.data() ,
-          sizeof ( in_px_t ) ,
-          p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
+        // obtain the data via the ImageBuf, which will apply the
+        // colour space transformation if it was specified above
+        // by calling 'colorconvert' on the buffer
+
+        bool success = in_buf.get_pixels ( OIIO::ROI() ,
+                                           OIIO::TypeFloat ,
+                    p_bspl->core.data() ,
+                    sizeof ( in_px_t ) ,
+                    p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
+
         assert ( success ) ;
 
-        inp->close() ;
+//         auto & core ( p_bspl->core ) ;
+// 
+//         zimt::xel_t < float , 3 > lo , hi ;
+//         
+//         lo = 1000000.0f ;
+//         hi = -1.0f ;
+// 
+//         std::cout << "core.shape: " << core.shape << std::endl ;
+// 
+//         zimt::array_t < 2 , int > histogram ( { 3 , 256 } ) ;
+//         histogram.set_data ( 0 ) ;
+//         
+//         for ( std::size_t y = 0 ; y < core.shape[1] ; y++ )
+//         {
+//           for ( std::size_t x = 0 ; x < core.shape[0] ; x++ )
+//           {
+//             for ( std::size_t ch = 0 ; ch < 3 ; ch++ )
+//             {
+//               int slot = int ( core [ { x , y } ] [ ch ] * 255.0f ) ;
+//               assert ( slot >= 0 && slot < 256 ) ;
+//               histogram [ { ch , std::size_t(slot) } ] ++ ;
+//               hi[ch] = std::max ( hi[ch] , core [ { x , y } ] [ch] ) ;
+//               lo[ch] = std::min ( lo[ch] , core [ { x , y } ] [ch] ) ;
+//             }
+//           }
+//         }
+//         
+//         std::cout << "low: " << lo << " high: " << hi << std::endl ;
+//         for ( std::size_t slot = 0 ; slot < 256 ; slot++ )
+//           std::cout << slot << "\t"
+//                     << histogram [ { 0UL , slot } ] << "\t"
+//                     << histogram [ { 1UL , slot } ] << "\t"
+//                     << histogram [ { 2UL , slot } ] << std::endl ;
 
         int native_nchannels = spec.nchannels ;
 
