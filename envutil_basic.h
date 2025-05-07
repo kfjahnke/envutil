@@ -183,6 +183,17 @@ extent_type get_extent ( projection_t projection ,
                          int height ,
                          double hfov ) ;
 
+struct cp_t
+{
+  int t ;
+  int n ;
+  int N ;
+  double x ;
+  double y ;
+  double X ;
+  double Y ;
+} ;
+
 #include <regex>
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/imagebuf.h>
@@ -409,6 +420,7 @@ void fill_polygon ( const std::vector<float> & px ,
 struct facet_base
 : public extent_type
 {
+  std::string colour_space ;
   std::string projection_str ;
   projection_t projection ;
   double hfov ;
@@ -591,6 +603,8 @@ struct arguments
 : public facet_base
 {
   bool verbose ;
+  std::string working_colour_space ;
+  std::string input_colour_space ;
   std::string output ;
   std::string pano ;
   std::string split ;
@@ -607,6 +621,7 @@ struct arguments
   bool twine_precise ;
   double twine_width , twine_density , twine_sigma , twine_threshold ;
   std::vector < zimt::xel_t < float , 3 > > twine_spread ;
+  std::vector < cp_t > cp_v ;
 
   // gleaned from other parameters or input images
 
@@ -745,23 +760,34 @@ void save_array ( const std::string & filename ,
 
   // special treatment for jpeg output: convert to sRGB
 
+  std::string target_csp = args.colour_space ;
+
   if ( extension == ".JPG" || extension == ".jpg" )
   {
-    // internally, we're working in the ACEScg colour space, but jpeg
-    // files must be in sRGB. So we use OIIO's 'colorconvert', which
-    // in turn uses OCIO. Using this code is still tentative, it may
-    // be more appropriate to use a different variant of OCIO code
-    // - I feel the images come out quite flat, so maybe an additional
-    // display transform is needed.
-
     if ( args.verbose )
-      std::cout << "converting from internal ACEScg to sRGB"
+      std::cout << "enforcing sRGB for JPEG output" << std::endl ;
+
+    // internally, we're working in the scene_linear colour space, but
+    // jpeg files must be in sRGB. The default output colour space is
+    // also scene_linear, but for jpeg output we prescribe sRGB. This
+    // might be extended for other output formats - for now the
+    // automatic choice of sRGB output is limited to JPG.
+
+    target_csp = "sRGB" ;
+  }
+
+  if ( args.working_colour_space != target_csp )
+  {
+    if ( args.verbose )
+      std::cout << "converting from internal csp "
+                << args.working_colour_space
+                << " to " << target_csp
                 << std::endl ;
 
     OIIO::ImageBufAlgo::colorconvert
       ( out_buf , out_buf ,
-        "ACEScg" ,
-        "sRGB - Display" ) ;
+        args.working_colour_space ,
+        target_csp ) ;
   }
 
   auto success = out_buf.write ( filename ) ;

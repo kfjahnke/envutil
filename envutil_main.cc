@@ -273,9 +273,17 @@ void arguments::init ( int argc , const char ** argv )
     .help("mode of composing several images (panorama or hdr_merge)")
     .metavar("MODE");
 
+  ap.arg("--working_colour_space CSP")
+    .help("colour space used for internal processing (default scene_linear)")
+    .metavar("CSP");
+
   // parameters for single-image output
 
   ap.separator("  additional parameters for single-image output:");
+
+  ap.arg("--output_colour_space CSP")
+    .help("colour space used for output (default scene_linear)")
+    .metavar("CSP");
 
   ap.arg("--single FACET")
     .help("render an image like facet FACET")
@@ -373,6 +381,10 @@ void arguments::init ( int argc , const char ** argv )
   ap.arg( "--oiio %L:OPTION" , &oiio_option_v )
     .help("pass option to configure OIIO plugin (may be used repeatedly)") ;
 
+  ap.arg("--input_colour_space CSP")
+    .help("default colour space for input images (default: none)")
+    .metavar("CSP");
+
   ap.arg("--pto PTOFILE")
     .help("panotools script in hugin PTO dialect (optional)")
     .metavar("PTOFILE");
@@ -406,15 +418,32 @@ void arguments::init ( int argc , const char ** argv )
   // extract the arguments from the argparser, parse the projection
 
   output = ap["output"].as_string ( "" ) ;
-  // seqfile = ap["seqfile"].as_string ( "" ) ;
+
+  // colour spaces. The first one defines a blanket colour space for
+  // all incoming facet images, which may be overridden with a 'Csp'
+  // clause in an i-line. The second one is 'scene_linear' and used
+  // for internal processing - this must use a linear representation
+  // to be mathematically correct. The third is also scene_linear,
+  // only JPG output is set to sRGB unconditionally. Note that both
+  // 'sRGB' and 'scene_linear' are OIIO symbols, and if there is an
+  // active OCIO config file (gleaned via the $OCIO environment
+  // variable) these symbols are at times not processed as expected
+  // or not understood. In such Situations you may need to use
+  // colour space names from the OCIO config or delete the OCIO
+  // environment variable. input_colour_space is, per default,
+  // set to an empty string, expecting that OIIO will provide a
+  // value fitting the data in the image file.
+
+  input_colour_space
+    = ap["input_colour_space"].as_string ( "" ) ;
+  working_colour_space
+    = ap["working_colour_space"].as_string ( "scene_linear" ) ;
+  colour_space
+    = ap["output_colour_space"].as_string ( "scene_linear" ) ;
   pto_file = ap["pto"].as_string ( "" ) ;
   twf_file = ap["twf_file"].as_string ( "" ) ;
   split = ap["split"].as_string ( "" ) ;
   synopsis = ap["synopsis"].as_string ( "panorama" ) ;
-  // fct_file = ap["fct_file"].as_string ( "" ) ;
-  // codec = ap["codec"].as_string ( "libx265" ) ; 
-  // mbps = ( 1000000.0 * ap["mbps"].get<float> ( 8.0 ) ) ;
-  // fps = ap["fps"].get<int>(60);
   prefilter_degree = ap["prefilter"].get<int>(-1);
   spline_degree = ap["degree"].get<int>(1);
   twine = ap["twine"].get<int>(-1);
@@ -528,6 +557,29 @@ void arguments::init ( int argc , const char ** argv )
       return std::stoi ( str ) ;
     } ;
 
+    auto & c_line_list ( parser.line_group [ "c" ] ) ;
+
+    for ( auto & c_line : c_line_list )
+    {
+      auto & dir ( c_line.field_map ) ;
+      cp_t cp ;
+
+      cp.t = iglean ( dir [ "t" ] ) ;
+      cp.n = iglean ( dir [ "n" ] ) ;
+      cp.N = iglean ( dir [ "N" ] ) ;
+
+      cp.x = glean ( dir [ "x" ] ) ;
+      cp.y = glean ( dir [ "y" ] ) ;
+      cp.X = glean ( dir [ "X" ] ) ;
+      cp.Y = glean ( dir [ "Y" ] ) ;
+
+      cp_v.push_back ( cp ) ;
+    }
+
+    if ( verbose && cp_v.size() )
+      std::cout << "PTO file contains " << cp_v.size()
+                << " control points" << std::endl ;
+
     if ( ! ignore_p_line )
     {
       auto & p_line_list ( parser.line_group [ "p" ] ) ;
@@ -537,7 +589,9 @@ void arguments::init ( int argc , const char ** argv )
       for ( auto & p_line : p_line_list )
       {
         auto & dir ( p_line.field_map ) ;
+
         int prj = std::stoi ( dir [ "f" ] ) ;
+
         if ( prj == 0 )
           p_line_projection = RECTILINEAR ;
         else if ( prj == 1 )
@@ -588,6 +642,34 @@ void arguments::init ( int argc , const char ** argv )
       f.has_lens_crop = false ;
       f.has_pto_mask = false ;
 
+      // envutil provides an extension to PT format: x 'Csp' clause.
+      // It defines the colour space in which the facet is stored.
+      // There seems to be soem uncertainty around which colour space
+      // names OIIO/OCIO will recognize. As of this writing, my setup
+      // requires to use names given in an OCIO config file while
+      // 'generic' oiio names are not supported. Given here, in an
+      // i-line, it decribes what's inside the image file. In a p-line,
+      // it prescribes which colour space the date are to be converted
+      // to when writing the data to disc. Internally, envutil uses
+      // the scene_linear colour space. The Csp clause takes prefence
+      // over the blanket input_colour_space argument, which is used
+      // if no Csp clause is present.
+
+      std::string csp = dir [ "Csp" ] ;
+      if ( csp != std::string() )
+      {
+        if ( csp [ 0 ] == '"' )
+          csp = csp.substr ( 1 , csp.size() - 2 ) ;
+        f.colour_space = csp ;
+        if ( verbose )
+          std::cout << "facet's native colour space (via Csp): "
+                    << f.colour_space << std::endl ;
+      }
+      else
+      {
+        csp = args.input_colour_space ;
+      }
+
       // envutil provides an extension to PT format: a 'Pano'
       // clause. This takes the data from a PTO file's p-line
       // over to the current facet. This is used for 'unstitching',
@@ -599,6 +681,7 @@ void arguments::init ( int argc , const char ** argv )
       {
         assert ( p_line_present == true ) ;
         f.filename = pano ;
+        f.colour_space = colour_space ;
         f.asset_key = f.filename ;
         if ( f.filename [ 0 ] == '"' )
           f.filename = f.filename.substr ( 1 , f.filename.size() - 2 ) ;

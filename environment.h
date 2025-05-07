@@ -778,23 +778,33 @@ struct source_t
 
         const ImageSpec &spec = in_buf.spec() ;
 
-        auto csp = spec.get_string_attribute ( "oiio:ColorSpace" ) ;
+        // the facet may have inherent colour space information via
+        // a 'Csp' parameter in a PTO i-line. This takes precedence:
+
+        auto csp = fct.colour_space ;
+
+        // if there is no such spec, we rely on the OIIO attribute
+
+        if ( csp == std::string() )
+          csp = spec.get_string_attribute ( "oiio:ColorSpace" ) ;
+
         if ( args.verbose )
-          std::cout << "detected input colour space: "
+          std::cout << "facet's colour space: "
                     << csp << std::endl ;
 
-        if ( csp == "sRGB" )
+        // if the two coour spaces differ, we need to convert:
+
+        if ( csp != args.working_colour_space )
         {
           if ( args.verbose )
-            std::cout << "converting from sRGB to internal ACEScg"
-              << std::endl ;
+            std::cout << "converting from facet's csp " << csp
+                      << " to internal csp "
+                      << args.working_colour_space << std::endl ;
 
-          // I think this may be missing the inverse display transform:
-        
           OIIO::ImageBufAlgo::colorconvert
             ( in_buf , in_buf ,
-              "sRGB - Display" ,
-              "ACEScg" ) ;
+              csp ,
+              args.working_colour_space ) ;
         }
         
         p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
@@ -1299,7 +1309,7 @@ struct mount_t
       return mask ;
     }
 
-    inner.eval ( crd , px) ;
+    inner.eval ( crd , px ) ;
 
     // mask out 'misses' to all-zero
 
@@ -1644,6 +1654,10 @@ struct _environment
 
   zimt::grok_type < ray_t , px_t , L > env ;
 
+  // this one directly yields pixel values for source image coordinates
+
+  zimt::grok_type < crd2_t , px_t , L > ev2 ;
+
   // we'll hold on to image data via a std::shared_ptr to a zimt::bspline.
 
   typedef zimt::bspline < in_px_t , 2 > spl_t ;
@@ -1663,17 +1677,6 @@ struct _environment
 
   _environment ( const facet_spec & fct )
   {
-    // // sneaky: this might as well be a member variable, but having
-    // // it static to a member function saves the need for external
-    // // instantiation
-    // 
-    // #define PSPL(NCH) std::shared_ptr \
-    //   < bspline < xel_t < float , NCH > , 2 > >
-    // 
-    // static std::map < std::string , PSPL(C) > spl_map ;
-    // 
-    // #undef PSPL
-
     // if the facet is in a cubemap format, we special-case here
     // and directly form a cubemap_t object with the facet_spec
     // as argument. get_mask in this case unconditionally returns
@@ -1775,17 +1778,21 @@ struct _environment
 
         if ( fct.projection == CUBEMAP )
         {
-          env = cubemap_view_t < C , CUBEMAP >
+          cubemap_view_t < C , CUBEMAP > cbmv
                  ( cbm_metrics.refc_md ,
                    cbm_metrics.model_to_px ,
                    p_bspl , fct.masked ) ;
+          env = cbmv ;
+          ev2 = cbmv.ev ;
         }
         else
         {
-          env = cubemap_view_t < C , BIATAN6 >
+          cubemap_view_t < C , BIATAN6 > cbmv
                  ( cbm_metrics.refc_md ,
                    cbm_metrics.model_to_px ,
                    p_bspl , fct.masked ) ;
+          env = cbmv ;
+          ev2 = cbmv.ev ;
         }
       }
       // we're done with the case that the facet is a cubemap, so we
@@ -1825,6 +1832,7 @@ struct _environment
       {
         mount_t < C , RECTILINEAR , L > mnt ( fct , pf ) ;
         env = mnt ;
+        ev2 = mnt.inner.ev ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
         break ;
@@ -1833,6 +1841,7 @@ struct _environment
       {
         mount_t < C , SPHERICAL , L > mnt ( fct , pf ) ;
         env = mnt ;
+        ev2 = mnt.inner.ev ;
         // TODO:
         // if ( full_environment )
         //   get_mask = []( const ray_v & ray )
@@ -1846,6 +1855,7 @@ struct _environment
       {
         mount_t < C , CYLINDRICAL , L > mnt ( fct , pf ) ;
         env = mnt ;
+        ev2 = mnt.inner.ev ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
         break ;
@@ -1854,6 +1864,7 @@ struct _environment
       {
         mount_t < C , STEREOGRAPHIC , L > mnt ( fct , pf ) ;
         env = mnt ;
+        ev2 = mnt.inner.ev ;
         get_mask = [=] ( const in_v & crd3 )
           { return mnt.get_mask ( crd3 ) ; } ;
         break ;
@@ -1862,6 +1873,7 @@ struct _environment
       {
         mount_t < C , FISHEYE , L > mnt ( fct , pf ) ;
         env = mnt ;
+        ev2 = mnt.inner.ev ;
         if ( fct.hfov >= M_PI * 2.0 )
           get_mask = []( const ray_v & ray )
             { return mask_t ( true ) ; } ;
@@ -1886,7 +1898,6 @@ struct _environment
   {
     env.eval ( in , out ) ;
   }
-
 } ;
 
 // class environment is a wrapper around class _environment,
@@ -1929,6 +1940,10 @@ struct environment
               zimt::xel_t < U , C > ,
               L > env ;
 
+  grok_type < zimt::xel_t < T , 2 > ,
+              zimt::xel_t < U , C > ,
+              L > ev2 ;
+
   void eval ( const in_v & in , out_v & out )
   {
     env.eval ( in , out ) ;
@@ -1962,6 +1977,7 @@ struct environment
 
       _environment < T , U , C , L > e ( fct ) ;
       env = e.env ;
+      ev2 = e.ev2 ;
       get_mask = e.get_mask ;
       return ;
     }
@@ -1977,6 +1993,7 @@ struct environment
           repix_t < U , 1 , C , L > repix ;
           _environment < T , U , 1 , L > e ( fct ) ;
           env = e.env + repix ;
+          ev2 = e.ev2 + repix ;
           get_mask = e.get_mask ;
           break ;
         }
@@ -1985,6 +2002,7 @@ struct environment
           repix_t < U , 2 , C , L > repix ;
           _environment < T , U , 2 , L > e ( fct ) ;
           env = e.env + repix ;
+          ev2 = e.ev2 + repix ;
           get_mask = e.get_mask ;
           break ;
         }
@@ -1993,6 +2011,7 @@ struct environment
           repix_t < U , 3 , C , L > repix ;
           _environment < T , U , 3 , L > e ( fct ) ;
           env = e.env + repix ;
+          ev2 = e.ev2 + repix ;
           get_mask = e.get_mask ;
           break ;
         }
@@ -2001,6 +2020,7 @@ struct environment
           repix_t < U , 4 , C , L > repix ;
           _environment < T , U , 4 , L > e ( fct ) ;
           env = e.env + repix ;
+          ev2 = e.ev2 + repix ;
           get_mask = e.get_mask ;
           break ;
         }
@@ -2024,6 +2044,7 @@ struct environment
           mono_t < U , 1 , C , L > mono ;
           _environment < T , U , 1 , L > e ( fct ) ;
           env = e.env + mono ;
+          ev2 = e.ev2 + mono ;
           get_mask = e.get_mask ;
           break ;
         }
@@ -2032,6 +2053,7 @@ struct environment
           mono_t < U , 2 , C , L > mono ;
           _environment < T , U , 2 , L > e ( fct ) ;
           env = e.env + mono ;
+          ev2 = e.ev2 + mono ;
           get_mask = e.get_mask ;
           break ;
         }
@@ -2040,6 +2062,7 @@ struct environment
           mono_t < U , 3 , C , L > mono ;
           _environment < T , U , 3 , L > e ( fct ) ;
           env = e.env + mono ;
+          ev2 = e.ev2 + mono ;
           get_mask = e.get_mask ;
           break ;
         }
@@ -2048,6 +2071,7 @@ struct environment
           mono_t < U , 4 , C , L > mono ;
           _environment < T , U , 4 , L > e ( fct ) ;
           env = e.env + mono ;
+          ev2 = e.ev2 + mono ;
           get_mask = e.get_mask ;
           break ;
         }

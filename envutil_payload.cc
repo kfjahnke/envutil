@@ -1713,6 +1713,71 @@ void fuse ( int ninputs )
     basis_v.push_back ( r_complete ) ;
   }
 
+  // we take a diversion here and look at the control points if
+  // there are any. The control points point us to content which
+  // reappears recognizably in two images, so if we look at each
+  // of the two locations in each of the pairs, we can try and
+  // gather statistics like brightness ratio.
+  // This section of code looks at a 4X4 window around each CP and
+  // extracts the sum of intensities. Values from each facet are
+  // pooled and the results echoed. The OOM is about right, but
+  // the expected .25:1:4 ratio (from a +/-2 Eev bracket) is not
+  // met precisely, even though we're working in scene_linear.
+
+  if ( args.cp_v.size() )
+  {
+    float s[3] ;
+    s[0] = 0.0f ;
+    s[1] = 0.0f ;
+    s[2] = 0.0f ;
+    std::size_t i = 0 ;
+    for ( const auto & cp : args.cp_v )
+    {
+      typedef xel_t < float , 2 > crd2_t ;
+      typedef simdized_type < crd2_t , LANES > crd2_v ;
+      px_v pxl , pxr ;
+      crd2_v lhs { cp.x , cp.y } ;
+      crd2_v rhs { cp.X , cp.Y } ;
+      // std::cout << "cp " << i << " " << cp.x << ", " << cp.y
+      //           << "    " << cp.X << " " << cp.Y << std::endl ;
+      ++i ;
+      std::size_t k = 0 ;
+      for ( std::size_t h = 0 ; h < 4 ; h++ )
+      {
+        for ( std::size_t v = 0 ; v < 4 ; v++ )
+        {
+          float dx = float ( h ) - 1.5 ;
+          float dy = float ( v ) - 1.5 ;
+          lhs[0][k] += dx ;
+          rhs[0][k] += dx ;
+          lhs[1][k] += dy ;
+          rhs[1][k] += dy ;
+          ++k ;
+        }
+      }
+      env_v [ cp.n ] . ev2.eval ( lhs , pxl ) ;
+      env_v [ cp.N ] . ev2.eval ( rhs , pxr ) ;
+      px_t pl , pr ;
+      for ( std::size_t ch = 0 ; ch < NCH ; ch++ )
+      {
+        pl[ch] = pxl[ch] . sum() ;
+        pr[ch] = pxr[ch] . sum() ;
+      }
+      // std::cout << "fct " << cp.n << " " << pl
+      //           << " fct " << cp.N << " " << pr
+      //           << std::endl ;
+      s[cp.n] += pl.sum() ;
+      s[cp.N] += pr.sum() ;
+    }
+    std::cout << "CP intensity check: "
+              << s[0] << " " << s[1] << " " << s[2]
+              << std::endl ;
+    // tentative use of these values for 'brighten'
+    // args.facet_spec_v[0].brighten = 1.0f ;
+    // args.facet_spec_v[1].brighten = s[0] / s[1] ;
+    // args.facet_spec_v[2].brighten = s[0] / s[2] ;
+  }
+
   // now we have a set of cases to handle, depending on the type
   // of job we're running. We have to consider three points:
 
