@@ -14,18 +14,27 @@ scenarios, envutil uses a subset of PanoTools 'PTO' format. envutil's
 implementation of PanoTools features is growing, currently the focus is
 on getting the geometry right, and all PanoTools geometric transformations
 along with some source/target projections are implemented. Colour and
-brightness manipulations are currently rudimentary, it's recommended to
+brightness manipulations are currently being added, it's recommended to
 work with *scene-referred linear RGB image data*, preferably from image
 files using such formats by default, like openEXR. envutil uses the Acacdemy
-Software Foundation's library 'OpenImageIO' to access image data, which
-provides access to a large number of image formats, both for input and
-output. This widens the spectrum of material for processing with
-PanoTools methods, one notable option is to read directly from RAW
+Software Foundation's library 'OpenImageIO' (OIIO in short) to access image
+data, which provides access to a large number of image formats, both for
+input and output. This widens the spectrum of material for processing
+with PanoTools methods, one notable option is to read directly from RAW
 camera image formats like CR2, using OpenImageIO's libraw plugin.
+OIIO does in turn use OpenColorIO (OCIO) in short, which is another
+project under the umbrella of the Academy Software Foundation. This
+project provides sophisticated colour management, which envutil can
+leverage via OIIO's OCIO interface.
 envutil has limited stitching capabilities, roughly what hugin's helper
-program 'nona' would offer. The images are put together in a way which
-resembles a spherical voronoi diagram, there is no seam optimization or
-feathering. envutil can also hdr-merge exposure brackets.
+program 'nona' would offer, but not using PanoTools-specific EMoR
+processing, PT interpolators or specific formats like multilayer TIFF,
+and offering only a limited set of projections.
+The images are put together in a way which resembles a spherical voronoi
+diagram, there is no seam optimization or feathering. envutil can also
+hdr-merge exposure brackets, and since it can process RAW camera images,
+this is an interesting new route to HDR images directly from the RAW
+data without manifesting intermediate images.
 
 Panorama photographers may not be familiar with the term 'lat/lon
 environment' - to them, this is a 'full spherical panorama' or
@@ -63,24 +72,24 @@ for the six cube faces. All six image file names generated in this fashion
 must resolve to square images of equal size and field of view.
 
 The output projection can be one of "spherical", "cylindrical",
-"rectilinear", "stereographic", "fisheye" or "cubemap". The geometrical
-extent of the output is set up most conveniently by passing --hfov, the
-horizontal field of view of the output. The x0, x1, y0, and y1 parameters
-allow passing specific extent values (in model space units), which should
-rarely be necessary. To specify the orientation of the 'virtual camera',
-pass Euler angles yaw, pitch and roll - they default to zero: a view
-'straight ahead' to the point corresponding to the center of the
-environment image with no camera roll. The size of the output is
-given by --width and --height. You must pass an output filename
-with --output; --input specifies the environment image. Note that you
-can use 'envutil' to reproject environment images, e.g convert a cubemap
-to a lat/lon image and the reverse. To get a full 360 degree lat/lon
-image from a cubemap, you must pass --hfov 360 and --projection spherical,
-and for the reverse operation, pass --hfov 90 and --projection cubemap.
-Export of a cubemap as six separate images can be achieved by passing a
-format string - the same mechanism as for input is used.
+"rectilinear", "stereographic", "fisheye", "cubemap". or 'biatan6'.
+The geometrical extent of the output is set up most conveniently by
+passing --hfov, the horizontal field of view of the output.
+The x0, x1, y0, and y1 parameters allow passing specific extent values
+(in model space units), which should rarely be necessary. To specify the
+orientation of the 'virtual camera', pass Euler angles yaw, pitch and
+roll - they default to zero: a view 'straight ahead' to the point corresponding to the center of the environment image with no camera
+roll. The size of the output is given by --width and --height. You
+must pass an output filename with --output; --input specifies the
+environment image. Note that you can use 'envutil' to reproject
+environment images, e.g convert a cubemap to a lat/lon image and the
+reverse. To get a full 360 degree lat/lon image from a cubemap, you
+must pass --hfov 360 and --projection spherical, and for the reverse
+operation, pass --hfov 90 and --projection cubemap. Export of a cubemap
+as six separate images can be achieved by passing a format string -
+the same mechanism as for input is used.
 
-envutil can 'mount' images in the supported five projections as
+envutil can 'mount' images in the supported six projections as
 input (use --facet ...) - currently, such images have to be cropped
 symmetrically, meaning that the optical axis is taken to pass through
 the image center. For facet input, you must specify the horizontal
@@ -91,14 +100,19 @@ by the facet image, it's painted black or transparent black for
 images with alpha channel. If several facets might provide content
 for a given viewing ray, the facet whose central ray is next to the
 given viewing ray 'wins', producing a result which is a spherical
-voronoi diagram. Where facets have transparency, content which would
-be obscured by an opaque facet will shine through even if it does
-not qualify as 'winner'. More complex facet image specifications can
-be achieved by using a PTO script - there, you can specify additional
-features like lens distortion correction, translation, lens shift and
-shear - typically you'll have the PTO file generated by software like
-hugin, and the PTO dialect envutil understands is the same which hugin
-uses, so other PT-based software may not be compatible.
+voronoi diagram. If images with different resolution are combined,
+images with higher resolution are given precedence. Where facets have
+transparency, content which would be obscured by an opaque facet will
+shine through even if it does not qualify as 'winner'. More complex
+facet image specifications can be achieved by using a PTO script -
+there, you can specify additional features like lens distortion
+correction, translation, lens shift and shear - typically you'll have
+the PTO file generated by software like hugin, and the PTO dialect
+envutil understands is the same which hugin uses, so other PT-based
+software may not be compatible. Envutil uses a few extensions to PTO
+format, notably several 'clauses' occuring in i-lines and p-lines.
+This may also break compatibility - PTO files with these extensions
+may not parse in other PTO-processing applications.
 
 You can choose two different interpolation methods. The default
 is to use 'twining' - oversampling with subsequent weighted pixel
@@ -113,25 +127,21 @@ least the same as the scaling factor to avoid aliasing. When upscaling,
 larger twining values will slighly soften the output and suppress the
 star-shaped artifacts typical for bilinear interpolation. Twining is
 new and this is a first approach. The method is intrinsically very
-flexible (it's based on a generalization of convolution), and the full
-flexibility isn't accessible in 'envutil' with the parameterization
-as it stands now, but it's already quite useful with the few parameters
-I offer. You can switch twining off by passing --twine 0. With twining
+flexible (it's based on a generalization of convolution). You can
+use arbitrarily shaped twining filters via a simple text-based
+specification if you want to implement filters beyond the ordinary.
+You can switch twining off by passing --twine 0. With twining
 off, the 'ground-truth' interpolator is used directly. The b-spline
 used as 'ground truth' can be parameterized with the --degree and
 --prefilter arguments, see there. Note that low-degree b-splines are
 better known by their generic names: a zero-degree b-spline is known
-as 'nearest-neighbour interpolazion', and a degree-one b-spline is
+as 'nearest-neighbour interpolation', and a degree-one b-spline is
 known as 'bilinear interpolation'. A very commonly used type of b-spline
 is the degree-three spline, which is commonly known as a 'cubic b-spline'.
-
-There is code to read the twining filter kernel from a file (use
---twf_file); this filter can be scaled by additionally passing
---twine_width. This allows for arbitrary filters. Processing time rises
-with the number of twining coefficients, and especially with several
-facets as input, transparency, and large twining kernels, production
-of target images may take long even with multithreading and SIMD
-which envutil exploits.
+Note that prefiltering is essential for splines with degrees of two and
+more to produce a spline satisfying the interpolation criterion (the
+spline passes through the knot points). Omitting the prefiltering will
+produce slightly blurred output.
 
 The program uses [zimt](https://github.com/kfjahnke/zimt) as it's 'strip-mining' and SIMD back-end, and
 sets up the pixel pipelines using zimt's functional composition tools.
@@ -143,14 +153,12 @@ envutil's own interpolation methods, but I ended up with convoluted
 code which did not produce better results, so I am currently using
 OIIO only for image input and output.
 
-Currently, single-ISA build are set up to produce binary for specific
+Currently, single-ISA builds are set up to produce binary for specific
 CPUs - pass the ISA-specific flags to cmake with "ISA_SPECIFIC_ARGS".
-multi-ISA builds (the default) will produce binary for all ISAs which
+multi-ISA builds (the default) will produce binary for *all* ISAs which
 may occur in the given CPU family and dispatch to the variant which
 is best suited to the CPU detected at run-time. multi-ISA builds
-rquire highway. I am currently observing performance drops with
-multi-ISA builds (in the OOM of 30 percent), so if speed is your
-priority, go for single-ISA builds until this is resolved.
+rquire highway.
 
 I strongly suggest you install highway on your system - the build
 will detect and use it to good effect. This is a build-time dependency
@@ -158,6 +166,7 @@ only. Next-best (when using i86 CPUs up to AVX2) is Vc, the fall-back
 is to use std::simd, and even that can be turned off if you want to
 rely on autovectorization; zimt structures the processing so that it's
 autovectorization-friendly and performance is still quite good that way.
+Using optimization is essential.
 
 With version 0.1.2 I have changed the code to cooperate with highway's
 foreach_target mechanism, which is now the default (but requires highway).
@@ -172,14 +181,16 @@ illegal instruction errors, because the CPU detection makes sure no
 builds - e.g. if you're producing a binary only for a specific machine
 or if you're modifying the code (recompilation is much quicker with
 only a single ISA) - pass -DMULTI_SIMD_ISA=OFF to cmake. multi-ISA
-builds require highway, but they can also be used with zimt's 'goading'
-back-end. Pass -DUSE_GOADING=ON to make the build ignore explicit SIMD
+builds require highway, but they can also be used with zimt's otherg'
+back-ends. Pass -DUSE_GOADING=ON to make the build ignore explicit SIMD
 libraries (highway, Vc or std::simd) which would otherwise be used in
 this order of preference.
 
 The only mandatory dependency is [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) - OIIO in short. Using highway
 for SIMD is highly recommended, and some other needed libraries may not
 be readily available, even though they should come with OpenImageIO.
+Note, though, that OIIO is a very large dependency, pulling in many
+more libraries to implement it's huge body of functionality.
 
 It's recommended to build with clang++
 
@@ -201,112 +212,122 @@ the last option is only useful if you want to build debian packages with
 regularly.
 
 Building with highway is highly recommended. I tried the highway coming with
-the package manager on debian12, but that did not work - building highway from
-source is easy, though. Another hickough I experienced on debian12 was the
-default clang++, which is only v14. That did not work either - I installed
+the package manager on debian12, but that did not work - building highway
+from source is easy, though. Another hickough I experienced on debian12 was
+the default clang++, which is only v14. That did not work either - I installed
 clang-19, and that did the trick. Imath may also not be available, and
 OpenImageIO did not work without also installing it's CL tools. With all
 dependencies met, the build went without errors or warnings. I could also
-build a debian package (I did install the debhelper package), but the resulting
-package seems to be missing licensing information - it was flagged as
-'proprietary' when I installed it, even though I set the license to MIT.
+build a debian package (I did install the debhelper package), and at times
+I offer debian packages for download form the Downloads section of the lux
+project.
 
 With version 0.1.1, on top of building on debian12,  I have also managed to
 build envutil on on an intel mac running macOS 12.7.5 (using macPorts for the
-dependencies) and on windows 11 using mingw64.
+dependencies) and on windows 10/11 using mingw64.
     
 'make' should produce a binary named 'envutil' or 'envutil.exe''.
 
 envutil --help gives a summary of command line options:
 
-      --help                   Print help message
-      -v                       Verbose output
+    --help                      Print help message
+      -v                          Verbose output
     mandatory options:
-      --output OUTPUT          output file name (mandatory)
+      --output OUTPUT             output file name (mandatory)
     important options which have defaults:
-      --projection PRJ         projection used for the output image(s)
-                                (default: rectilinear)
-      --hfov ANGLE             horiziontal field of view of the output
-                                (default: 90)
-      --width EXTENT           width of the output (default: 1024)
-      --height EXTENT          height of the output (default: same as width)
-      --support_min EXTENT     minimal additional support around the cube
-                                face proper
-      --tile_size EXTENT       tile size for the internal representation image
+      --projection PRJ            projection used for the output image(s) (default: rectilinear)
+      --hfov ANGLE                horiziontal field of view of the output (default: 90)
+      --width EXTENT              width of the output (default: 1024)
+      --height EXTENT             height of the output (default: same as width)
+      --support_min EXTENT        minimal additional support around the cube face proper
+      --tile_size EXTENT          tile size for the internal representation image
+      --synopsis MODE             mode of composing several images (panorama or hdr_merge)
+      --working_colour_space CSP  colour space used for internal processing (default scene_linear)
     additional parameters for single-image output:
-      --single FACET           render an image like facet FACET
-      --split FORMAT_STRING    create a 'single' facet for all facets in a PTO
-      --yaw ANGLE              yaw of the virtual camera
-      --pitch ANGLE            pitch of the virtual camera
-      --roll ANGLE             roll of the virtual camera
-      --x0 EXTENT              low end of the horizontal range
-      --x1 EXTENT              high end of the horizontal range
-      --y0 EXTENT              low end of the vertical range
-      --y1 EXTENT              high end of the vertical range
+      --output_colour_space CSP   colour space used for output (default scene_linear)
+      --single FACET              render an image like facet FACET
+      --split FORMAT_STRING       create a 'single' image for all facets in a PTO
+      --yaw ANGLE                 yaw of the virtual camera
+      --pitch ANGLE               pitch of the virtual camera
+      --roll ANGLE                roll of the virtual camera
+      --x0 EXTENT                 low end of the horizontal range
+      --x1 EXTENT                 high end of the horizontal range
+      --y0 EXTENT                 low end of the vertical range
+      --y1 EXTENT                 high end of the vertical range
     interpolation options:
-      --prefilter DEG          prefilter degree (>= 0) for b-spline-based
-                                interpolations
-      --degree DEG             degree of the spline (>= 0) for b-spline-based
-                                interpolations
+      --prefilter DEG             prefilter degree (>= 0) for b-spline-based interpolations
+      --degree DEG                degree of the spline (>= 0) for b-spline-based interpolations
     parameters for twining (--twine 0 switches twining off)
-      --twine TWINE            use twine*twine oversampling - omit this arg
-                                for automatic twining
-      --twf_file TWF_FILE      read twining filter kernel from TWF_FILE
-                                (switches twining on)
-      --twine_normalize        normalize twining filter weights gleaned from
-                                a file
-      --twine_precise          project twining basis vectors to tangent plane
-      --twine_width WIDTH      widen the pick-up area of the twining filter
-      --twine_density DENSITY  increase tap count of an 'automatic' twining
-                                filter
-      --twine_sigma SIGMA      use a truncated gaussian for the twining
-                                filter (default: don't)
-      --twine_threshold THR    discard twining filter taps below this
-                                threshold
+      --twine TWINE               use twine*twine oversampling - omit this arg for automatic twining
+      --twf_file TWF_FILE         read twining filter kernel from TWF_FILE (switches twining on)
+      --twine_normalize           normalize twining filter weights gleaned from a file
+      --twine_precise             project twining basis vectors to tangent plane
+      --twine_width WIDTH         widen the pick-up area of the twining filter
+      --twine_density DENSITY     increase tap count of an 'automatic' twining filter
+      --twine_sigma SIGMA         use a truncated gaussian for the twining filter (default: don't)
+      --twine_threshold THR       discard twining filter taps below this threshold
     parameters for mounted (facet) image input:
-      --oiio OPTION            pass option to configure OIIO plugin
-                               (may be used repeatedly)
-      --pto PTOFILE            panotools script in hugin PTO dialect
-                                (optional)
+      --photo IMAGE               load photographic image, interpreting metadata
       --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
-                              load oriented non-environment source image
-      --pto_line LINE          add (trailing) line of PTO code
-      --solo FACET_INDEX       show only this facet (indexes starting from
-                                zero)
-      --mask_for FACET_INDEX   paint this facet white, all others black
-      --nchannels CHANNELS     produce output with CHANNELS channels (1-4)
+                                  load oriented non-environment source image
+      --oiio OPTION               pass option to configure OIIO plugin (may be used repeatedly)
+      --input_colour_space CSP    default colour space for input images (default: none)
+      --pto PTOFILE               panotools script in hugin PTO dialect (optional)
+      --pto_line LINE             add (trailing) line of PTO code
+      --solo FACET_INDEX          show only this facet (indexes starting from zero)
+      --mask_for FACET_INDEX      paint this facet white, all others black
+      --nchannels CHANNELS        produce output with CHANNELS channels (1-4)
 
-Input images can be lat/lon environment images (a.k.a. 'full spherical'
-or 'full equirect' or '360X180 degree panorama'), 'cubemaps' - a set of 
-six square images in rectilinear projection showing the view to the six cardinal
-directions (left, right, up, down, front, back), or single images in one of
-five geometrical projections. Cubemaps can be provided as a single image
-with the images concatenated vertically, or as six separate images 
-with 'left', 'right' etc. in their - otherwise identical - filenames, which are
-introduced via a format string. I've recently added the 'biatan6' projection
-for cubemaps, which uses an additional in-plane reprojection on the cube faces
-to make the sampling less distorted - rectilinear images with 90 degrees fov
-have noticeable 'stretching' towards the edges, which is avoided with biatan6
-projection, where there's only slight stretching. To process cubemaps stored
-in this format, pass biatan6 as projection.
+There is an option to switch envutil into 'streaming mode'. This is done
+by suffixing the command line with a single '-' (minus) sign. The result
+is that envutil will read more command line parameters from standard input
+until it encounters a line feed. The combined set of parameters is then used
+to produce output. Next, envutil tries to read another set of parameters
+from standard input, which replace the set read from standard input
+previously. Then, another rendering job is launched. This continues until
+there is an EOF on standard input. Using this facility is helpful in reducing
+processing and I/O, because source images which are read once will persist
+in memory for another cycle, allowing successive rendering jobs to 'pick up'
+images from the previous cycle.
 
-envutil only processes sRGB and linear RGB data, the output will be in the same
-colour space as the input. If you use the same format for input and output, this
-will automatically be the case, if not, you may get faulty output if the default
-coulour spaces of the formats don't match - your output will look too bright or
-too dark. The number of colour channels will also be the same in the output as
-in the input - it's recommended you use the same file format for both, e.g.
-produce JPEG output from JPEG input, but if the formats are compatible, you're
-free to move from one to the other. To get mathematically correct results, note
-that your input should be in linear RGB (e.g. from an openEXR file), because
-internally all calculations are done *as if* the image data were linear RGB.
-This is not mathematically correct for sRGB data. Future versions of envutil
-may add a stage of processing to deal with non-linear-RGB input. Linear RGBA
-is fine; the import with OIIO should provide associated alpha which can be
-processed correctly by envutil as four-channel data, producing correct output
-for images with alpha channel. Single-channel data are also fine; the idea is
-to use them for greyscale images with thransparency. Channels beyond four are
-ignored.
+envutil can now leverage some of OCIO's colour space management capabilities
+via OIIO's interface to OCIO. I've kept it simple and only invoke OIIO's
+'colorconvert' function (which is in [this](https://openimageio.readthedocs.io/en/v2.5.8.0/imagebufalgo.html#color-space-conversion) section) twice:
+Once on reading image files, and once on writing them. When reading, the
+default is to convert incoming image data to OIIO's notion of a scene-referred
+linear colour space - I think this is ACEScg. On writing, the scene-linear
+data are, by default, written as they are unless output is to JPEG, which
+will result in mandatory conversion to sRGB. There are three parameters which
+you can use to alter processing: --input_colour_space, --working_colour_space
+and --output_colour_space. Note the british english spelling (colour, not
+color). Without an OCIO config file, only simple values like 'scene_linear'
+and 'sRGB' are accepted, but with an OCIO config available, all colour space
+names provided by the config can be used as arguments and should be passed
+through to OCIO. As far as I know, newer versions of OIIO/OCIO also contain
+a set of hard-coded colour space names which may be recognized without
+specifying an OCIO config file via the OCIO environment variable. Your mileage
+with these three parameters may vary, but with the defaults you should be able
+to get decent results with most image files you encounter, because sRGB and
+scene linear are very common. When processing RAW images, you can 'tell' the
+libraw plugin to emit ACES data, which OIIO recognizes. This is probably better
+than having libraw produce sRGB, which is the default behaviour. You can
+pass configuration parameters to OIIO using the --oiio command line argument,
+which can be passed repeatedly, so to tell the libraw plugin to emit ACES,
+you'd pass '--oiio raw:ColorSpace=ACES'.
+OIIO will 'know' the colour space of input images if it can figure it out,
+so you only need to specify 'input_colour_space' if OIIO fails to detect the
+nature of the incoming material - this is not always evident.
+'working_colour_space' is probably best left alone, but since this option can
+be used to change the colour space used internally for image processing, it may
+be interesting to experiment with it. Do pick a linear colour space, though,
+otherwise processing is not mathematically correct even if it may look 'okay'.
+'output_colour_space' is the colour space which internal scene_linear data are
+converted to before writing them to the output image file(s). Best is to write
+to a format like openEXR which can (and usually does) store linear data, but
+other formats will work just as well, with the usual constraints (like, losing
+content outside the format's dynamic range). Since envutil's default is to
+emit scene-linear data, you may need the output_colour_space argument for
+target formats other than JPEG which is sRGB only.
 
 # envutil Command Line Options
 
@@ -314,11 +335,47 @@ The options are given with a headline made from the argument parser's help
 text. The capitalized word following the parameter is a placeholder for the
 actual value you pass.
 
+# colour space options
+
+Which values you can pass to these options depends on the version of
+OIIO/OCIO which envutil is built with, and the use (or lack thereof)
+of an OCIO config file. Without an active OCIO config file, the number
+of possible values is limited to what's 'hard-coded' into OCIO, which
+in turn depends on the OCIO version. This is a bit of a moving target.
+With an active OCIO config, any number of named colour spaces can be
+added by the site, so it's up to the local setup what can be used and
+what can't - OIIO simply passes the colour space names through to it's
+OCIO interface.
+
+## --input_colour_space CSP
+##     default colour space for input images (default: unset)
+
+If you pass a value here, it will tell OIIO to consider input as being
+in this colour space. This may or may not be correct for the incoming
+data - this parameter takes precedence, whereas the default tells OIIO
+to glean the value if it can.
+
+## --working_colour_space CSP
+##     colour space used for internal processing (default scene_linear)
+
+As said above, this is probably best left alone. If you need to use
+something other than the default, use a linear colour space like ACEScg.
+
+## --output_colour_space CSP 
+##     colour space used for output (default scene_linear)
+
+This prescribes the colour space used for output, unless output is to
+JPEG, where sRGB is enforced. The default, scene_linear, is best used with
+formats which are commonly used for the task and can handle HDR data, like
+openEXR.
+
 #  parameters for mounted (facet) image input:
 
 envutil uses the 'facet' option or a PTO file to introduce one or more
 source images. Both options can occur together, and you can pass several
---facet options, but there can currently be at most one PTO file.
+--facet options, but there can currently be at most one PTO file. If
+both --facet and --pto are used, the numbering starts with the facets from
+the PTO file, even if some --facet options precede the --pto option.
 
 ## --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
 ##     load oriented non-environment source image
@@ -333,13 +390,17 @@ pitch, roll). If you want the facet to be mounted 'straight ahead', just pass
 0 0 0. All six values (image filename, projection, hfov, yaw, pitch, roll)
 must be passed after --facet, separated by space.
 
-You may pass more than one facet. Currently, where several facets provide
-visible content for a given viewing ray, envutil gives preference to one
-of them, following this scheme: For every candidate, the normalized 
-viewing ray's z (forward) component *in the facet's coordinate system* 
-is isolated. To this, the reciprocal 'step' value is added - see just
-below for an explanation. The facet where the sum comes out largest 'wins'
-the contest - it's content is assigned to the viewing ray.
+You may pass more than one facet. How several images are put together is
+set with the --synopsis argument, see there. Here, I describe the 'panorama'
+setting:
+
+Where several facets provide visible content for a given viewing ray,
+envutil gives preference to one of them, following this scheme:
+For every candidate, the normalized viewing ray's z (forward) component
+*in the facet's coordinate system* is isolated. To this, the reciprocal
+'step' value is added - see just below for an explanation. The facet
+where the sum comes out largest 'wins' the contest - it's content is
+assigned to the viewing ray.
 
 The 'step' value is a measure of the change in a viewing ray's angle
 (measured in radians) when moving one pixel to the right in the image
@@ -354,9 +415,9 @@ behind higher-res facets. Keep this in mind if you can't see some of
 your input in the output - you can pass --solo for the facet in question
 to make sure that it is in the viewing area at all.
 
-The overall result - especially when all images have the same resolution
-- resembles a voronoi diagram. Facets with transparency let other facets
-shine through oven if they don't 'win the contest'. You can mix facets
+The overall result - especially when all images have the same resolution -
+resembles a voronoi diagram. Facets with transparency let other facets
+shine through even if they don't 'win the contest'. You can mix facets
 with and without transparency: all facets are 'pulled up' to the highest
 channel count, but it's probably better if all input facets have the
 same channel count and transparency quality. If a facet has transparency
@@ -378,12 +439,12 @@ ahead, which corresponds with the facet image's center. the smaller the
 z value, the farther away the ray is from the center, down to -1, which
 is a ray 'straight back'.
 
-If you use multi-facet input with simple interpolation (--twine 1), you may
+If you use multi-facet input with simple interpolation (--twine 0), you may
 notice ungainly staircase artifacts where facets collide, and also where
 the facets border on 'empty space'. This is due to the way facets are
 prioritized: only one facet can 'win the contest', and there is currently
 no implementation of feathering. If you use twining, the effect is mitigated,
-the facets are blended to a certain degree, and the edges are faded into
+the facets are blended to a certain degree, and tilted edges are faded into
 black. The larger the twining kernel is, the better the effect. When
 automatic twining is used, the twining kernel is calculated to suit all
 facets - if some facets have very high resolution, this may result in a
@@ -402,9 +463,11 @@ envutil can process a growing subset of the PTO standard. Currently, the
 i-lines in a PTO file are scanned for file name, projection, hfov, yaw,
 pitch, roll, translation, shear and lens correction parameters. For an
 explanation of PTO lens correction parameters, see this [Wiki Page](https://wiki.panotools.org/Lens_correction_model). The p-line is also processed,
-and k-lines (specifying masks) are prtly understood (exclude masks for
-single images only).
-Other lines in the PTO file are currently ignored. images from PTO files
+and k-lines (specifying masks) are partly understood (exclude masks for
+single images only). I have added a bit of tentative code looking at
+control points, but this isn't ready as a feature yet.
+
+Other lines in the PTO file are currently ignored. Images from PTO files
 precede the set of facets given with --facet - if no --facet parameters
 are present, only those given in the PTO file are used. I have opted to
 restrict the facet parameters accessible with the --facet option to the
@@ -418,7 +481,7 @@ The facet prioritization is also fixed to a simple voronoi-diagram-like
 mode, more complex schemes like lux' shallow cone/steep pyramid method are
 not yet available in envutil. Image vignetting is not touched either, and
 for brightness envutil just looks at the Eev values and brightens/darkens
-accordingly, which is only correct for linear RGB input. stacks aren't yet supported.
+accordingly, which is only correct for linear RGB input. Stacks aren't yet supported, but exposure brackets can be HDR-merged (see --synopsis)
 
 envutil parses PTO format 'leniently' - you need to pass an image file
 name, projection and hfov in the i-lines, but other parameters may or
@@ -470,9 +533,17 @@ of the value - especially when it's a datum consisting of several
 values (e.g. an ROI specification). OIIO can accept type information,
 and envutil has special syntax to pass it to a plugin: an OIIO
 typestring is suffixed to the key, separated by an '@' sign,
-like "--oiio key@typestr=val val ..." note the quotes: if there are
+like --oiio key@typestr="val val ..." note the quotes: if there are
 several values, they have to be separated by space or tab, so the
-entire argument is quoted to 'hold it together'.
+argument is quoted to 'hold it together'. An example for
+multi-value parameters is the libraw plugin's parameter for the
+correction of chromatic aberration, raw:aber. It's used like this:
+
+    --oiio raw:aber@float[2]="1.001 1.001"
+
+So, to 'disentagle' this argument: we're telling OIIO (--oiio) to pass
+the two-float 'aber' argument (aber@float[2]) to it's libraw plugin
+(raw:), namely the two floats in the quoted string ("1.001 1.001").
 
 Please consult the [OIIO documentation on class TypeDesc](https://openimageio.readthedocs.io/en/stable/imageioapi.html#data-type-descriptions-typedesc)
 about possible values for data types - most of the time, you can get by without passing a type, and the common types are simple lower-case strings
@@ -513,13 +584,13 @@ image is as faithful as possible. This feature can be used to produce
 a set of synthetic source images from an already-stitched panorama and
 then stitch the synthetic images with the same PTO parameters, which may
 be helpful when testing panorama-related software. To give an example of
-the procedure, suppose you have a pto 'pano.pto' with four source images
+the procedure, suppose you have a PTO 'pano.pto' with three source images
 and the stitched output 'pano.tif', let's say it's a full spherical.
 To recreate the second source image (so, number 1) from pano.tif:
 
     envutil --pto pano.pto \
             --facet pano.tif spherical 360 0 0 0 \
-            --solo 4 --single 1 --output image1.tif
+            --solo 3 --single 1 --output image1.tif
 
 At times you want to add further specifications to the 'solo' facet,
 e.g. lens correction parameters or translation parameters. envutil
@@ -530,7 +601,7 @@ a specific Eev value:
 
     envutil --pto pano.pto \
             --pto_line 'i f4 v360 n"pano.tif" Eev13.5' \
-            --solo 4 --single 1 --output image1.tif
+            --solo 3 --single 1 --output image1.tif
 
 Apart from the Eev parameter this is just the same as the previous
 invocation, but the syntax is plain PTO: you add an 'i' line
@@ -546,7 +617,7 @@ this can be used for 'single' jobs as well.
 ## --split FORMAT_STRING  create a 'single' facet for all facets in a PTO
 
 This argument is for convenience - you might produce the same set of
-output images with a 'single' job (see above) for each of the source
+output images with 'single' jobs (see above) for each of the source
 facets. Here, you pass a format string which contains a placeholder for
 an integer (use something like %02d) - this is replaced with each
 facet number in turn, and a 'single' job for that facet is run,
@@ -563,7 +634,7 @@ example above as a 'split' job *with* a solo argument:
 
     envutil --pto pano.pto \
             --pto_line 'i f4 v360 n"pano.tif"' \
-            --solo 4 --split img_%02d.tif
+            --solo 3 --split img_%02d.tif
 
 This would produce images img_00.tif, img_01.tif and img_03.tif,
 which should be geometrically identical to the three source facets
@@ -687,8 +758,7 @@ Pass one of the supported output projections: "spherical", "cylindrical",
 "rectilinear", "stereographic", "fisheye", "cubemap" or "biatan6". The
 default is "rectilinear". "biatan6" is a recent addition: it's a cubemap
 with an additional in-plane transformation to sample the sphere more
-evenly than can be done with rectilinear cube faces.
-
+evenly than can be done with rectilinear cube faces:
 On top of the default, "cubemap", which does not use an in-plane transformation
 (the cube faces are in rectilinear transformation and used just so), envutil
 now supports "biatan6" in-plane transformation. This is a transformation which,
@@ -755,7 +825,7 @@ measures field of view 'edge-to-edge', meaning that each pixel is taken
 to be a small square, and the fov is measured from the leftmost pixel's
 left margin to the rightmost pixel's right margin. Some cubemaps measure
 the field of view from the center of the leftmost pixel to the center of
-the rightmodst one, which I call 'center-to-center or 'ctc' for short.
+the rightmost one, which I call 'center-to-center or 'ctc' for short.
 Such cubemaps have margins which repeat on other facets, so they waste
 some space, but they are easier to handle mathematically. envutil does it
 'the hard way' and uses edge-to-edge semantics. If you encounter a cubemap
@@ -786,6 +856,45 @@ For spherical output, if height is not passed, it is set to half the width,
 increasing 'width' to the next even value. For other projections, if you don't
 pass 'height', the default is to use the same as the width, so to render a
 square image.
+
+## --synopsis MODE  mode of composing several images (panorama or hdr_merge)
+
+When there are several facets, envutil can produce a synoptic view in
+different ways. Currently, two modes are available: producing a simple
+panorama (no blending at the seams) or merging several exposures from an
+exposure bracket into an HDR image. The rendition is, in both cases,
+pixel-based - pyramid-based methods like the Burt&Adelson image splining
+algorithm which I provide in lux are not yet available. If the 'facet'
+images fit very well, the lack of blending may be acceptable - at any rate
+it provides a good idea of how the images fit together and allows for
+reasonably quick inspection of PTO files as long as the project isn't too
+complex, which will require lots of memory. Note that using input of greatly
+varying resolution may result in very long processing times, because the
+twining is set up with regards to the highest-res image - if you need quick
+results, switch twining off (--twine 0) and live with aliasing. envutil's
+'understanding' of PTO format is quite good - it can even process translation
+and lens correction parameters, and there is an interesting option to
+'unstitch' a panorama into partial images with the geometry of the original
+input but the content from the panorama. Please refer to the '--single'
+and '--split' parameters. The spatial composition mode can also be used to
+produce binary masks.
+HDR blending can be achieved quite successfully on a per-pixel basis.
+Internally, the images are dimmed/brightened to a common brightness, but
+which content is picked from each facet is determined by looking at the
+'well-exposedness' criterion: if pixels are near the middle of the image's
+intensity range, they are considered well-exposed. envutil excludes all
+pixels which are overexposed, even if only in one channel (grey projection
+uses the maximum of all three channels). Since all imput is in the form of
+a 'facet' (single-image input is simply facet number zero), HDR-merging
+brackets goes well with passing --single X where X is the number of the
+facet whose geometry, brightness and shape are used for output. For exposure
+brackets from my Canon cameras I often use --single 0, because the number
+zero exposure is the middle exposure on these cameras. HDR output is best
+stored to formats which can handle an extended dynamic range, like openEXR.
+Even LDR output will benefit from HDR-fused content, though, because the
+brighter exposures will provide less noisy data for the darker parts of
+the scene - only the content which is to bright for an LDR image's dynamic
+range will be lost.
 
 # Additional Parameters for Cubemaps
 
@@ -835,7 +944,8 @@ camera* is modified; when looking at the resulting images, objects seen on
 them seem to move the opposite way. Negative values have the opposite effect.
 Panorama photographers: to extract nadir patches, pass --pitch -90
 These angles are known as the 'Euler Angles' and are easy to understand, as
-opposed to the quaternions which envutil uses internally to represent rotations.
+opposed to the quaternions and rotation matrices which envutil uses internally
+to represent rotations.
 
 ## --x0 EXTENT       low end of the horizontal range
 ## --x1 EXTENT       high end of the horizontal range
@@ -854,7 +964,7 @@ images.
 
 envutil will use 'twining' with automatic settings as it's default
 interpolation method. You can explicitly disable twining by passing
---twine 1 - this results in 'straight' b-spline interpolation directly
+--twine 0 - this results in 'straight' b-spline interpolation directly
 from the source image data:
 
     use b-spline interpolation directly on the source image(s). This
@@ -876,7 +986,7 @@ from the source image data:
     star-shaped artifacts typical of degree-1 b-splines when the
     signal is magnified a lot.
 
-If you don't pass --twine, or pass a value other than one, envutil uses
+If you don't pass --twine 0, or pass a value other than zero, envutil uses
 twining to avoid aliasing and star-shaped artifacts of bilinear interpolation:
 
     use 'twining' - this is a method which first super-samples and then
@@ -956,7 +1066,7 @@ futile anyway. If you go up to degrees in the twenties, the dynamic range of
 single precision is exceeded and you'll first get artifacts in the output,
 then, with even higher degrees, errors which render the output unusable.
 For the purpose at hand, 'ground truth' with bilinear interpolation is
-usually perfectly good enough. If you don't use twining (--twine 1) and
+usually perfectly good enough. If you don't use twining (--twine 0) and
 your view is magnifying, pick a small degree like two or three.
 
 If you pass a different prefilter degree, the coefficients are prefiltered
@@ -974,7 +1084,8 @@ greater than one. With a spline degree of two and no prefiltering, there is
 mild suppression of high frequencies, but there are no ringing artifacts, and
 this is often a good compromise. bilinear interpolation also does not suffer
 from ringing artifacts - there, the drawback is the 'star-shaped artifacts'
-in magnifying views.
+in magnifying views. Using prefilter degrees higher than the spline degree
+may result in unwanted artifacts and make the output unusable.
 
 # Twining-specific options
 

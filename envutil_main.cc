@@ -36,67 +36,15 @@
 /*                                                                      */
 /************************************************************************/
 
-// A utility to extract an image from an environment. This program takes
-// a 2:1 lat/lon environment or a 1:6 cubemap image as input and produces
-// output in the specified orientation, projection, field of view and
-// extent. For CL arguments, try 'envutil --help'. The program can also
-// create environment images - just pass 'spherical' or 'cubemap' as
-// output projection, 360 or 90 degrees hfov, respectively, and an
-// appropriate output size. This ability can be used to convert from
-// one environment to another, optionally with an arbitrary 3D rotation.
-//
-// The output projection can be one of "spherical", "cylindrical",
-// "rectilinear", "stereographic", "fisheye" or "cubemap". The geometrical
-// extent of the output is set up most conveniently by passing --hfov, the
-// horizontal field of view of the output. The x0, x1, y0, and y1 parameters
-// allow passing specific extent values (in model space units), which should
-// rarely be necessary. To specify the orientation of the 'virtual camera',
-// pass Euler angles yaw, pitch and roll - they default to zero: a view
-// 'straight ahead' to the point corresponding to the center of the
-// environment image with no camera roll. The size of the output is
-// given by --width and --height. You must pass an output filename
-// with --output; --input specifies the environment image.
-//
-// Per default, envutil uses 'twining' - inlined oversampling with
-// subsequent weighted pixel binning. The default with this method is
-// to use a simple box filter whose specific parameterization is set
-// up automatically. Additional/ parameters can change the amount of
-// oversampling and add gaussian weights to the filter parameters.
-// To switch twining off and use direct interpolation from the source
-// image data, pass --twine 0. 'twining' is quite fast (if the number
-// of filter taps isn't very large. When down-scaling, the parameter
-// 'twine' should be at least the same as the scaling factor to avoid
-// aliasing. When upscaling, larger twining values will slighly soften
-// the output and suppress the star-shaped artifacts typical for bilinear
-// interpolation. Twining is new and this is a first approach. The method
-// is intrinsically very flexible (it's based on a generalization of
-// convolution), and the full flexibility isn't accessible in 'extract'
-// with the parameterization as it stands now, but it's already quite
-// useful with the few parameters I offer.
-//
-// The program uses zimt as it's 'strip-mining' and SIMD back-end, and
-// sets up the pixel pipelines using zimt's functional composition tools.
-// This allows for terse programming, and the use of a functional
-// paradigm allows for many features to be freely combined - a property
-// which is sometimes called 'orthogonality'. What you can't combine in
-// 'extract' is twining and interpolation with OIIO - this is pointless,
-// because OIIO offers all the anti-aliasing and quality interpolation
-// one might want, and using twining on top would not improve the
-// output. Currently, the build is set up to produce binary for AVX2-
-// -capable CPUs - nowadays most 'better' CPUs support this SIMD ISA.
-// When building for other (and non-i86) CPUs, suitable parameters should
-// be passed to the compiler (you'll have to modify the CMakeLists.txt).
-// I strongly suggest you install highway on your system - the build
-// will detect and use it to good effect. This is a build-time dependency
-// only. Next-best (when using i86 CPUs up to AVX2) is Vc, the fall-back
-// is to use std::simd, and even that can be turned off if you want to
-// rely on autovectorization; zimt structures the processing so that it's
-// autovectorization-friendly and performance is still quite good that way.
-// I have managed to build envutil on Linux, macOS (on intel CPUs) and
-// Windows. The build adapts to the given system and expects a set of
-// dependencies (OpenImageIO, Imath, ffmpeg), zimt code is provided in
-// this repository. The macOS build fulfilled the dependencies with
-// macPorts, the Windows build used msys2/mingw64.
+// This program takes a 2:1 lat/lon environment, a 1:6 cubemap image or
+// a set of several 'facet' images as input and produces output in the
+// specified orientation, projection, field of view and extent. For CL
+// arguments, try 'envutil --help'. Find documentation on envutil's
+// project page on github:
+// https://github.com/kfjahnke/envutil
+
+// This file deals mainly with argument processing, it has the 'main'
+// function and calls the 'payload' code which does the actual rendering.
 
 // envutil_dispatch.cc provides the dispatch_base pointer to the
 // ISA-specific rendering code via get_dispatch, which obtains the
@@ -226,7 +174,7 @@ void arguments::init ( int argc , const char ** argv )
   ArgParse ap;
 
   ap.intro("envutil: convert and create extracts from environment images\n")
-    .usage("envutil [options] --input INPUT --output OUTPUT");
+    .usage("envutil [options...] --output OUTPUT");
 
   ap.arg("-v", &verbose)
     .help("Verbose output");
