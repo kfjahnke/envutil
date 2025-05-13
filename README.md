@@ -142,6 +142,7 @@ Note that prefiltering is essential for splines with degrees of two and
 more to produce a spline satisfying the interpolation criterion (the
 spline passes through the knot points). Omitting the prefiltering will
 produce slightly blurred output.
+Find out mor about parameterization of b-splines [here](#interpolazion-options) and about twining [here](#parameters-for-twining)!
 
 The program uses [zimt](https://github.com/kfjahnke/zimt) as it's 'strip-mining' and SIMD back-end, and
 sets up the pixel pipelines using zimt's functional composition tools.
@@ -1090,10 +1091,33 @@ may result in unwanted artifacts and make the output unusable.
 # Twining-specific options
 
 These options control the 'twining' filter, which is active by default (switch
-it off by passing --twine 1 explicitly ) envutil will use b-spline interpolation
-on the source image for single-point lookups, and it will perform more lookups
-and then combine several neighbouring pixels from the oversampled result into
-each target pixel.
+it off by passing --twine 0 explicitly). With twining, envutil uses a two-step
+approach to rendering. The first step establishes, for any given (continuous)
+coordinate, a 'ground truth' value. This is done with b-spline interpolation,
+which can be parameterized: starting with simple nearest-neighbour lookup
+(a zero-degree spline), the next step up is a degree-one b-spline, also known
+as 'bilinear interpolation'. This is aleady 'quite good' and the default.
+Above degree-one splines come b-splines of higher degrees, where choices
+above three are rarely sensible. To find out more about parameterization
+of b-splines, refer to te chapters for --spline_degree and --prefilter.
+
+The second step - the actual 'twining' - looks up several closely spaced
+continuous coordinates with the 'ground truth' interpolator and combines
+them in a weighted sum. This process is inherently very flexible: the
+'sub-pick-up' locations can be chosen arbitrarily, rather than having to
+follow a rigid discrete grid, which is the case for convolution-based lookup.
+The default twining process in envutil spaces the sub-pick-up locations
+evenly over the area which a target pixel would cover in the source image,
+if it were projected onto it. Subsequently, the results from the sub-pick-ups
+are averaged. The result is the same as supersampling the 'ground truth'
+signal and subsequently combining groups of neighbouring pixels into
+'bins' corresponding with the target pixels - or, to put it differently,
+the result is the same as first rendering a large image with the ground-truth
+interpolator, and then scaling it down to the desired output size. If the
+sub-pick-up locations are closer to each other than the knot points of the
+ground truth spline, aliasing won't occur, and interpolation-related
+artifacts are mitigated (e.g. overshoot due to insufficient band-limitation
+or the star-shaped artifacts of bilinear interpolation).
 
 The operation of the twining filter differs conceptually from OIIO's pick-up
 with derivatives: OIIO's filter (as I understand it) looks at the difference
@@ -1119,6 +1143,16 @@ may 'shine through' if the transformation magnifies the image (you'll see
 the typical star-shaped artifacts). If the sub-pick-ups are 'too far apart',
 you may notice aliasing - of course depending on the input's spectrum as well.
 
+The big advantage of twining is that it does not interact directly with the
+source image data (all interaction is via the 'ground truth' spline signal)
+and it's operation happens in 'ray space'. The relieves the process from having
+to make assupmptions about the source image data (like, it's availablility
+over a given area or a specific geometrical structure) - the only thing which
+is taken for granted is the fact that the ground truth signal is available
+and precise, and the twining filter is set up so that it is adequate for the
+ground truth signal at hand so that it will stay within the boundaries set by
+the sampling theorem.
+
 Keeping this in mind, if you want to set up a twining filter yourself, either
 by passing twining-related parameters setting the number and 'spread' of
 the filter coefficients or by passing a file with filter coefficients, you
@@ -1132,7 +1166,12 @@ won't do much harm, just take a little longer. If you produce a magnifying
 view and can use a b-spline with degree two or more, twining is futile,
 because the b-spline interpolation already produces a near-optimal result.
 If there are several facets, automatic twining will configure the filter
-so that even the most scaled-down content shows no aliasing.
+so that even the most scaled-down content shows no aliasing. Using twining
+with large kernels can take significant processing time, but the resulting
+images should be of a very good quality, so I think the process should be
+suitable to e.g. calculate image pyramids for pyramid-based schemes (like
+mip-mapping) which, in turn, are better-suited for fast rendering over a
+large range of scales (like in lux).
 
 ## --twf_file TWF_FILE   read twining filter from a file
 

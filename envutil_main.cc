@@ -608,15 +608,19 @@ void arguments::init ( int argc , const char ** argv )
       {
         if ( csp [ 0 ] == '"' )
           csp = csp.substr ( 1 , csp.size() - 2 ) ;
-        f.colour_space = csp ;
         if ( verbose )
           std::cout << "facet's native colour space (via Csp): "
-                    << f.colour_space << std::endl ;
+                    << csp << std::endl ;
       }
       else
       {
         csp = args.input_colour_space ;
+        if ( verbose )
+          std::cout
+            << "facet's colour space (via input_colour_space): "
+            << csp << std::endl ;
       }
+      f.colour_space = csp ;
 
       // envutil provides an extension to PT format: a 'Pano'
       // clause. This takes the data from a PTO file's p-line
@@ -1106,11 +1110,14 @@ void arguments::init ( int argc , const char ** argv )
         std::cout << "using '--single' argument to set output metrics"
                   << std::endl ;
 
+      std::string save_csp = args.colour_space ;
       const auto & fspec = facet_spec_v [ single ] ;
 
       // take over the facet's geometry to the target geometry in args
+      // but don't take over the colour space
 
       (facet_base&) args = fspec ;
+      args.colour_space = save_csp ;
     }
     else if ( p_line_present )
     {
