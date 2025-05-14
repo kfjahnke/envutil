@@ -962,6 +962,7 @@ values you may want to pass, e.g. to produce anisotropic output or cropped
 images.
 
 <div id="interpolation-options"/></div>
+
 # Interpolation Options
 
 envutil will use 'twining' with automatic settings as it's default
@@ -1090,6 +1091,7 @@ in magnifying views. Using prefilter degrees higher than the spline degree
 may result in unwanted artifacts and make the output unusable.
 
 <div id="twining-specific-options"/></div>
+
 # Twining-specific options
 
 These options control the 'twining' filter, which is active by default (switch
