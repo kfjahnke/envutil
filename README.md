@@ -961,9 +961,8 @@ parameter, given a specific projection. This can help you figure out specific
 values you may want to pass, e.g. to produce anisotropic output or cropped
 images.
 
-<a id="interpolation-options"/>
+<div id="interpolation-options"/></div>
 # Interpolation Options
-</a>
 
 envutil will use 'twining' with automatic settings as it's default
 interpolation method. You can explicitly disable twining by passing
@@ -1090,9 +1089,8 @@ from ringing artifacts - there, the drawback is the 'star-shaped artifacts'
 in magnifying views. Using prefilter degrees higher than the spline degree
 may result in unwanted artifacts and make the output unusable.
 
-<a id="twining-specific-options"/>
+<div id="twining-specific-options"/></div>
 # Twining-specific options
-</a>
 
 These options control the 'twining' filter, which is active by default (switch
 it off by passing --twine 0 explicitly). With twining, envutil uses a two-step
