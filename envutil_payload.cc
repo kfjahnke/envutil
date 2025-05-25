@@ -1228,7 +1228,6 @@ struct _hdr_merge_syn
 
   f_v get_quality ( const px_v & px , float optimum , kind_t kind ) const
   {
-
     if constexpr ( px_v::size() == 1 )
     {
       f_v q = get_quality ( px[0] , optimum , kind ) ;
@@ -2081,7 +2080,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-// #define NARROW_SCOPE
+#define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate

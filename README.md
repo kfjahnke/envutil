@@ -1090,6 +1090,26 @@ from ringing artifacts - there, the drawback is the 'star-shaped artifacts'
 in magnifying views. Using prefilter degrees higher than the spline degree
 may result in unwanted artifacts and make the output unusable.
 
+If you need very high quality processing, keep in mind that only splines
+which are band-limited to *half the Nyquist frequency* are stable under
+repeated re-sampling with shifted/rotated grids. To obtain such a spline,
+one easy route is to create an image with twice the size of the input,
+using a b-spline (e.g. a cubic one) with no twining. This double-sized
+image will be appropriately band-limited. Now you can do the processing,
+again working with a b-spline, and taking care not to violate the sampling
+theorem - as long as your process doesn't sample the 'doubled' spline
+with sampling locations spread out farther than the distance between two
+adjacent knot points, the 'stability' of the doubled spline to resampling
+will preserve the signal, so that degradation only occurs due to quantization
+errors. If you produce a final output, you may need to revert to the input
+image's resolution, and that's when you can use a twining filter to affect
+the down-scaling. Of course you can save yourself the 'spline doubling' if
+you know beforehand that your input is adequately band-limited. If your
+processing uses intermediate images, keep in mind that quantization is an
+issue. The least you can do to preserve quality is to use 16 bit samples,
+but using single-precision float is better - e.g. in TIFF format. Only use
+lossless compression if at all.
+
 <div id="twining-specific-options"/></div>
 
 # Twining-specific options
@@ -1251,9 +1271,7 @@ is stored. This keeps the pipeline 'afloat' in SIMD registers, which is fast
 (as is the arithmetic) - especially when highway or Vc are used, which
 increase SIMD performance particularly well.
 
-So here's the explanation why --twine 1 switches twining off: a twining
-filter with just one pick-up point is simply 'straight' single-point
-lookup of the 'ground truth' b-spline.
+Pass --twine 0 explicitly to switch twining off.
 
 If you don't deactivate twining, envutil will set up twining parameters
 automatically, so that they fit the relation of input and output. If the
@@ -1332,7 +1350,7 @@ and very high resolution - and this very high resolution is not actually
 exploited (or usable) to provide fine detail. AFAICT, OIIO's spline-based
 interpolators (e.g. bicubic) don't use prefiltering and therefore produce
 noticeable blurring. Try a b-spline with proper prefiltering and no twining
-(--twine 1 -degree 3) to see the difference - you'll see no blurring, but if
+(--twine 0 -degree 3) to see the difference - you'll see no blurring, but if
 the view magnifies and the signal isn't band-limited, you may see ringing
 artifacts.
 
@@ -1342,7 +1360,7 @@ If you don't pass --twine_sigma, envutil will use a simple box filter to
 combine the result of supersampling into single output pixels values. If
 you pass twine_sigma, the kernel will be derived from a gaussian with a sigma
 equivalent to twine_sigma times the half kernel width. This gives more weight
-to supersamples near the center of the pick-up.  If you pass -v, the filter
+to subsamples near the center of the pick-up.  If you pass -v, the filter
 is echoed to std::cout for inspection.
 
 You can combine this parameter with automatic twining - the twine factor and
@@ -1351,8 +1369,8 @@ to the initially equal-weighted box filter. Keep in mind that applying gaussian
 weights will 'narrow' the filter, so you may need to pass a larger twine_width
 to counteract that effect. This may be a bit counterintuitive, because gaussians
 are commonly associated with blurring - but a gaussian kernel produces 'sharper'
-output than a box filter. Also consider the next parameter which eliminates weights
-below a given threshold to save CPU time.
+output than a box filter. Also consider the next parameter which eliminates
+weights below a given threshold to save CPU time.
 
 ## --twine_threshold TWINE_THRESHOLD  discard twining filter taps below this threshold
 
@@ -1381,7 +1399,7 @@ pixel will appear. Next, it figures out a 3D 'ray' coordinate which
 encodes the direction where the lookup should 'look for' content. This
 obviously depends on the target projection and the orientation of the
 virtual camera. With 'simple' interpolation - like the bilinear interpolation
-you get by default with --twine 1, the next step is to find a 2D
+you get by default with --twine 0, the next step is to find a 2D
 coordinate into the source image which has the content corresponding
 to the given ray and interpolate a pixel value from the source image
 at that coordinate.
@@ -1415,7 +1433,7 @@ rays. Without this projection to the tangent plane, the pattern of
 sub-pick-up with negative kernel x and y values is not at precisely
 the same distance from the current pick-up location as one with positive
 x and y of equal magnitude. --twine_precise takes care of this problem
-and does the projection to the tangent sphere. The calculation needs to
+and does the projection to the tangent plane. The calculation needs to
 be done once per target pixel, so with increasing kernel size it does
 not require additional computations. Most of the time the change which
 results from this parameter is so minimal that it's not worth the extra
@@ -1426,7 +1444,7 @@ a 2D difference in source image coordinates? Suppose you have a sub-pick
 whose ray is substantially different from the current pick-up location.
 What if it's projection to the source image plane lands outside the source
 image, or on the opposite edge (which can happen e.g. with full
-spherical source images)? To deal with this situation, you need to add
+spherical source images)? To deal with this situation, you'd need to add
 code which recognizes and mends this problem, and you need code for each
 type of projection to handle such issues properly. Because this is all
 inner-loop code and introduces conditionals, it's detrimental to performance,
@@ -1437,7 +1455,14 @@ image coordinates and the current pick-up coordinate is never 'taken
 all the way' to the source image - the result pixel is a weighted sum
 of the sub-pick-ups. The sub-pick-ups either yield a pixel value or they
 don't, the 2D difference never occurs and therefore doesn't produce any
-problems.
+problems. So we trade a few more cycles (for working in 3D) for a more
+orthogonal and branch-free construct, which suits SIMD processing and the
+functional paradigm, and performance is acceptable. With this setup, adding
+new projections becomes easier - it's especially useful for source data
+coming as several discrete images, like in a cubemap, where lookup schemes
+which have to encompass a 'piece' of source image run into trouble when
+'looking' at the edges of the cube and have to combine data from several
+cube faces. With twining this is not an issue.
 
 ## --twine_density DENSITY increase tap count of an 'automatic' twining filter
 

@@ -1074,6 +1074,16 @@ public:
       target.copy_data ( buffer ) ;
     }
     fill_support() ;
+
+    // note that even if the prefilter degree is zero or one, we still
+    // need to call 'prefilter' to have a usable b-spline object - the
+    // coefficient array is slightly larger than the knot point array
+    // and the extra 'frame' needs to be initialized, which is done
+    // by 'prefilter'.
+
+    if ( args.verbose )
+      std::cout << "applying sixfold prefilter for cubemaps, degree "
+                << args.prefilter_degree << std::endl ;
     prefilter ( args.prefilter_degree ) ;
   }
 

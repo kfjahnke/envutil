@@ -707,7 +707,16 @@ struct source_t
           std::cout << "asset " << fct.asset_key
                     << " is now loaded from disk" << std::endl ;
 
+        // set up a config telling OIIO we want float data with the
+        // given width and height.
+
         ImageSpec config ;
+        config.format = TypeDesc::FLOAT ;
+        config.width = fct.window_width ;
+        config.height = fct.window_height ;
+
+        // add further attributes gleaned from the CL to the config
+
         for ( const auto & attr : args.oiio_option_v )
         {
           std::string oiio_arg , oiio_type , oiio_val ;
@@ -771,12 +780,41 @@ struct source_t
           }
         }
 
-        // we set up an OIIO ImageBuf to pull in the image data
+        // now we set up a new b-spline object and read the pixel
+        // data into it's 'core'
 
-        OIIO::ImageBuf in_buf
-          ( fct.filename , 0 , 0 , nullptr , &config ) ;
+        p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+                                    { bc0 , zimt::REFLECT } ) ) ;
+
+        // we set up an OIIO ImageBuf to pull in the image data, using
+        // the config we've set up above
+
+        OIIO::ImageBuf in_buf ( config ,
+                                (float*) (p_bspl->core.data()) ,
+                                sizeof ( in_px_t ) ,
+                                p_bspl->core.strides[1] * sizeof ( in_px_t )
+                              ) ;
+
+        // To read the buffer with acknowledgement of the config, which
+        // may contain additional config attributes, this syntax works.
+        // but a format request (setting config.format) seems not to have
+        // an effect and the buffer still contains the native data format.
+
+        OIIO::ImageBuf read_buf ( fct.filename , 0 , 0 , nullptr , &config ) ;
+
+        // To carry on with float data, I next set up an ImageBuf 'occupying'
+        // the b-spline's 'core' area and issue a 'copy' command with an
+        // explicit type conversion (second parameter). directly reading into
+        // such a buffer does not work reliably, because it does not honour
+        // any additional config attributes (e.g raw:ColorSpace=ACES)
+
+        in_buf.init_spec ( fct.filename , 0 , 0 ) ;
+        in_buf.copy ( read_buf , TypeDesc::FLOAT ) ;
+        
+        // re-read the spec, doublecheck data format
 
         const ImageSpec &spec = in_buf.spec() ;
+        assert ( in_buf.spec().format == TypeDesc::FLOAT ) ;
 
         // the facet may have inherent colour space information via
         // a 'Csp' parameter in a PTO i-line. This takes precedence:
@@ -801,14 +839,13 @@ struct source_t
                       << " to internal csp "
                       << args.working_colour_space << std::endl ;
 
-          OIIO::ImageBufAlgo::colorconvert
+          bool success = OIIO::ImageBufAlgo::colorconvert
             ( in_buf , in_buf ,
               csp ,
               args.working_colour_space ) ;
+
+          assert ( success ) ;
         }
-        
-        p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
-                                    { bc0 , zimt::REFLECT } ) ) ;
 
         // obtain the data via the ImageBuf, which will apply the
         // colour space transformation if it was specified above
@@ -894,6 +931,9 @@ struct source_t
 
           if ( fct.has_pto_mask )
           {
+            if ( args.verbose )
+              std::cout << "applying PTO 'exclude' masks" << std::endl ;
+
             auto clear = [&] ( int x , int y )
             {
               alpha [ { x , y } ] = 0.0f ;
@@ -905,6 +945,15 @@ struct source_t
               {
                 fill_polygon ( mask.vx , mask.vy ,
                                0 , 0 , w , h , clear ) ;
+              }
+              else
+              {
+                // TODO: might process masks of type 'for all images
+                // with this lens"
+
+                if ( args.verbose )
+                  std::cout << "skipping PTO masks variant "
+                            << mask.variant << std::endl ;
               }
             }
           }
@@ -919,7 +968,9 @@ struct source_t
 
             if ( fct.projection == FISHEYE )
             {
-              std::cout << "elliptic crop" << std::endl ;
+              if ( args.verbose )
+                std::cout << "applying elliptic crop" << std::endl ;
+
               float mx = ( fct.crop_x0 + fct.crop_x1 ) / 2.0 ;
               float my = ( fct.crop_y0 + fct.crop_y1 ) / 2.0 ;
               for ( int y = 0 ; y < h ; y++ )
@@ -951,7 +1002,9 @@ struct source_t
             }
             else
             {
-              std::cout << "rectangular crop" << std::endl ;
+              if ( args.verbose )
+                std::cout << "applying rectangular crop" << std::endl ;
+
               for ( int y = 0 ; y < h ; y++ )
               {
                 for ( int x = 0 ; x < w ; x++ )
@@ -1038,12 +1091,22 @@ struct source_t
 
         // the spline needs to be prefiltered appropriately.
         // TODO: only use this for uncropped images
+        // note that even if the prefilter degree is zero or one, we still
+        // need to call 'prefilter' to have a usable b-spline object - the
+        // coefficient array is slightly larger than the knot point array
+        // and the extra 'frame' needs to be initialized, which is done
+        // by 'prefilter'.
 
         if (    fct.projection == SPHERICAL
             && fabs ( fct.hfov - 2.0 * M_PI ) < .000001
             && fct.width == 2 * fct.height )
         {
           // assume the mounted image is a full spherical
+          if ( args.verbose )
+          {
+            std::cout << "applying spherical b-spline prefilter, degree "
+                      << args.prefilter_degree << std::endl ;
+          }
 
           p_bspl->spline_degree = args.prefilter_degree ;
           spherical_prefilter ( *p_bspl , p_bspl->core , zimt::default_njobs ) ;
@@ -1052,10 +1115,16 @@ struct source_t
         }
         else
         {
-          // assume it's a partial spherical, use ordinary
+          // assume it's not a full spherical, use ordinary
           // prefilter. Note that we may prefilter with a
           // different degree (prefilter_degree) if that was
           // specified in args.
+
+          if ( args.verbose )
+          {
+            std::cout << "applying ordinary b-spline prefilter, degree "
+                      << args.prefilter_degree << std::endl ;
+          }
 
           p_bspl->spline_degree = args.prefilter_degree ;
           p_bspl->prefilter() ;

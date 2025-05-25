@@ -90,6 +90,7 @@ namespace project
 
 #include <OpenImageIO/filesystem.h>
 #include <OpenImageIO/argparse.h>
+#include <OpenImageIO/color.h>
 
 using OIIO::ArgParse ;
 using OIIO::Filesystem::convert_native_arguments ;
@@ -382,12 +383,40 @@ void arguments::init ( int argc , const char ** argv )
   // set to an empty string, expecting that OIIO will provide a
   // value fitting the data in the image file.
 
+  std::string default_working_colour_space ;
+  std::string default_output_colour_space ;
+
+  // TODO: we need to find the currently used ColorConfig and query
+  // it. this code does not work (gemini's idea)
+  // if ( OpenColorIO::is_initialized() )
+  // {
+  //   if ( verbose )
+  //     std::cout << "found OCIO configuration" << std::endl ;
+  //   default_working_colour_space = "ACEScg" ;
+  //   default_output_colour_space = "ACES2065-1" ;
+  // }
+  // else
+  {
+    // if ( verbose )
+    //   std::cout << "OCIO configuration not found, using OIIO's built-in"
+    //             << std::endl ;
+
+    // I think that without an active OCIO config, scene_linear will
+    // use Rec709. Will need some experimentation to get this right.
+    // user can override the defaults and work with or without config.
+
+    default_working_colour_space = "scene_linear" ;
+    default_output_colour_space = "scene_linear" ;
+  }
+
+  // the input colour space should be gleaned from the image's metadata,
+  // so we can't set a reasonable default here.
   input_colour_space
     = ap["input_colour_space"].as_string ( "" ) ;
   working_colour_space
-    = ap["working_colour_space"].as_string ( "scene_linear" ) ;
+    = ap["working_colour_space"].as_string ( default_working_colour_space ) ;
   colour_space
-    = ap["output_colour_space"].as_string ( "scene_linear" ) ;
+    = ap["output_colour_space"].as_string ( default_output_colour_space ) ;
   pto_file = ap["pto"].as_string ( "" ) ;
   twf_file = ap["twf_file"].as_string ( "" ) ;
   split = ap["split"].as_string ( "" ) ;
