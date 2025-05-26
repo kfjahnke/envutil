@@ -2080,7 +2080,7 @@ void roll_out ( int ninputs )
 // only and only three projections. This lowers turn-around time
 // considerably.
 
-#define NARROW_SCOPE
+// #define NARROW_SCOPE
 
 // we have the number of channels as a template argument from the
 // roll_out below, now we roll_out on the projection and instantiate
@@ -2099,13 +2099,11 @@ void roll_out ( int ninputs ,
     case SPHERICAL:
       roll_out < NCH , spherical_stepper > ( ninputs ) ;
       break ;
-// #ifndef NARROW_SCOPE
-    case CYLINDRICAL:
-      roll_out < NCH , cylindrical_stepper > ( ninputs ) ;
-      break ;
-// #endif
     case RECTILINEAR:
       roll_out < NCH , rectilinear_stepper > ( ninputs ) ;
+      break ;
+    case CUBEMAP:
+      roll_out < NCH , cubemap_stepper > ( ninputs ) ;
       break ;
 #ifndef NARROW_SCOPE
     case FISHEYE:
@@ -2114,8 +2112,8 @@ void roll_out ( int ninputs ,
     case STEREOGRAPHIC:
       roll_out < NCH , stereographic_stepper > ( ninputs ) ;
       break ;
-    case CUBEMAP:
-      roll_out < NCH , cubemap_stepper > ( ninputs ) ;
+    case CYLINDRICAL:
+      roll_out < NCH , cylindrical_stepper > ( ninputs ) ;
       break ;
     case BIATAN6:
       roll_out < NCH , biatan6_stepper > ( ninputs ) ;

@@ -543,9 +543,28 @@ struct facet_spec
 
     if ( ! inp )
     {
-      std::cerr << "failed to open facet image '"
-                << filename << "'" << std::endl ;
-      exit ( -1 ) ;
+      // TODO: refactor
+
+      auto has_percent = filename.find_first_of ( "%" ) ;
+      if ( has_percent != std::string::npos )
+      {
+        OIIO::geterror() ;
+
+        // input must be a set of six cubeface images, that's the
+        // only way how we accept a format string.
+
+        cubeface_series cfs ( filename ) ;
+        if ( cfs.valid() )
+        {
+          inp = ImageInput::open ( cfs[0] , &config ) ;
+        }
+      }
+      else
+      {
+        std::cerr << "failed to open facet image '"
+                  << filename << "'" << std::endl ;
+        exit ( -1 ) ;
+      }
     }
 
     const ImageSpec &spec = inp->spec() ;
@@ -792,6 +811,181 @@ void save_array ( const std::string & filename ,
 
   auto success = out_buf.write ( filename ) ;
   assert ( success ) ;
+}
+
+#include "zimt/bspline.h"
+
+template < std::size_t NCH >
+using px_t = zimt::xel_t < float , NCH > ;
+
+// template < std::size_t NCH >
+// using spl_t = zimt::bspline < px_t < NCH > , 2 > ;
+
+template < std::size_t NCH >
+bool read_image_data ( zimt::view_t < 2 , px_t < NCH > > & trg ,
+                       // const facet_spec & fct ,
+                       const std::string & filename ,
+                       const std::string & colour_space ,
+                       int & native_nchannels )
+{
+  typedef px_t < NCH > in_px_t ;
+
+  if ( args.verbose )
+    std::cout << "file " << filename
+              << " is now loaded from disk" << std::endl ;
+
+  // set up a config telling OIIO we want float data with the
+  // given width and height.
+
+  ImageSpec config ;
+  config.format = TypeDesc::FLOAT ;
+  config.width = trg.shape[0] ;
+  config.height = trg.shape[1] ;
+
+  // add further attributes gleaned from the CL to the config
+
+  for ( const auto & attr : args.oiio_option_v )
+  {
+    std::string oiio_arg , oiio_type , oiio_val ;
+
+    auto pos = attr.find_first_of ( "=" ) ;
+    if ( pos != attr.npos )
+    {
+      auto lhs = attr.substr ( 0 , pos ) ;
+      auto at_pos = lhs.find_first_of ( "@" ) ;
+      if ( at_pos != lhs.npos )
+      {
+        // this argument is suffixed with an OIIO typestring
+        oiio_arg = lhs.substr ( 0 , at_pos ) ;
+        oiio_type = lhs.substr ( at_pos + 1 ) ;
+      }
+      else
+      {
+        // no typestring
+        oiio_arg = lhs ;
+        oiio_type = std::string() ;
+      }
+      // take the remainder after the '=' as the attribute's value
+      oiio_val = attr.substr ( pos + 1 ) ;
+    }
+    else
+    {
+      oiio_arg = attr ;
+      oiio_type = std::string() ;
+      oiio_val = std::string() ;
+    }
+    if ( oiio_type.size() )
+    {
+      if ( args.verbose )
+        std::cout << "processing typed oiio argument: " << oiio_arg
+                  << " type: " << oiio_type
+                  << " value: " << oiio_val
+                  << std::endl ;
+
+      // typed argument. OIIO recognizes it's own brand of
+      // typestring.
+
+      auto typedesc = TypeDesc ( oiio_type ) ;
+
+      // with a type descriptor, we can process the value
+      // in string form. The user should separate individual
+      // values of multi-value rhs with space or tab.
+
+      config.attribute ( oiio_arg , typedesc , oiio_val ) ;
+    }
+    else
+    {
+      if ( args.verbose )
+        std::cout << "processing untyped oiio argument: "
+                  << oiio_arg
+                  << " value: " << oiio_val
+                  << std::endl ;
+
+      // untyped argument
+
+      config [ oiio_arg ] = oiio_val ;
+    }
+  }
+
+  // we set up an OIIO ImageBuf to pull in the image data, using
+  // the config we've set up above
+
+  // OIIO::ImageBuf in_buf ( config ,
+  //                         (float*) (p_bspl->core.data()) ,
+  //                         sizeof ( in_px_t ) ,
+  //                         p_bspl->core.strides[1] * sizeof ( in_px_t )
+  //                       ) ;
+
+  OIIO::ImageBuf in_buf ( config ,
+                          (float*) (trg.data()) ,
+                          sizeof ( in_px_t ) ,
+                          trg.strides[1] * sizeof ( in_px_t )
+                        ) ;
+
+  // To read the buffer with acknowledgement of the config, which
+  // may contain additional config attributes, this syntax works.
+  // but a format request (setting config.format) seems not to have
+  // an effect and the buffer still contains the native data format.
+
+  OIIO::ImageBuf read_buf ( filename , 0 , 0 , nullptr , &config ) ;
+
+  // To carry on with float data, I next set up an ImageBuf 'occupying'
+  // the b-spline's 'core' area and issue a 'copy' command with an
+  // explicit type conversion (second parameter). directly reading into
+  // such a buffer does not work reliably, because it does not honour
+  // any additional config attributes (e.g raw:ColorSpace=ACES)
+
+  in_buf.init_spec ( filename , 0 , 0 ) ;
+  in_buf.copy ( read_buf , TypeDesc::FLOAT ) ;
+  
+  // re-read the spec, doublecheck data format
+
+  const ImageSpec &spec = in_buf.spec() ;
+  assert ( in_buf.spec().format == TypeDesc::FLOAT ) ;
+  native_nchannels = in_buf.nchannels() ;
+
+  // the facet may have inherent colour space information via
+  // a 'Csp' parameter in a PTO i-line. This takes precedence:
+
+  auto csp = colour_space ;
+
+  // if there is no such spec, we rely on the OIIO attribute
+
+  if ( csp == std::string() )
+    csp = spec.get_string_attribute ( "oiio:ColorSpace" ) ;
+
+  if ( args.verbose )
+    std::cout << "facet's colour space: "
+              << csp << std::endl ;
+
+  // if the two coour spaces differ, we need to convert:
+
+  if ( csp != args.working_colour_space )
+  {
+    if ( args.verbose )
+      std::cout << "converting from facet's csp " << csp
+                << " to internal csp "
+                << args.working_colour_space << std::endl ;
+
+    bool success = OIIO::ImageBufAlgo::colorconvert
+      ( in_buf , in_buf ,
+        csp ,
+        args.working_colour_space ) ;
+
+    assert ( success ) ;
+  }
+
+  // obtain the data via the ImageBuf, which will apply the
+  // colour space transformation if it was specified above
+  // by calling 'colorconvert' on the buffer
+  
+  bool success = in_buf.get_pixels ( OIIO::ROI() ,
+                                     OIIO::TypeFloat ,
+              trg.data() ,
+              sizeof ( in_px_t ) ,
+              trg.strides[1] * sizeof ( in_px_t ) ) ;
+  
+  return ( success ) ;
 }
 
 #endif // #ifndef ENVUTIL_BASIC_H

@@ -63,6 +63,7 @@
 #include "zimt/eval.h"
 
 #include "geometry.h"
+#include "envutil_basic.h"
 
 HWY_BEFORE_NAMESPACE() ;
 BEGIN_ZIMT_SIMD_NAMESPACE(project)
@@ -552,10 +553,6 @@ struct cubemap_t
                 _face_fov ,
                 _support_min_px ,
                 _tile_px )
-    // p_bsp ( std::make_shared < spl_t >
-    //           ( { section_px , 6 * section_px } , true ,
-    //             args.spline_degree ,
-    //             { zimt::REFLECT , zimt::REFLECT } ) )
   {
     // let the user know the field of view of IR sections. This
     // is only possible if the cube face images have even size,
@@ -576,11 +573,6 @@ struct cubemap_t
     // find the location of the first cube face's upper left corner
     // in the 'store' array
 
-/*    
-    auto * ps = new spl_t ( store , store , args.spline_degree ,
-                            { zimt::REFLECT , zimt::REFLECT } ,
-                            -1 , left_frame_px ) ;
-    p_bsp.reset ( ps ) ;*/
     auto * ps = new spl_t ( { section_px , 6 * section_px } , true ,
                             args.spline_degree ,
                             { zimt::REFLECT , zimt::REFLECT } ) ;
@@ -955,6 +947,13 @@ private:
 
 public:
 
+  // TODO: converted loading code to use ImageBuf instead.
+  // we have read_image_data() working, so the old code
+  // using ImageInput is obsolete, but still functional.
+  // It's missing the colour space conversions which are
+  // performed by read_image_data. See below for an overload
+  // of 'load' using read_image_data.
+
   // function to read the cube face image data from disk (via
   // an OIIO-provided inp) - this version reads a single image
   // with 1:6 aspect ratio containing six square cube face
@@ -1140,6 +1139,98 @@ public:
     fill_support() ;
     prefilter ( args.prefilter_degree ) ;
   }
+
+  // this overload of 'load' uses read_image_data, which does
+  // colour space adaptations. This overload internally handles
+  // cubeface series as well.
+
+  void load ( const facet_spec & fct )
+  {
+    zimt::array_t < 3 , px_t >
+      buffer ( { face_px , face_px , std::size_t ( 6 ) } ) ;
+    
+    // and a view to the store with the same shape, but strides to
+    // match the metrics of the target memory area in the store
+      
+    zimt::view_t < 3 , px_t >
+      target ( p_ul ,
+              { 1L , long(section_px) , long(offset_px) } ,
+              { face_px , face_px , std::size_t ( 6 ) } ) ;
+
+    zimt::view_t < 2 , px_t >
+      view_2d ( buffer.data() ,
+              { 1L , long(face_px) } ,
+              { face_px , face_px * 6UL } ) ;
+
+    int native_channels ;
+
+    // cubemaps may be specified as a set of six separate image
+    // files with filenames following a set pattern, which is
+    // passed as a format string containing %s. The %s is replaced
+    // by the six canonical directions (see class cubeface_series)
+
+    auto has_percent = fct.filename.find_first_of ( "%" ) ;
+    if ( has_percent != std::string::npos )
+    {
+      // input must be a set of six cubeface images, that's the
+      // only way how we accept a format string.
+
+      cubeface_series cfs ( fct.filename ) ;
+      if ( cfs.valid() )
+      {
+        for ( std::size_t face = 0 ; face < 6 ; face++ )
+        {
+          if ( args.verbose )
+            std::cout << "load cube face image " << cfs[face]
+                      << std::endl ;
+
+          // form a view to the section in 'buffer' where the
+          // current single image file should be placed
+
+          zimt::view_t < 2 , px_t >
+            view_2d ( buffer.data() + face * face_px * face_px ,
+                    { 1L , long(face_px) } ,
+                    { face_px , face_px } ) ;
+
+          // read the image data, converting to working_colour_space
+          // (by default scene_linear)
+
+          read_image_data ( view_2d , cfs[face] ,
+                            fct.colour_space , native_channels ) ;
+        }
+
+        // perform cubemap-specific additional initializations
+
+        fill_support() ;
+        prefilter ( args.prefilter_degree ) ;
+      }
+    }
+    else
+    {
+      // It's not a cubeface series.
+      // read the single image into the buffer
+
+      read_image_data ( view_2d , fct.filename ,
+                        fct.colour_space , native_channels ) ;
+    }
+
+    // zimt handles the data transfer from the buffer to the view
+
+    target.copy_data ( buffer ) ;
+
+    fill_support() ;
+
+    // note that even if the prefilter degree is zero or one, we still
+    // need to call 'prefilter' to have a usable b-spline object - the
+    // coefficient array is slightly larger than the knot point array
+    // and the extra 'frame' needs to be initialized, which is done
+    // by 'prefilter'.
+
+    if ( args.verbose )
+      std::cout << "applying sixfold prefilter for cubemaps, degree "
+                << args.prefilter_degree << std::endl ;
+    prefilter ( args.prefilter_degree ) ;
+  } ;
 
   // given the cube face and the in-face coordinate, extract the
   // corresponding pixel values from the internal representation

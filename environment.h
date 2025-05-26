@@ -603,22 +603,6 @@ struct source_t
     static const std::size_t C = nchannels ;
     typedef zimt::xel_t < float , C > in_px_t ;
 
-    // // sneaky: this might as well be a member variable, but having
-    // // it static to a member function saves the need for external
-    // // instantiation
-    // 
-    // #define PSPL(NCH) std::shared_ptr \
-    //   < bspline < xel_t < float , NCH > , 2 > >
-    // 
-    // static std::map < std::string , PSPL(C) > spl_map ;
-    // 
-    // #undef PSPL
-
-    // for now, we use identical values for total_... and window_...
-
-    // total_width = window_width = fct.width ;
-    // total_height = window_height = fct.height ;
-
     total_extent = get_extent ( fct.projection , fct.width ,
                                 fct.height , fct.hfov ) ;
 
@@ -644,13 +628,6 @@ struct source_t
 
     window_extent.x1 = total_extent.x0 + px * wx ;
     window_extent.y1 = total_extent.y0 + py * wy ;
-
-    // now we need to set up the spline. We check if the facet provides
-    // full 360X180 degree coverage, in which case we can use slightly
-    // more performant code (we need no SIMD masks to indicate where
-    // the facet provides data and where it doesn't).
-
-    shape_type shape { fct.window_width , fct.window_height } ;
     full_environment = false ;
 
     // most facets are rendered with REFLECT boundary conditions,
@@ -701,84 +678,14 @@ struct source_t
       }
       else
       {
-        // no luck - we need to load the image data from disk
+        int native_nchannels ;
 
-        if ( args.verbose )
-          std::cout << "asset " << fct.asset_key
-                    << " is now loaded from disk" << std::endl ;
+        // now we need to set up the spline. We check if the facet provides
+        // full 360X180 degree coverage, in which case we can use slightly
+        // more performant code (we need no SIMD masks to indicate where
+        // the facet provides data and where it doesn't).
 
-        // set up a config telling OIIO we want float data with the
-        // given width and height.
-
-        ImageSpec config ;
-        config.format = TypeDesc::FLOAT ;
-        config.width = fct.window_width ;
-        config.height = fct.window_height ;
-
-        // add further attributes gleaned from the CL to the config
-
-        for ( const auto & attr : args.oiio_option_v )
-        {
-          std::string oiio_arg , oiio_type , oiio_val ;
-
-          auto pos = attr.find_first_of ( "=" ) ;
-          if ( pos != attr.npos )
-          {
-            auto lhs = attr.substr ( 0 , pos ) ;
-            auto at_pos = lhs.find_first_of ( "@" ) ;
-            if ( at_pos != lhs.npos )
-            {
-              // this argument is suffixed with an OIIO typestring
-              oiio_arg = lhs.substr ( 0 , at_pos ) ;
-              oiio_type = lhs.substr ( at_pos + 1 ) ;
-            }
-            else
-            {
-              // no typestring
-              oiio_arg = lhs ;
-              oiio_type = std::string() ;
-            }
-            // take the remainder after the '=' as the attribute's value
-            oiio_val = attr.substr ( pos + 1 ) ;
-          }
-          else
-          {
-            oiio_arg = attr ;
-            oiio_type = std::string() ;
-            oiio_val = std::string() ;
-          }
-          if ( oiio_type.size() )
-          {
-            if ( args.verbose )
-              std::cout << "processing typed oiio argument: " << oiio_arg
-                        << " type: " << oiio_type
-                        << " value: " << oiio_val
-                        << std::endl ;
-
-            // typed argument. OIIO recognizes it's own brand of
-            // typestring.
-
-            auto typedesc = TypeDesc ( oiio_type ) ;
-
-            // with a type descriptor, we can process the value
-            // in string form. The user should separate individual
-            // values of multi-value rhs with space or tab.
-
-            config.attribute ( oiio_arg , typedesc , oiio_val ) ;
-          }
-          else
-          {
-            if ( args.verbose )
-              std::cout << "processing untyped oiio argument: "
-                        << oiio_arg
-                        << " value: " << oiio_val
-                        << std::endl ;
-
-            // untyped argument
-
-            config [ oiio_arg ] = oiio_val ;
-          }
-        }
+        shape_type shape { fct.window_width , fct.window_height } ;
 
         // now we set up a new b-spline object and read the pixel
         // data into it's 'core'
@@ -786,78 +693,173 @@ struct source_t
         p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
                                     { bc0 , zimt::REFLECT } ) ) ;
 
-        // we set up an OIIO ImageBuf to pull in the image data, using
-        // the config we've set up above
+        read_image_data ( p_bspl->core , fct.filename ,
+                          fct.colour_space , native_nchannels ) ;
 
-        OIIO::ImageBuf in_buf ( config ,
-                                (float*) (p_bspl->core.data()) ,
-                                sizeof ( in_px_t ) ,
-                                p_bspl->core.strides[1] * sizeof ( in_px_t )
-                              ) ;
-
-        // To read the buffer with acknowledgement of the config, which
-        // may contain additional config attributes, this syntax works.
-        // but a format request (setting config.format) seems not to have
-        // an effect and the buffer still contains the native data format.
-
-        OIIO::ImageBuf read_buf ( fct.filename , 0 , 0 , nullptr , &config ) ;
-
-        // To carry on with float data, I next set up an ImageBuf 'occupying'
-        // the b-spline's 'core' area and issue a 'copy' command with an
-        // explicit type conversion (second parameter). directly reading into
-        // such a buffer does not work reliably, because it does not honour
-        // any additional config attributes (e.g raw:ColorSpace=ACES)
-
-        in_buf.init_spec ( fct.filename , 0 , 0 ) ;
-        in_buf.copy ( read_buf , TypeDesc::FLOAT ) ;
-        
-        // re-read the spec, doublecheck data format
-
-        const ImageSpec &spec = in_buf.spec() ;
-        assert ( in_buf.spec().format == TypeDesc::FLOAT ) ;
-
-        // the facet may have inherent colour space information via
-        // a 'Csp' parameter in a PTO i-line. This takes precedence:
-
-        auto csp = fct.colour_space ;
-
-        // if there is no such spec, we rely on the OIIO attribute
-
-        if ( csp == std::string() )
-          csp = spec.get_string_attribute ( "oiio:ColorSpace" ) ;
-
-        if ( args.verbose )
-          std::cout << "facet's colour space: "
-                    << csp << std::endl ;
-
-        // if the two coour spaces differ, we need to convert:
-
-        if ( csp != args.working_colour_space )
-        {
-          if ( args.verbose )
-            std::cout << "converting from facet's csp " << csp
-                      << " to internal csp "
-                      << args.working_colour_space << std::endl ;
-
-          bool success = OIIO::ImageBufAlgo::colorconvert
-            ( in_buf , in_buf ,
-              csp ,
-              args.working_colour_space ) ;
-
-          assert ( success ) ;
-        }
-
-        // obtain the data via the ImageBuf, which will apply the
-        // colour space transformation if it was specified above
-        // by calling 'colorconvert' on the buffer
-
-        bool success = in_buf.get_pixels ( OIIO::ROI() ,
-                                           OIIO::TypeFloat ,
-                    p_bspl->core.data() ,
-                    sizeof ( in_px_t ) ,
-                    p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
-
-        assert ( success ) ;
+//         // no luck - we need to load the image data from disk
+// 
+//         if ( args.verbose )
+//           std::cout << "asset " << fct.asset_key
+//                     << " is now loaded from disk" << std::endl ;
+// 
+//         // set up a config telling OIIO we want float data with the
+//         // given width and height.
+// 
+//         ImageSpec config ;
+//         config.format = TypeDesc::FLOAT ;
+//         config.width = fct.window_width ;
+//         config.height = fct.window_height ;
+// 
+//         // add further attributes gleaned from the CL to the config
+// 
+//         for ( const auto & attr : args.oiio_option_v )
+//         {
+//           std::string oiio_arg , oiio_type , oiio_val ;
+// 
+//           auto pos = attr.find_first_of ( "=" ) ;
+//           if ( pos != attr.npos )
+//           {
+//             auto lhs = attr.substr ( 0 , pos ) ;
+//             auto at_pos = lhs.find_first_of ( "@" ) ;
+//             if ( at_pos != lhs.npos )
+//             {
+//               // this argument is suffixed with an OIIO typestring
+//               oiio_arg = lhs.substr ( 0 , at_pos ) ;
+//               oiio_type = lhs.substr ( at_pos + 1 ) ;
+//             }
+//             else
+//             {
+//               // no typestring
+//               oiio_arg = lhs ;
+//               oiio_type = std::string() ;
+//             }
+//             // take the remainder after the '=' as the attribute's value
+//             oiio_val = attr.substr ( pos + 1 ) ;
+//           }
+//           else
+//           {
+//             oiio_arg = attr ;
+//             oiio_type = std::string() ;
+//             oiio_val = std::string() ;
+//           }
+//           if ( oiio_type.size() )
+//           {
+//             if ( args.verbose )
+//               std::cout << "processing typed oiio argument: " << oiio_arg
+//                         << " type: " << oiio_type
+//                         << " value: " << oiio_val
+//                         << std::endl ;
+// 
+//             // typed argument. OIIO recognizes it's own brand of
+//             // typestring.
+// 
+//             auto typedesc = TypeDesc ( oiio_type ) ;
+// 
+//             // with a type descriptor, we can process the value
+//             // in string form. The user should separate individual
+//             // values of multi-value rhs with space or tab.
+// 
+//             config.attribute ( oiio_arg , typedesc , oiio_val ) ;
+//           }
+//           else
+//           {
+//             if ( args.verbose )
+//               std::cout << "processing untyped oiio argument: "
+//                         << oiio_arg
+//                         << " value: " << oiio_val
+//                         << std::endl ;
+// 
+//             // untyped argument
+// 
+//             config [ oiio_arg ] = oiio_val ;
+//           }
+//         }
+// 
+//         // now we need to set up the spline. We check if the facet provides
+//         // full 360X180 degree coverage, in which case we can use slightly
+//         // more performant code (we need no SIMD masks to indicate where
+//         // the facet provides data and where it doesn't).
+// 
+//         shape_type shape { fct.window_width , fct.window_height } ;
+// 
+//         // now we set up a new b-spline object and read the pixel
+//         // data into it's 'core'
+// 
+//         p_bspl.reset ( new spl_t ( shape , args.spline_degree ,
+//                                     { bc0 , zimt::REFLECT } ) ) ;
+// 
+//         // we set up an OIIO ImageBuf to pull in the image data, using
+//         // the config we've set up above
+// 
+//         OIIO::ImageBuf in_buf ( config ,
+//                                 (float*) (p_bspl->core.data()) ,
+//                                 sizeof ( in_px_t ) ,
+//                                 p_bspl->core.strides[1] * sizeof ( in_px_t )
+//                               ) ;
+// 
+//         // To read the buffer with acknowledgement of the config, which
+//         // may contain additional config attributes, this syntax works.
+//         // but a format request (setting config.format) seems not to have
+//         // an effect and the buffer still contains the native data format.
+// 
+//         OIIO::ImageBuf read_buf ( fct.filename , 0 , 0 , nullptr , &config ) ;
+// 
+//         // To carry on with float data, I next set up an ImageBuf 'occupying'
+//         // the b-spline's 'core' area and issue a 'copy' command with an
+//         // explicit type conversion (second parameter). directly reading into
+//         // such a buffer does not work reliably, because it does not honour
+//         // any additional config attributes (e.g raw:ColorSpace=ACES)
+// 
+//         in_buf.init_spec ( fct.filename , 0 , 0 ) ;
+//         in_buf.copy ( read_buf , TypeDesc::FLOAT ) ;
+//         
+//         // re-read the spec, doublecheck data format
+// 
+//         const ImageSpec &spec = in_buf.spec() ;
+//         assert ( in_buf.spec().format == TypeDesc::FLOAT ) ;
+// 
+//         // the facet may have inherent colour space information via
+//         // a 'Csp' parameter in a PTO i-line. This takes precedence:
+// 
+//         auto csp = fct.colour_space ;
+// 
+//         // if there is no such spec, we rely on the OIIO attribute
+// 
+//         if ( csp == std::string() )
+//           csp = spec.get_string_attribute ( "oiio:ColorSpace" ) ;
+// 
+//         if ( args.verbose )
+//           std::cout << "facet's colour space: "
+//                     << csp << std::endl ;
+// 
+//         // if the two coour spaces differ, we need to convert:
+// 
+//         if ( csp != args.working_colour_space )
+//         {
+//           if ( args.verbose )
+//             std::cout << "converting from facet's csp " << csp
+//                       << " to internal csp "
+//                       << args.working_colour_space << std::endl ;
+// 
+//           bool success = OIIO::ImageBufAlgo::colorconvert
+//             ( in_buf , in_buf ,
+//               csp ,
+//               args.working_colour_space ) ;
+// 
+//           assert ( success ) ;
+        // }
+        // 
+        // // obtain the data via the ImageBuf, which will apply the
+        // // colour space transformation if it was specified above
+        // // by calling 'colorconvert' on the buffer
+        // 
+        // bool success = in_buf.get_pixels ( OIIO::ROI() ,
+        //                                    OIIO::TypeFloat ,
+        //             p_bspl->core.data() ,
+        //             sizeof ( in_px_t ) ,
+        //             p_bspl->core.strides[1] * sizeof ( in_px_t ) ) ;
+        // 
+        // assert ( success ) ;
 
 //         auto & core ( p_bspl->core ) ;
 // 
@@ -892,8 +894,6 @@ struct source_t
 //                     << histogram [ { 0UL , slot } ] << "\t"
 //                     << histogram [ { 1UL , slot } ] << "\t"
 //                     << histogram [ { 2UL , slot } ] << std::endl ;
-
-        int native_nchannels = spec.nchannels ;
 
         if ( native_nchannels != fct.nchannels )
         {
@@ -1814,7 +1814,7 @@ struct _environment
             cubemap_t < C , CUBEMAP > cbm ( fct.width , fct.hfov ,
                                             args.support_min ,
                                             args.tile_size ) ;
-            cbm.load ( fct.filename ) ;
+            cbm.load ( fct ) ;
             p_bspl = cbm.p_bsp ;
           }
           else
@@ -1822,7 +1822,7 @@ struct _environment
             cubemap_t < C , BIATAN6 > cbm ( fct.width , fct.hfov ,
                                             args.support_min ,
                                             args.tile_size ) ;
-            cbm.load ( fct.filename ) ;
+            cbm.load ( fct ) ;
             p_bspl = cbm.p_bsp ;
           }
 
