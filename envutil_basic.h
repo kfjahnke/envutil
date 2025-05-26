@@ -813,17 +813,11 @@ void save_array ( const std::string & filename ,
   assert ( success ) ;
 }
 
-#include "zimt/bspline.h"
-
 template < std::size_t NCH >
 using px_t = zimt::xel_t < float , NCH > ;
 
-// template < std::size_t NCH >
-// using spl_t = zimt::bspline < px_t < NCH > , 2 > ;
-
 template < std::size_t NCH >
 bool read_image_data ( zimt::view_t < 2 , px_t < NCH > > & trg ,
-                       // const facet_spec & fct ,
                        const std::string & filename ,
                        const std::string & colour_space ,
                        int & native_nchannels )
