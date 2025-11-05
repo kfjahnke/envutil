@@ -1683,7 +1683,7 @@ extern std::vector < std::string > tokenize ( const std::string input ) ;
 
 using namespace std::chrono_literals ;
 
-#include "/home/kfj/src/visor/src/visor.h"
+#include "visor.h"
 
 // handle_job receives a reference to a job_t object and processes
 // the parameters in this object to create output. currently, this
