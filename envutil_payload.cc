@@ -217,6 +217,201 @@ r3_t < T > make_r3_t ( T r , T p , T y ,
   return r3m ;
 }
 
+// linear RGB to sRGB conversion for both scalar and vectorized data.
+// The function expects input in [0,1] and outputs values in [0,1].
+// larger and negative values are accepted, but [0,1] is the 'normal'
+// range, corresponding to [0,0xFF] in uchar8_t
+
+template < class VT , class NT = float >
+VT RGB2sRGB ( VT value )
+{
+  VT result = NT(1.055) * pow ( value , VT(0.41666666666666667) ) - 0.055 ;
+
+  // using vspline::assign_if to code uniformly for scalar and vectorized VT:
+
+  assign_if ( result , value <= NT(0.0031308) , NT(12.92) * value ) ;
+
+  return result ;
+}
+
+// lut_based_tf is a unary_functor which transforms incoming float data
+// in [0,1] to [0,amplify], applying a transformation like lRGB to
+// sRGB. The transformation is sampled over lut_size points and a zimt
+// bspline is used to provide a bilinear interpolation over the sample
+// points to yield an approximation of the transformation. The result
+// is very close to the real transformation - certainly good enough for
+// screen output - and calculation is much faster. The given 'amplify'
+// value scales the output from the 'canonical' range [0,1] which the
+// function 'fn' is assumed to produce to a range which is most useful
+// for the caller - if, e.g., screen output in uchar8_t is intended,
+// values in [0,255] are needed and scaling the output with an amplify
+// value of 255.0 saves the extra multiplication with 255.0 before
+// casiting to uchar8_t.
+
+template < typename T = float , std::size_t L = LANES >
+struct lut_based_tf
+: public unary_functor < T , T , L >
+{
+  const std::size_t lut_size ;
+  const double amplify ;
+  bspline < T , 1 > lut_spline ;
+  grok_type < T , T , L > gev ;
+
+  lut_based_tf ( const std::size_t & _lut_size ,
+                 const double & _amplify ,
+                 std::function < T ( T ) > fn )
+  : lut_size ( _lut_size ) ,
+    amplify ( _amplify ) ,
+    lut_spline ( lut_size , 1 , NATURAL )
+  {
+    for ( std::size_t i = 0 ; i < lut_size ; i++ )
+    {
+      double x = i / double ( lut_size - 1 ) ;
+      double y = fn ( x ) * amplify ;
+      lut_spline.core [ i ] = y ;
+    }
+    lut_spline.prefilter() ;
+    gev = make_safe_evaluator < bspline < T , 1 > , float , L > ( lut_spline ) ;
+  }
+
+  template < typename I , typename O >
+  void eval ( const I & in , O & out , const std::size_t & cap = L )
+  {
+    // we expect incoming values in [0,1]. to interpolate, we need spline
+    // coordinates in the range [0,lut_size-1], so we need one multiplication
+    // before we call the interpolator. the output is already scaled because
+    // 'amplify' is multipled into the spline's coefficients.
+
+    gev.eval ( in * T ( lut_size - 1 ) , out ) ;
+  }
+} ;
+
+// class to_screen_t encodes conversion of incoming float pixels with
+// linear RGB channel values in [0,1] into a single uint32_t value in
+// sRGBA encoding, which can directly be used to populate a texture
+// in SFML. The functor has variants for 1-4 channels of input.
+// single-channel input is mapped to fully opaque with R=B=G,
+// two-channel input is taken to mean one grey-value channel plus
+// alpha, three-channel input is taken as RGB, and four-channel input
+// as RGBA.
+
+template < typename T , std::size_t nch , std::size_t L >
+struct to_screen_t
+: public zimt::unary_functor
+    < zimt::xel_t < T , nch > , std::uint32_t , L >
+{
+  typedef zimt::unary_functor
+    < zimt::xel_t < T , nch > , std::uint32_t , L > base_t ;
+
+  using typename base_t::in_ele_v ;
+  using typename base_t::out_ele_v ;
+
+  lut_based_tf < float > tf ;
+
+  // we set up the lut-based transformation with a size of 256 knot points
+  // and an amplification of 255.0, so that we can immediately cast the
+  // resultts to uchar8_t. The RGB to sRGB transformation is expected to
+  // map [0,1] to [0,1]. We pass the double->double instantiation of the
+  // RGB2sRGB template - this function is only used to set up the sampling
+  // of the transformation and it's not performance-critical. Note that,
+  // for now, incoming data with alpha are taken to be unpremultiplied.
+  // An alternative to using bilinear interpolation over the LUT values
+  // is to use a larger LUT - e.g. 1024 knot points - and a degree-0
+  // spline (so, nearest-neighbour interpolation), which also deminishes
+  // quantization effects reasonably well, but I found the resulting
+  // rendering pipeline to not be significantly faster, so I stick with
+  // the bilinear interpolation over the LUT. If processing time is really
+  // an issue, the conversion can be done GPU-side (by setting up an sRGB-
+  // capable frame buffer) and feeding uchar8_t RGBA, but this may produce
+  // noticeable banding in the shades - to avoid that, larger than 8bit
+  // channels would be needed, which in turn increases memory traffic.
+  // with to_screen_t's c'tor taking a function to generate the knot point
+  // values, other curves than the sRGBcurve can be used. TODO: it should
+  // be easy to fill the bspline's 'core' with a gradient and then use
+  // OIIO's colorconvert to produce the knot points working in-place.
+  // If it's clear the gradient is linear, input could easily be gleaned
+  // from a linspace as well. With OIIO/OCIO doing the color conversion
+  // we can access a wide range of color spaces, and by sampling the
+  // conversion and interpolating, we save time by gaining yet another
+  // stage in the pixel pipeline, rather than a buffer-to-buffer operation
+  // later on. The extra stage happens in multithreaded SIMD on data held
+  // in registers, so it's fast. TODO: the conversion is used for all
+  // colour channels uniformly - some colour space transformations need
+  // inter-channel cross-talk to work out right. This isn't possible
+  // with the code as it is.
+
+  to_screen_t()
+  : tf ( 256 ,                          // LUT size
+         255.0 ,                        // amplification, maximal output
+         RGB2sRGB < double , double > ) // transformation [0,1] -> [0,1]
+  { }
+
+  // just to use a function with a return value, for notational convenience
+
+  out_ele_v to_screen ( in_ele_v in )
+  {
+    tf.eval ( in , in ) ;
+    return in ;
+  }
+
+  // now the constexpr case switch picking the channel-specific version.
+  // this is cost-free due to constexpr, hence it can occcur quite 'down
+  // the line' without ill effects.
+  
+  template < typename I , typename O >
+  void eval ( const I & in , O & out )
+  {
+    if constexpr ( nch == 1 )
+    {
+      O ch = to_screen ( in[0] ) ;
+      out = 0xFF00 ;
+      out |= ch ;
+      out <<= 8 ;
+      out |= ch ;
+      out <<= 8 ;
+      out |= ch ;
+    }
+    else if constexpr ( nch == 2 )
+    {
+      O ch1 = to_screen ( in[0] ) ;
+      O ch2 = to_screen ( in[1] ) ;
+      out = ch2 ;
+      out <<= 8 ;
+      out |= ch1 ;
+      out <<= 8 ;
+      out |= ch1 ;
+      out <<= 8 ;
+      out |= ch1 ;
+    }
+    else if constexpr ( nch == 3 )
+    {
+      O ch1 = to_screen ( in[0] ) ;
+      O ch2 = to_screen ( in[1] ) ;
+      O ch3 = to_screen ( in[2] ) ;
+      out = 0xFF00 ;
+      out |= ch3 ;
+      out <<= 8 ;
+      out |= ch2 ;
+      out <<= 8 ;
+      out |= ch1 ;
+    }
+    else if constexpr ( nch == 4 )
+    {
+      O ch1 = to_screen ( in[0] ) ;
+      O ch2 = to_screen ( in[1] ) ;
+      O ch3 = to_screen ( in[2] ) ;
+      O ch4 = to_screen ( in[3] ) ;
+      out = ch4 ;
+      out <<= 8 ;
+      out |= ch3 ;
+      out <<= 8 ;
+      out |= ch2 ;
+      out <<= 8 ;
+      out |= ch1 ;
+    }
+  }
+} ;
+
 // 'work' is the function where the state we've built up in the
 // code below it culminates in the call to zimt::process, which
 // obtains pick-up coordinates from the 'get' object, produces
@@ -253,13 +448,13 @@ void work ( get_t & get , act_t & act )
     h = args.height ;
   }
 
-  zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
-  
-  // set up a zimt::storer to populate the target array with
-  // zimt::process. This is the third component needed for
-  // zimt::process - we already have the get_t and act.
-  
-  zimt::storer < float , nchannels , 2 , LANES > cstor ( trg ) ;
+//   zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
+//   
+//   // set up a zimt::storer to populate the target array with
+//   // zimt::process. This is the third component needed for
+//   // zimt::process - we already have the get_t and act.
+//   
+//   zimt::storer < float , nchannels , 2 , LANES > cstor ( trg ) ;
   
   // use the get, act and put components with zimt::process
   // to produce the target images. This is the point where all
@@ -293,7 +488,7 @@ void work ( get_t & get , act_t & act )
     }
   }
 
-  if ( unbrighten != 1.0f )
+  if ( unbrighten != 1.0f && args.tethered == false )
   {
     // for 'single' jobs, undo the target facet's 'brighten'
     // TODO tentative. linear vs. sRGB is still unresolved!
@@ -302,15 +497,50 @@ void work ( get_t & get , act_t & act )
     // needs to be 'slotted in' to handle e.g. colour space
     // conversions.
 
+    // TODO: code for 'unbrightened' jobs providing output to
+    // screen in thethered processing. currently, all tethered
+    // jobs are routed to the else case below.
+
     px_t amplify = unbrighten ;
     if ( nchannels == 2 || nchannels == 4 )
       amplify [ nchannels - 1 ] = 1.0 ;
     amplify_type < px_t , px_t , px_t , LANES > amp ( amplify ) ;
+    zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
+    zimt::storer < float , nchannels , 2 , LANES > cstor ( trg ) ;
     zimt::process ( trg.shape , get , act + amp , cstor , bill ) ;
+    save_array < nchannels > ( args.output , trg ) ;
   }
   else
   {
-    zimt::process ( trg.shape , get , act , cstor , bill ) ;
+      // zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
+      // zimt::storer < float , nchannels , 2 , LANES > cstor ( trg ) ;
+      // zimt::process ( trg.shape , get , act , cstor , bill ) ;
+      // if ( args.tethered )
+      // {
+      //   std::uint8_t * p_srgba = (std::uint8_t *) args.p_screen_data ;
+      //   export_array < nchannels > ( trg , p_srgba ) ;
+      // }
+
+    if ( args.tethered )
+    {
+      zimt::view_t < 2 , std::uint32_t > trg ( args.p_screen_data , { w , h } ) ;
+      // zimt::array_t < 2 , std::int32_t > trg ( { w , h } ) ;
+      zimt::storer < std::uint32_t , 1 , 2 , LANES > cstor ( trg ) ;
+      static to_screen_t < float , nchannels , LANES > to_screen ;
+      zimt::process ( trg.shape , get , act + to_screen , cstor , bill ) ;
+      // zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
+      // zimt::storer < float , nchannels , 2 , LANES > cstor ( trg ) ;
+      // zimt::process ( trg.shape , get , act , cstor , bill ) ;
+      // std::uint8_t * p_srgba = (std::uint8_t *) args.p_screen_data ;
+      // export_array < nchannels > ( trg , p_srgba ) ;
+    }
+    else
+    {
+      zimt::array_t < 2 , px_t > trg ( { w , h } ) ;
+      zimt::storer < float , nchannels , 2 , LANES > cstor ( trg ) ;
+      zimt::process ( trg.shape , get , act , cstor , bill ) ;
+      save_array < nchannels > ( args.output , trg ) ;
+    }
   }
   
   std::chrono::system_clock::time_point end
@@ -334,12 +564,18 @@ void work ( get_t & get , act_t & act )
   //   push_video_frame ( trg ) ;
   // }
   // else
-  {
-    if ( args.verbose )
-      std::cout << "saving output image: " << args.output << std::endl ;
 
-    save_array < nchannels > ( args.output , trg ) ;
-  }
+  // if ( args.tethered )
+  // {
+  //   export_array  < nchannels > ( trg ) ;
+  // }
+  // else
+  // {
+  //   if ( args.verbose )
+  //     std::cout << "saving output image: " << args.output << std::endl ;
+  // 
+  //   save_array < nchannels > ( args.output , trg ) ;
+  // }
 }
 
 // we'll use a common wrapper class for all synopsis-forming objects.

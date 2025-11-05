@@ -622,6 +622,8 @@ struct arguments
 : public facet_base
 {
   bool verbose ;
+  bool tethered ;
+  std::uint32_t * p_screen_data = nullptr ;
   std::string working_colour_space ;
   std::string input_colour_space ;
   std::string output ;
@@ -687,19 +689,6 @@ struct arguments
 
 extern arguments args ;
 
-template < class VT , class NT = float >
-VT RGB2sRGB ( VT value )
-{
-  VT result = NT(1.055) * pow ( value , NT(0.41666666666666667) ) - 0.055 ;
-
-  // using vspline::assign_if to code uniformly for scalar and vectorized VT:
-
-  if ( value <= NT(0.0031308) )
-    result = NT(12.92) * value ;
-
-  return result ;
-}
-
 // helper function to save a zimt array of pixels to an image file, or
 // to a set of six cube face images, if 'output' has a format string.
 
@@ -708,8 +697,7 @@ void save_array ( const std::string & filename ,
                   zimt::view_t
                     < 2 ,
                       zimt::xel_t < float , nchannels >
-                    > pixels ,
-                  bool is_latlon = false )
+                    > pixels )
 {
   if ( args.projection == CUBEMAP || args.projection == BIATAN6 )
   {

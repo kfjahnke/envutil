@@ -1793,7 +1793,8 @@ public:
   template < typename = std::enable_if < ( vsize > 1 ) > >
   inline
   void eval ( const typename base_type::in_v & _coordinate ,
-              typename base_type::out_v & _result ) const
+              typename base_type::out_v & _result ,
+              const std::size_t & cap = vsize ) const
   {
     feed < xel_t , simdized_type , vsize >
       ( _coordinate , _result ) ;

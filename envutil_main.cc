@@ -55,6 +55,9 @@
 // have to define get_dispatch then - it simply delegates to
 // _get_dispatch in the nested namespace.
 
+#include <thread>
+#include <chrono>
+
 #include "envutil_dispatch.h"
 #include "pto.h"
 
@@ -405,8 +408,8 @@ void arguments::init ( int argc , const char ** argv )
     // use Rec709. Will need some experimentation to get this right.
     // user can override the defaults and work with or without config.
 
-    default_working_colour_space = "scene_linear" ;
-    default_output_colour_space = "scene_linear" ;
+    default_working_colour_space = "Linear" ;
+    default_output_colour_space = "Linear" ;
   }
 
   // the input colour space should be gleaned from the image's metadata,
@@ -1569,12 +1572,23 @@ long rt_cumulated = 0 ;
 // This new modus operandi makes 'seqfiles' obsolete - the new
 // method is much more flexible and powerful.
 
-int core ( int argc , const char ** argv )
+int core ( int argc , const char ** argv , bool tethered = false )
 {
   // process command line arguments - the result is held in a bunch
   // of member variables in the global 'args' object
 
+  args.facet_spec_v.clear() ;
+  args.nfacets = 0 ;
+  args.facet_name_v.clear() ;
+  args.facet_projection_v.clear() ;
+  args.facet_hfov_v.clear() ;
+  args.facet_yaw_v.clear() ;
+  args.facet_pitch_v.clear() ;
+  args.facet_roll_v.clear() ;
+  args.photo_name_v.clear() ;
+  args.addenda.clear() ;
   args.init ( argc , argv ) ;
+  args.tethered = tethered ;
 
   // obtain a dispatch_base pointer to the ISA-specific code.
   // get_dispatch is in envutil_dispatch.cc
@@ -1665,8 +1679,111 @@ extern std::vector < std::string > tokenize ( const std::string input ) ;
 // possibly several times, if a trailing '-' switches envutil into
 // 'pipe' mode.
 
+#include <chrono>
+
+using namespace std::chrono_literals ;
+
+#include "/home/kfj/src/visor/src/visor.h"
+
+// handle_job receives a reference to a job_t object and processes
+// the parameters in this object to create output. currently, this
+// is merely a dummy. Later on, this will trigger a rendering job
+// which attaches the produced data in the job_t object's 'data'
+// member variable. for now, we simply move a pointer slowly through
+// an array of pixel data. This avoids all allocation and data
+// generation, and we get an idea about the raw speed of the process.
+
+bool handle_job ( ipc_data_t & ipc , int job_pending )
+{
+  spec_t & spec ( ipc.spec_array [ job_pending ] ) ;
+  
+  // for now we just produce data reflecting some of the spec's
+  // data fields (yaw_cam, pitch_cam)
+
+  // get the index of the frame buffer to use
+
+  bool success = ipc.store.get ( spec.buffer_index ) ;
+  assert ( success ) ;
+
+  // and extract the corresponding buffer address
+
+  auto * p = (std::uint8_t*)
+    ipc.get_buffer_address ( spec.buffer_index ) . get() ;
+
+  // guard against overly large windows
+
+  if (   spec.height_cam * spec.width_cam
+       > ipc.desktop_width * ipc.desktop_height )
+  {
+    spec.height_cam = ipc.desktop_height ;
+    spec.width_cam = ipc.desktop_width ;
+  }
+
+  args.p_screen_data = (std::uint32_t*) p ;
+
+  std::vector < const char * > visor_argv ;
+  std::size_t visor_argc ;
+  
+  ipc.flat_args.extract ( visor_argc , visor_argv ) ;
+
+    // for ( std::size_t i = 0 ; i < visor_argc ; i++ )
+    //   std::cout << "visor arg " << i << " "
+    //             << visor_argv [ i ] << std::endl ;
+
+  // for now, we set the argument vector up 'on foot':
+
+  std::string sw = std::to_string ( spec.width_cam ) ;
+  std::string sh = std::to_string ( spec.height_cam ) ;
+  std::string sy = std::to_string ( spec.yaw_cam ) ;
+  std::string sf = std::to_string ( spec.hfov_cam ) ;
+  std::string sp = std::to_string ( spec.pitch_cam ) ;
+  std::string sr = std::to_string ( spec.roll_cam ) ;
+  // const char * nargv [ 18 + visor_argc - 1 ] ;
+  std::vector < const char *> nargv ;
+  nargv.push_back ( "envutil" ) ;
+  nargv.push_back ( "--output" ) ;
+  nargv.push_back ( "none.jpg" ) ;
+  nargv.push_back ( "--twine" ) ;
+  nargv.push_back ( "0" ) ;
+  nargv.push_back ( "--hfov" ) ;
+  nargv.push_back ( "65" ) ;
+
+  for ( std::size_t a = 1 ; a < visor_argc ; a++ )
+    nargv.push_back ( visor_argv[a] ) ;
+  
+  nargv.push_back ( "--width" ) ;
+  nargv.push_back ( sw.c_str() ) ;
+  nargv.push_back ( "--height" ) ;
+  nargv.push_back ( sh.c_str() ) ;
+  nargv.push_back ( "--yaw" ) ;
+  nargv.push_back ( sy.c_str() ) ;
+  nargv.push_back ( "--pitch" ) ;
+  nargv.push_back ( sp.c_str() ) ;
+  nargv.push_back ( "--roll" ) ;
+  nargv.push_back ( sr.c_str() ) ;
+  nargv.push_back ( "--hfov" ) ;
+  nargv.push_back ( sf.c_str() ) ;
+  int nargc = nargv.size() ; // 18 + visor_argc - 1 ;
+  core ( nargc , nargv.data() , true ) ;
+
+  return ( spec.serial_no != 0 ) ;
+}
+
 int main ( int argc , const char ** argv )
 {
+  // test the last argument. if it's '+', we are running tethered
+  // to a visor job, and if it's '-', we run in 'pipe mode', fetching
+  // argument lines from cin.
+
+  if ( std::string ( argv [ argc - 1 ] ) == "+" )
+  {
+    // tethered mode is handled by a commodity function in class
+    // visor_protocol (in visor.h).
+
+    visor_protocol::render_loop ( handle_job ) ;
+    return 0 ;
+  }
+
   if ( std::string ( argv [ argc - 1 ] ) != "-" )
     core ( argc , argv ) ;
   else
