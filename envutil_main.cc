@@ -1200,8 +1200,8 @@ void arguments::init ( int argc , const char ** argv )
       (extent_type&) args
         = get_extent ( projection , width , height , hfov  ) ;
     }
-    assert ( x0 < x1 ) ;
-    assert ( y0 < y1 ) ;
+    assert ( x0 <= x1 ) ;
+    assert ( y0 <= y1 ) ;
 
     step = ( x1 - x0 ) / width ;
 
@@ -1696,7 +1696,10 @@ using namespace std::chrono_literals ;
 bool handle_job ( ipc_data_t & ipc , int job_pending )
 {
   spec_t & spec ( ipc.spec_array [ job_pending ] ) ;
-  
+
+  if ( spec.serial_no == 0 )
+    return false ;
+
   // for now we just produce data reflecting some of the spec's
   // data fields (yaw_cam, pitch_cam)
 
@@ -1712,11 +1715,18 @@ bool handle_job ( ipc_data_t & ipc , int job_pending )
 
   // guard against overly large windows
 
-  if (   spec.height_cam * spec.width_cam
-       > ipc.desktop_width * ipc.desktop_height )
+  if ( spec.snapshot == false )
   {
-    spec.height_cam = ipc.desktop_height ;
-    spec.width_cam = ipc.desktop_width ;
+    // if it's not a snapshot job, we clamp the extent to the size
+    // of the frame buffers in the shared memory. Currently, the clamp
+    // is done silently.
+
+    if (   spec.height_cam * spec.width_cam
+         > ipc.desktop_width * ipc.desktop_height )
+    {
+      spec.height_cam = ipc.desktop_height ;
+      spec.width_cam = ipc.desktop_width ;
+    }
   }
 
   args.p_screen_data = (std::uint32_t*) p ;
@@ -1724,12 +1734,6 @@ bool handle_job ( ipc_data_t & ipc , int job_pending )
   std::vector < const char * > visor_argv ;
   std::size_t visor_argc ;
   
-  ipc.flat_args.extract ( visor_argc , visor_argv ) ;
-
-    // for ( std::size_t i = 0 ; i < visor_argc ; i++ )
-    //   std::cout << "visor arg " << i << " "
-    //             << visor_argv [ i ] << std::endl ;
-
   // for now, we set the argument vector up 'on foot':
 
   std::string sw = std::to_string ( spec.width_cam ) ;
@@ -1738,15 +1742,28 @@ bool handle_job ( ipc_data_t & ipc , int job_pending )
   std::string sf = std::to_string ( spec.hfov_cam ) ;
   std::string sp = std::to_string ( spec.pitch_cam ) ;
   std::string sr = std::to_string ( spec.roll_cam ) ;
-  // const char * nargv [ 18 + visor_argc - 1 ] ;
+
   std::vector < const char *> nargv ;
+
   nargv.push_back ( "envutil" ) ;
   nargv.push_back ( "--output" ) ;
-  nargv.push_back ( "none.jpg" ) ;
+  if ( spec.snapshot )
+  {
+    nargv.push_back ( spec.filename.c_str() ) ;
+  }
+  else
+  {
+    nargv.push_back ( "none.jpg" ) ;
+  }
   nargv.push_back ( "--twine" ) ;
-  nargv.push_back ( "0" ) ;
+  if ( spec.refine )
+    nargv.push_back ( "-1" ) ;
+  else
+    nargv.push_back ( "0" ) ;
   nargv.push_back ( "--hfov" ) ;
   nargv.push_back ( "65" ) ;
+
+  ipc.flat_args.extract ( visor_argc , visor_argv ) ;
 
   for ( std::size_t a = 1 ; a < visor_argc ; a++ )
     nargv.push_back ( visor_argv[a] ) ;
@@ -1763,10 +1780,27 @@ bool handle_job ( ipc_data_t & ipc , int job_pending )
   nargv.push_back ( sr.c_str() ) ;
   nargv.push_back ( "--hfov" ) ;
   nargv.push_back ( sf.c_str() ) ;
-  int nargc = nargv.size() ; // 18 + visor_argc - 1 ;
-  core ( nargc , nargv.data() , true ) ;
 
-  return ( spec.serial_no != 0 ) ;
+//   std::cout << "***** have " << nargv.size() << " args" << std::endl ;
+//   
+//   for ( std::size_t i = 1 ; i < nargv.size() ; i++ )
+//   {
+//     std::cout << "arg " << i << " "
+//               << nargv [ i ] << std::endl ;
+//   }
+
+  int nargc = nargv.size() ;
+
+  bool tethered = true ;
+  if ( spec.snapshot )
+  {
+    tethered = false ;
+    spec.snapshot = false ;
+  }
+
+  core ( nargc , nargv.data() , tethered ) ;
+
+  return true ;
 }
 
 int main ( int argc , const char ** argv )

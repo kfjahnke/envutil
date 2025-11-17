@@ -57,6 +57,11 @@ SOFTWARE.
 #include <boost/interprocess/sync/interprocess_condition.hpp>
 #include <boost/interprocess/offset_ptr.hpp>
 
+typedef std::chrono::high_resolution_clock::time_point vs_time_t ;
+#define NOW() std::chrono::high_resolution_clock::now()
+#define delta_t(a,b) std::chrono::duration_cast<std::chrono::milliseconds> \
+                       ( b - a ) . count() ;
+
 const std::size_t NJOBS = 12 ;
 const std::size_t NFRAMES = 5 ;
 
@@ -70,6 +75,8 @@ using ShmemBytePtr = boost::interprocess::offset_ptr<std::byte>;
 struct spec_t
 {
   std::size_t serial_no ;
+  bool refine = false ;
+  bool snapshot = false ;
 
   boost::interprocess::string filename ;
 
@@ -91,6 +98,40 @@ struct spec_t
 
   int bits_per_pixel = 32 ;
   std::size_t buffer_index ;
+
+  vs_time_t job_enqueued ;
+  vs_time_t rendering_starts ;
+  vs_time_t rendering_ends ;
+  vs_time_t frame_enqueued ;
+  vs_time_t frame_fetched ;
+  vs_time_t texture_updated ;
+  vs_time_t sprite_created ;
+  vs_time_t display_called ;
+  vs_time_t display_returns ;
+
+  void print_timing()
+  {
+    auto dt1 = delta_t ( job_enqueued , rendering_starts ) ;
+    auto dt2 = delta_t ( rendering_starts , rendering_ends ) ;
+    auto dt3 = delta_t ( rendering_ends , frame_enqueued ) ;
+    auto dt4 = delta_t ( frame_enqueued , frame_fetched ) ;
+    auto dt5 = delta_t ( frame_fetched , texture_updated ) ;
+    auto dt6 = delta_t ( texture_updated , sprite_created ) ;
+    auto dt6a = delta_t ( sprite_created , display_called ) ;
+    auto dt7 = delta_t ( display_called , display_returns ) ;
+    auto dt8 = delta_t ( job_enqueued , display_returns ) ;
+
+    std::cout << "--------------" << serial_no << std::endl ;
+    std::cout << "rnd_starts:   " << dt1 << std::endl ;
+    std::cout << "rendering:    " << dt2 << std::endl ;
+    std::cout << "to frame q:   " << dt3 << std::endl ;
+    std::cout << "from frame q: " << dt4 << std::endl ;
+    std::cout << "to texture:   " << dt5 << std::endl ;
+    std::cout << "to sprite:    " << dt6a << std::endl ;
+    std::cout << "to call dsp:  " << dt6 << std::endl ;
+    std::cout << "to dsp ret:   " << dt7 << std::endl ;
+    std::cout << "total:        " << dt8 << std::endl ;
+  }
 } ;
 
 using spec_t_allocator = managed_shared_memory::allocator<spec_t>::type;
@@ -484,15 +525,17 @@ struct visor_protocol
     
     ipc.flat_args.extract ( visor_argc , visor_argv ) ;
 
-    for ( std::size_t i = 0 ; i < visor_argc ; i++ )
-      std::cout << "visor arg " << i << " "
-                << visor_argv [ i ] << std::endl ;
+    // for ( std::size_t i = 0 ; i < visor_argc ; i++ )
+    //   std::cout << "visor arg " << i << " "
+    //             << visor_argv [ i ] << std::endl ;
 
     int job_pending ;
-    bool have_job = false ;
+    bool have_job ;
 
     while ( true )
     {
+      have_job = false ;
+
       {
         // we protect the queue access with a 'scoped_lock' which is the
         // euqivalent of a std::lock_guard. if the job queue has a job
@@ -526,12 +569,30 @@ struct visor_protocol
         // a job_t, which is an index into spec_array. we pass the spec_t
         // per reference.
 
+        spec_t & spec ( ipc.spec_array [ job_pending ] ) ;
+
+        // job with serial number zero signals session end
+
+        if ( spec.serial_no == 0 )
+          break ;
+
+        spec.rendering_starts = NOW() ;
+        bool snapshot = spec.snapshot ;
         bool success = job_handler ( ipc , job_pending ) ;
+        spec.rendering_ends = NOW() ;
 
         if ( ! success )
           break ;
 
-        // now we want to push it to the frame queue, but to do so, the
+        // if the job was a snapshot, we mustn't push anything to the
+        // frame queue - the frame was stored in a file and it's also
+        // potentially much larger than one of the frame buffers in
+        // shared memory.
+
+        if ( snapshot )
+          continue ;
+
+        // we want to push a frame to the frame queue, but to do so, the
         // frame queue must have space. if the queue is full already, we
         // wait until the mainprocess signals that it has taken a frame
         // from the queue.
@@ -544,6 +605,7 @@ struct visor_protocol
 
             if ( ipc.frame_queue.size() < 3 )
             {
+              spec.frame_enqueued = NOW() ;
               ipc.frame_queue.push_back ( job_pending ) ;
               have_job = false ;
               break ;
