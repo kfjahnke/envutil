@@ -636,11 +636,12 @@ struct arguments
   std::string synopsis ;
   int prefilter_degree ;
   int spline_degree ;
-  int twine  ;
+  int twine ;
   std::string twf_file ;
   bool twine_normalize ;
   bool twine_precise ;
   double twine_width , twine_density , twine_sigma , twine_threshold ;
+  int twine_max ;
   std::vector < zimt::xel_t < float , 3 > > twine_spread ;
   std::vector < cp_t > cp_v ;
 

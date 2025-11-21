@@ -267,6 +267,7 @@ envutil --help gives a summary of command line options:
       --twine_density DENSITY     increase tap count of an 'automatic' twining filter
       --twine_sigma SIGMA         use a truncated gaussian for the twining filter (default: don't)
       --twine_threshold THR       discard twining filter taps below this threshold
+      --twine_max MAX             maximal twine factor when using automatic twining
     parameters for mounted (facet) image input:
       --photo IMAGE               load photographic image, interpreting metadata
       --facet IMAGE PROJECTION HFOV YAW PITCH ROLL
@@ -290,6 +291,33 @@ there is an EOF on standard input. Using this facility is helpful in reducing
 processing and I/O, because source images which are read once will persist
 in memory for another cycle, allowing successive rendering jobs to 'pick up'
 images from the previous cycle.
+
+Another 'terminal' option is to suffix the command line with a '+' sign.
+This switches envutil into 'tethering' mode, using the 'visor protocol'.
+This is a new feature which is developed in the [visor project](https://bitbucket.org/kfj/visor). The 'visor protocol' establishes a shared memory
+segment between a visor process and an envutil process. the visor process
+sends 'job requests' in the form of parameter sets which envitil processes.
+The resulting renditions are passed back to the visor process via the
+shared memory, and the visor process displays them. The visor process
+also provides a GUI to navigate in the view, and because the rendering
+and display are highly optimized, it's often possible to run animations
+like pans and zooms at screen rates. Still images are rendered with
+better quality than moving images. To run a tethered envutil process,
+you would typically use a little bit of shell code, like this:
+
+    #! /bin/bash
+    # run an envutil process tethered to a visor
+    visor --facet my_image.jpg rectilinear 65 0 0 0 &
+    envutil + &
+
+Note how the 'facet' parameter set is passed to the visor process - it
+will be passed on to every envutil job. Since 'visor' does not yet have a
+file select dialog, this is the only way to pass the image file name and
+facet properties. With the terminal '&' of the two commands, they are made
+to run as background jobs. You can now interact with the view, and if you
+terninate the visor process, the tethered envutil process also terminates.
+This is work in progress - it does function already but the GUI is still
+rudimentary - it's little more than a proof of concept.
 
 envutil can now leverage some of OCIO's colour space management capabilities
 via OIIO's interface to OCIO. I've kept it simple and only invoke OIIO's
@@ -1473,6 +1501,18 @@ want to be 'more generous' and increase the number of kernel coefficients,
 and twine_density does that: if your twining kernel is generated
 automatically, it multiplies the 'twine' value with this factor, rounds,
 and assigns the result to 'twine'.
+
+## --twine_max MAX  maximal twine factor when using automatic twining
+
+When envutil is rendering a scaled-down view with automatic twining,
+adapting the 'twine' value to the magnification in the center can lead
+to very large twine factors, because each target pixel would 'collect'
+all source pixels in the area which it corresponds to in the source
+image. From a certain value onwards, this produces heave CPU load
+without a true benefit: a coarser sampling of the source image does
+still produce the desired anti-aliasing unless there are 'pathological'
+cases, e.g. small regular structures in the source image which then
+may result in moiree effects. the default value for twine_max is eight.
 
 # Additional Technical Notes
 

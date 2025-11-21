@@ -319,6 +319,10 @@ void arguments::init ( int argc , const char ** argv )
     .help("discard twining filter taps below this threshold")
     .metavar("THR");
 
+  ap.arg("--twine_max MAX")
+    .help("maximal twine factor when using automatic twining")
+    .metavar("MAX");
+
   ap.separator("  parameters for mounted (facet) image input:");
 
   // tentative
@@ -431,6 +435,7 @@ void arguments::init ( int argc , const char ** argv )
   twine_density = ap["twine_density"].get<float>(1.0);
   twine_sigma = ap["twine_sigma"].get<float>(0.0);
   twine_threshold = ap["twine_threshold"].get<float>(0.0);
+  twine_max = ap["twine_max"].get<int>(8);
   x0 = ap["x0"].get<float> ( 0.0 ) ;
   x1 = ap["x1"].get<float> ( 0.0 ) ;
   y0 = ap["y0"].get<float> ( 0.0 ) ;
@@ -1496,6 +1501,18 @@ void arguments::twine_setup()
       // pixels in the ground truth signal due to undersampling.
 
       twine = int ( 1.0 + 1.0 / mag ) ;
+
+      // tentative: we clamp the twine value. without clamping,
+      // renditions of e.g. rectiliear views with vey large hfov
+      // would take very long due to excessive twine values.
+      // Clamping to a relatively generous value will still result
+      // in a weighted sum of a good many 'ground truth' samples,
+      // and since the sampling is evenly spread over the area
+      // corresponding to a single output pixel, we get a population
+      // of ground truth samples which is kind of 'representative',
+      // and the desired antialiasing effect should still be achieved.
+
+      twine = std::min ( args.twine_max , twine ) ;
       twine_width = 1.0 ;
     }
 
