@@ -678,6 +678,8 @@ struct arguments
   int single ;
   int mask_for ;
 
+  float brighten ; // adjust output brightness
+
   // the 'arguments' object's 'init' takes the main program's argc
   // and argv.
 

@@ -95,6 +95,7 @@ struct spec_t
   double roll_cam ;
   unsigned int width_cam ;
   unsigned int height_cam ;
+  float brighten ;
 
   int bits_per_pixel = 32 ;
   std::size_t buffer_index ;

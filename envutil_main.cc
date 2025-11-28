@@ -94,6 +94,13 @@ namespace project
 #include <OpenImageIO/filesystem.h>
 #include <OpenImageIO/argparse.h>
 #include <OpenImageIO/color.h>
+#include <OpenImageIO/imagebufalgo.h>
+
+#include <iostream>
+#include <string>
+
+using namespace OIIO;
+
 
 using OIIO::ArgParse ;
 using OIIO::Filesystem::convert_native_arguments ;
@@ -273,6 +280,10 @@ void arguments::init ( int argc , const char ** argv )
     .help("high end of the vertical range")
     .metavar("EXTENT");
 
+  ap.arg("--brighten FACTOR")
+    .help("multiplicative factor to darken/brighten output")
+    .metavar("FACTOR");
+
   // interpolation options
 
   ap.separator("  interpolation options:");
@@ -450,6 +461,7 @@ void arguments::init ( int argc , const char ** argv )
   yaw = ap["yaw"].get<float>(0.0);
   pitch = ap["pitch"].get<float>(0.0);
   roll = ap["roll"].get<float>(0.0);
+  brighten = ap["brighten"].get<float>(1.0);
   projection_str = ap["projection"].as_string ( "rectilinear" ) ;
 
   if ( prefilter_degree < 0 )
@@ -1039,6 +1051,15 @@ void arguments::init ( int argc , const char ** argv )
       m.brighten = 1.0f ;
     }
 
+    // finally, output brightness is multiplied on the facets' individual
+    // brighten values - avoiding a final multiplication of the output
+    // with that factor.
+
+    if ( args.brighten != 1.0 )
+    {
+      m.brighten *= args.brighten ;
+    }
+
     if ( m.has_pto_mask || m.has_lens_crop )
     {
       if ( m.nchannels == 1 || m.nchannels == 3 )
@@ -1334,8 +1355,10 @@ void make_spread ( std::vector < zimt::xel_t < float , 3 > > & trg ,
 }
 
 // read the twining filter from a twf-file.
+// TODO: improve file format: allow comments
 
-void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
+void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg ,
+                     double twine_width )
 {
   zimt::xel_t < float , 3 > c ;
 
@@ -1364,13 +1387,9 @@ void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
 
   if ( args.verbose )
   {
-    std::cout << args.twf_file << " yields twining filter kernel:"
-              << std::endl ;
-    for ( const auto & c : trg )
-    {
-       std::cout << "x: " << c[0] << " y: " << c[1]
-                 << " w: " << c[2] << std::endl ;
-    }
+    std::cout << "processing twf file: " << args.twf_file << std::endl ;
+    std::cout << "applying scaling factor twine_width: "
+              << args.twine_width << std::endl ;
     if ( args.twine_normalize )
     {
       std::cout << "twining filter weights sum: 1.0" << std::endl ;
@@ -1385,6 +1404,13 @@ void read_twf_file ( std::vector < zimt::xel_t < float , 3 > > & trg )
 
 void arguments::twine_setup()
 {
+  if ( args.twf_file != std::string() )
+  {
+    // if there is a twf file, unconditionally switch twining on
+
+    twine = 1 ;
+  }
+
   // first, we initialize the twining parameters.
 
   if ( twine != -1 )
@@ -1503,7 +1529,7 @@ void arguments::twine_setup()
       twine = int ( 1.0 + 1.0 / mag ) ;
 
       // tentative: we clamp the twine value. without clamping,
-      // renditions of e.g. rectiliear views with vey large hfov
+      // renditions of e.g. rectiliear views with very large hfov
       // would take very long due to excessive twine values.
       // Clamping to a relatively generous value will still result
       // in a weighted sum of a good many 'ground truth' samples,
@@ -1511,6 +1537,10 @@ void arguments::twine_setup()
       // corresponding to a single output pixel, we get a population
       // of ground truth samples which is kind of 'representative',
       // and the desired antialiasing effect should still be achieved.
+      // unwanted moiree-like artifacts may be further reduced by using
+      // twining kernels with non-regular patterns, e.g. random point
+      // clouds with gaussian weights - but these would have to be
+      // introduced with w twf file, or one might consider dtithering.
 
       twine = std::min ( args.twine_max , twine ) ;
       twine_width = 1.0 ;
@@ -1561,7 +1591,7 @@ void arguments::twine_setup()
     // taken from the twf file. One might consider buffering the
     // file's original content.
 
-    read_twf_file ( args.twine_spread ) ;
+    read_twf_file ( args.twine_spread , args.twine_width ) ;
   }
 
 
@@ -1571,6 +1601,18 @@ void arguments::twine_setup()
 
     assert ( twine_spread.size() ) ;
   }
+
+  if ( args.verbose )
+  {
+    std::cout << "final twining filter kernel:" << std::endl ;
+    int ord = 0 ;
+    for ( const auto & c : args.twine_spread )
+    {
+       std::cout << ord++ << "\tx:\t" << c[0] << "\ty:\t" << c[1]
+                 << "\tw:\t" << c[2] << std::endl ;
+    }
+  }
+
 }
 
 // cumulated frame rendering time
@@ -1759,6 +1801,7 @@ bool handle_job ( ipc_data_t & ipc , int job_pending )
   std::string sf = std::to_string ( spec.hfov_cam ) ;
   std::string sp = std::to_string ( spec.pitch_cam ) ;
   std::string sr = std::to_string ( spec.roll_cam ) ;
+  std::string sb = std::to_string ( spec.brighten ) ;
 
   std::vector < const char *> nargv ;
 
@@ -1797,6 +1840,11 @@ bool handle_job ( ipc_data_t & ipc , int job_pending )
   nargv.push_back ( sr.c_str() ) ;
   nargv.push_back ( "--hfov" ) ;
   nargv.push_back ( sf.c_str() ) ;
+  if ( spec.brighten != 1.0 )
+  {
+    nargv.push_back ( "--brighten" ) ;
+    nargv.push_back ( sb.c_str() ) ;
+  }
 
 //   std::cout << "***** have " << nargv.size() << " args" << std::endl ;
 //   
@@ -1820,8 +1868,70 @@ bool handle_job ( ipc_data_t & ipc , int job_pending )
   return true ;
 }
 
+// code to test for availability of an OCIO config. this code and the code to
+// invoke it (in the beginning of main() was generated by google's gemini.
+
+bool is_ocio_config_active()
+{
+    // 1. Access the currently loaded global configuration (uses $OCIO or fallback).
+    // Note: The accessor "default_colorconfig()" is the correct call for your version.
+    const ColorConfig & config ( ColorConfig::default_colorconfig() ) ;
+    
+    std::string scene_linear_cs_name;
+
+    // 2. Attempt to resolve the "scene_linear" role.
+    // The role name will be empty or "linear" in the minimal fallback, 
+    // but something like "ACEScg" in a full OCIO config.
+    try {
+        // This call is now correct for your OIIO version.
+        scene_linear_cs_name = config.getColorSpaceNameByRole("scene_linear") ;
+    } catch (...) {
+        // If an exception occurs, treat it as inactive/fallback.
+        return false;
+    }
+
+    // 3. Evaluation Logic
+
+    // A. Check for number of colorspaces (The high-confidence indicator)
+    // The fallback has 4-5 spaces (linear, sRGB, Rec709, raw). 
+    // A full OCIO config has many more.
+    if (config.getNumColorSpaces() > 10) { 
+        return true; // Confident: Full OCIO config is active.
+    }
+    
+    // B. Check the resolved name (The final check)
+    // If the full OCIO config is active, the role usually maps to a name 
+    // that is NOT the simple built-in 'linear' name.
+    
+    // We explicitly check if the resolved name is the simple fallback name.
+    if (scene_linear_cs_name == "linear" || scene_linear_cs_name == "") {
+        // If it maps to the built-in OIIO "linear" space, it's the fallback.
+        return false;
+    }
+
+    // If the space count is low (<= 10) BUT the resolved role is neither "linear" nor empty,
+    // we assume a custom, small OCIO config is loaded (i.e., OCIO is active).
+    if (scene_linear_cs_name.length() > 0) {
+        return true;
+    }
+    
+    // If all else fails, it's the fallback.
+    return false;
+}
+
 int main ( int argc , const char ** argv )
 {
+  if (is_ocio_config_active())
+  {
+    std::cout << "✅ OCIO is ACTIVE. Use 'scene_linear' (maps to " 
+              << ColorConfig::default_colorconfig().getColorSpaceNameByRole("scene_linear") 
+              << ") for the working space.\n";
+  }
+  else
+  {
+    std::cout << "⚠️ OCIO is INACTIVE (OIIO fallback). Use 'linear' for the working space.\n";
+  }
+
   // test the last argument. if it's '+', we are running tethered
   // to a visor job, and if it's '-', we run in 'pipe mode', fetching
   // argument lines from cin.

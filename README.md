@@ -865,6 +865,9 @@ need to modify the hfov value like this:
 
 The resulting value, fov', is what you pass to envutil - it's slightly
 larger than the 'ctc' value, because it's now measured edge-to-edge.
+Note also that to have the x0, x1, y0 and y1 parameters honoured, you
+must pass --hfov 0 explicitly - if the default is picked or a non-zero
+value is passed, these 'extent' parameters will be ignored.
 
 ## --width EXTENT    width of the output
 
@@ -987,7 +990,29 @@ workings of this program - if you use -v, the verbose output will tell you
 for each rendering which extent values are generated from a field of view
 parameter, given a specific projection. This can help you figure out specific
 values you may want to pass, e.g. to produce anisotropic output or cropped
-images.
+images. If the 'extent' is calculated from the hfov, an isotropic rendering
+with the optical axis pointing to the output image's center is produced,
+so you typically see x0 = -x1 and y0 = -y1.
+
+Note that to have the x0, x1, y0 and y1 parameters honoured, you must pass
+--hfov 0 explicitly - if the default hfov is picked or a non-zero value is
+passed, these 'extent' parameters will be ignored.
+
+For some cases, the 'extent' parameters are easy to figure out. For
+rectilinear images, they are the tangens of the angle from the central
+ray. For spherical and cyclindrical images, x0 and x1 correspond with the
+angle to the central ray given in radians. y0 and y1 for cyclindrical
+images are like for rectilinear ones, and for spherical images, they are
+also angles to the central ray in radians.
+For fisheye images, the angles are measured precisely on the central
+horizontal and vertical - giving an hfov or vfov isn't enough, because
+it's a radial transformation, so the reference lines are needed.
+Note that typically x0 and y0 are negative and x1 and y1 are positive,
+unless the optical axis does not 'hit' the image at all.
+
+A 'stepper' producing a grid will move through the x and y intervals in
+ascending order, and x0 must always be smaller than x1 and y0 smaller
+than y1 - reversing the values will produce an error, not a flipped image.
 
 <div id="interpolation-options"/></div>
 
@@ -1268,7 +1293,7 @@ the effect is similar to what you get from OIIO's 'environment' lookup
 with the elliptic filter.
 
 Because the two vectors, xv and yv, are recalculated for every contributing
-coordinate, the filer adapts to the location, and handles varying local
+coordinate, the filter adapts to the location, and handles varying local
 geometry within it's capability: the sampling theorem still has to be
 obeyed insofar as generated sub-pickups in a cluster mustn't spread out
 too far and when they are too close, shortcomings of the underlying
@@ -1415,7 +1440,7 @@ and finally the thresholding eliminates small weights.
 
 After thresholding, the weights are 'normalized' to produce a filter with 'unit
 gain' - you can see that all the weights add up to 1.0 precisely. Without the
-normlization, just eliminating the sub-threshold taps would darken the output.
+normalization, just eliminating the sub-threshold taps would darken the output.
 
 ## --twine_precise      project twining basis vectors to tangent plane
 

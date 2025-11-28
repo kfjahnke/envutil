@@ -2193,10 +2193,17 @@ void fuse ( int ninputs )
     if ( args.solo != -1 )
     {
       // special case: use only one facet.
-      // Note how we use a stepper which does not normalize it's result:
-      // Since we don't compare the z component of the ray as quality
-      // criterion (which we'd do for multiple facets) we can do without
-      // the normalization.
+
+      // initially, I coded so that single-facet rendering uses
+      // steppers with 'normalize' set to false. This is okay most of
+      // the time, but rectilinear and cylindrical source images can
+      // produce rays which differ significantly from their unit-length
+      // equivalent, and then, differencing will lead to wrong results.
+      // so I change the code to pass 'normalize' true always and rely
+      // on the stepper class itself to 'know' whether it has to add
+      // the final normalization or whether the result is already
+      // normalized. Some classes can normalize without having to
+      // go 'all the way' (division by the norm).
 
       if ( args.verbose )
         std::cout << "using single-facet rendering" << std::endl ;
@@ -2208,7 +2215,7 @@ void fuse ( int ninputs )
 
       if ( generic_source || generic_target )
       {
-        deriv_stepper < float , LANES , generic_stepper , false > get_ray
+        deriv_stepper < float , LANES , generic_stepper , true > get_ray
           ( args.width , args.height ,
             args.x0 , args.x1 , args.y0 , args.y1 ,
             tf_ex_facet < float , LANES > ( args , fct ) ) ;
@@ -2217,7 +2224,7 @@ void fuse ( int ninputs )
       }
       else
       {
-        deriv_stepper < float , LANES , STP , false > get_ray
+        deriv_stepper < float , LANES , STP , true > get_ray
             ( basis_v[f][0] , basis_v[f][1] , basis_v[f][2] ,
               args.width , args.height ,
               args.x0 , args.x1 , args.y0 , args.y1 ) ;
