@@ -43,6 +43,7 @@ SOFTWARE.
 #include <cstddef>
 #include <string>
 #include <iostream>
+#include <vector>
 #include <chrono>
 #include <thread>
 #include <functional>

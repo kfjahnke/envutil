@@ -1,4 +1,4 @@
-#          cmake file for envutil
+#             cmake file for envutil
 #          
 #             Kay F. Jahnke <kfjahnke+envutil@gmail.com> 2024
 #
@@ -28,7 +28,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# You need some dependencies: OpenImageIO and Imath.
+# You need some dependencies: OpenImageIO and Imath. highway is recommended.
 
 # To build, try this for starters (ninja instead of make should also work):
 
@@ -37,348 +37,273 @@
 # cmake ..
 # make
 
-cmake_minimum_required(VERSION 3.10)
+# I usually use clang, and to make a fully optimized build, I use:
 
-get_filename_component(_varsource "${CMAKE_SOURCE_DIR}" REALPATH)
-get_filename_component(_varbinary "${CMAKE_BINARY_DIR}" REALPATH)
+# cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release ..
 
-# prevent in-tree building
+# I recently recreated the cmake file with the help of chatGPT.
 
-if("${_varsource}" STREQUAL "${_varbinary}")
-	message(FATAL_ERROR "In-source builds are not allowed")
-endif()
+cmake_minimum_required(VERSION 3.16)
+project(envutil VERSION 0.3.0 LANGUAGES CXX)
 
-# # envutil should be built with clang++
-# 
-# set(ENV{CXX} clang++)
-# set(ENV{CC} clang)
+# -----------------------
+# Basic project settings
+# -----------------------
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(envutil_major 0)
-set(envutil_minor 2)
-set(envutil_patch 0)
+option(MULTI_SIMD_ISA "Build per-ISA object files and use custom dispatching" ON)
+option(ENABLE_STRICT_WARNINGS "Enable -Wall -Wextra on supported compilers" OFF)
 
-message(STATUS "VERSION = ${envutil_major}.${envutil_minor}.${envutil_patch}")
+message(STATUS "Project: ${PROJECT_NAME} ${PROJECT_VERSION}")
+message(STATUS "MULTI_SIMD_ISA = ${MULTI_SIMD_ISA}")
 
-# Project name 'envutil'
+# -----------------------
+# Detect platform (simple)
+# TODO: handle e.g. RiscV properly
+# -----------------------
 
-set(project_name envutil)
-project (envutil)
-
-# specify some directories for installation of components. Note that
-# some builds fail if CMAKE_INSTALL_PREFIX points to folders with
-# white space or non-alphanumeric characters, like 'Program Files (x86)'
-# on windows. If that happens, use a 'sane' path like '/usr/local'.
-
-message(STATUS "***** CMAKE_INSTALL_PREFIX ${CMAKE_INSTALL_PREFIX}")
-
-# work out the target processor architecture by checking for all values
-# of CMAKE_SYSTEM_PROCESSOR which, on any platform, indicates an intel
-# processor.
-
-message(STATUS "***** SYSTEM PROCESSOR ${CMAKE_SYSTEM_PROCESSOR}")
-
-# TODO: figuring out the architecture is only tested for x64_86
-
-if (     ${CMAKE_SYSTEM_PROCESSOR} STREQUAL x86_64
-      OR ${CMAKE_SYSTEM_PROCESSOR} STREQUAL AMD64 )
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
   set(x86_64 TRUE)
-  message(STATUS "***** setting i86 TRUE for an intel/AMD target")
 else()
   set(x86_64 FALSE)
-  message(STATUS "***** setting i86 FALSE; not an intel/AMD target")
-
-  # tentative: I don't know what and ARM system would produce
-
-  if ( ${CMAKE_SYSTEM_PROCESSOR} STREQUAL arm64 )
-    message(STATUS "***** setting arm64 TRUE for an ARM target")
-    set ( arm64 TRUE )
-  else()
-    message(STATUS "***** setting arm64 FALSE, not an ARM target")
-    set ( arm64 FALSE )
-    if ( ${CMAKE_SYSTEM_PROCESSOR} STREQUAL aarch64 )
-      message(STATUS "***** setting aarch64 TRUE for an SVE target")
-      set ( aarch64 TRUE )
-    else()
-      message(STATUS "***** setting aarch64 FALSE, not an SVE target")
-      set ( aarch64 FALSE )
-    endif()
-  endif()
 endif()
 
-# assuming we have detected the architecture, we list ISAs
-
-if ( x86_64 )
-  list ( APPEND isa_l SSE2 SSSE3 SSE4 AVX2 AVX3 AVX3_ZEN4 AVX3_SPR AVX3_DL AVX10_2)
-# the NEON_BF16 ISA seems not to be built by default. We've used this
-# code to build envutil on a macBook pro with M1 processor:
-elseif ( arm64 )
-  list ( APPEND isa_l NEON_WITHOUT_AES NEON NEON_BF16 )
-# tentative, we have no SVE systems
-elseif ( aarch64 )
-  list ( APPEND isa_l ALL_SVE SVE SVE2 SVE_256 SVE2_128 )
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  set(arm64 TRUE)
 else()
-  # tentative. on my system, this doesn't work.
-  list ( APPEND isa_l EMU128 )
+  set(arm64 FALSE)
 endif()
 
-# rules to create the object files
-
-set(CMAKE_VERBOSE_MAKEFILE ON)
-
-## OIIO anticipates moving to C++17 in 2024
-
-set(CMAKE_CXX_STANDARD 17)
-message(STATUS "***** using C++17 standard")
-
-find_package ( OpenImageIO CONFIG REQUIRED )
-if ( OpenImageIO_FOUND )
-  message ( STATUS "find_package: OpenImageIO = true" )
+# --------
+# ISA list
+# TODO: handle e.g. RiscV properly
+# -----------------------
+if (x86_64)
+  set(isa_l SSE2 SSSE3 SSE4 AVX2 AVX3 AVX3_ZEN4 AVX3_SPR AVX3_DL AVX10_2)
+elseif (arm64)
+  set(isa_l NEON_WITHOUT_AES NEON NEON_BF16)
+else()
+  set(isa_l EMU128)
 endif()
 
-find_package ( Imath CONFIG REQUIRED )
-if ( Imath_FOUND )
-  message ( STATUS "find_package: Imath = true" )
+# -----------------------
+# Find dependencies
+# -----------------------
+
+find_package(OpenImageIO CONFIG REQUIRED)
+find_package(Imath CONFIG REQUIRED)
+find_package(Threads REQUIRED)
+
+# Highway discovery (optional).
+
+find_package(HWY CONFIG)
+if(HWY_FOUND)
+  message(STATUS "Highway found: HWY_FOUND=TRUE")
+else()
+  message(STATUS "Highway not found")
 endif()
 
-option(MULTI_SIMD_ISA "AUTOMATIC SIMD ISA DISPATCH (REQUIRES HIGHWAY)" ON)
+# -----------------------
+# Common compile flags (target-local)
+# -----------------------
 
-# if the user hasn't #defined 'BACKEND', we try for highway. if that's
-# available, we use it as back-end, and std::simd if it's not.
+# Keep aggressive optimization in Release configuration only
 
-if ( NOT DEFINED BACKEND )
-  message ( STATUS "BACKEND variable is not set, looking for highway" )
-  find_package ( HWY CONFIG )
-  if ( HWY_FOUND )
-    SET ( BACKEND "highway" )
-    message ( STATUS "found highway, using highway back-end" )
+set(COMMON_RELEASE_FLAGS "-O3")
+
+# SIMD backend selection: user may set BACKEND via -DBACKEND=highway or std.simd
+
+if(NOT DEFINED BACKEND)
+  if(HWY_FOUND)
+    set(BACKEND "highway")
   else()
-    SET ( BACKEND "std::simd" )
-    message ( STATUS "highway not found, using std::simd back-end" )
+    set(BACKEND "std::simd")
   endif()
 endif()
+message(STATUS "SIMD BACKEND = ${BACKEND}")
 
-# now we set 'SIMD_BACKEND' according to the 'BACKEND' variable
-
-if ( "${BACKEND}" STREQUAL "highway" )
-  set ( SIMD_BACKEND "-DUSE_HWY" )
-elseif ( "${BACKEND}" STREQUAL "std::simd" )
-  set ( SIMD_BACKEND "-DUSE_STDSIMD" )
-elseif ( "${BACKEND}" STREQUAL "Vc" )
-  # if the user wants to use the Vc back-end, we must have libVc, and
-  # we add Vc to the required libraries to link with.
-  set ( SIMD_BACKEND "-DUSE_VC" )
-  find_package ( Vc REQUIRED )
-  if ( Vc_FOUND )
-    message ( STATUS "find_package: Vc_FOUND = true" )
-    set ( required_libraries ${required_libraries} Vc )
+if("${BACKEND}" STREQUAL "highway")
+  set(SIMD_BACKEND_FLAG "-DUSE_HWY")
+elseif("${BACKEND}" STREQUAL "std::simd")
+  set(SIMD_BACKEND_FLAG "-DUSE_STDSIMD")
+elseif("${BACKEND}" STREQUAL "Vc")
+  set(SIMD_BACKEND_FLAG "-DUSE_VC")
+  find_package(Vc QUIET)
+  if(TARGET Vc::Vc)
+    list(APPEND EXTRA_LINK_LIBS Vc::Vc)
+  else()
+    message(FATAL_ERROR "Vc backend requested but Vc not found")
   endif()
 else()
-  # -DUSE_GOADING doesn't actually have an effect, but it's clearer
-  # than simply clearing 'SIMD_BACKEND'
-  set ( SIMD_BACKEND "-DUSE_GOADING" )
+  set(SIMD_BACKEND_FLAG "-DUSE_GOADING")
 endif()
 
-if ( MULTI_SIMD_ISA OR ( "${BACKEND}" STREQUAL "highway" ) )
+# -----------------------
+# Source files
+# -----------------------
 
-  message ( STATUS "build is using highway; backend: ${BACKEND}" )
+set(SRC_MAIN
+  envutil_main.cc
+  envutil_dispatch.cc
+  envutil_basic.cc
+)
 
-  # for multi-ISA builds, and for use of the highway SIMD back-end,
-  # we positively need highway. If it wasn't already found earlier
-  # we now do the find_package with REQUIRED flag.
+set(SRC_PAYLOAD envutil_payload.cc)
 
-  if ( NOT HWY_FOUND )
-    find_package ( HWY CONFIG REQUIRED )
-    if ( HWY_FOUND )
-      message ( STATUS "find_package: HWY_FOUND = true" )
-    endif()
+# -----------------------
+# Build path: multi-ISA vs single
+# -----------------------
+
+if(MULTI_SIMD_ISA)
+  if(NOT HWY_FOUND)
+    message(WARNING "MULTI_SIMD_ISA requested but HWY not found. Continuing but you may need highway for TG_ISA macros to make sense.")
   endif()
 
-  # if we arrive here, the find_package call must have succeeded.
+  # Create object libraries, one per ISA
 
-  set ( required_libraries ${required_libraries} hwy )
+  set(OBJECT_LIBS "")
+  foreach(isa IN LISTS isa_l)
+    string(TOUPPER "${isa}" isa_u)
+    set(obj_name "eu_${isa}")
 
-endif()
+    add_library(${obj_name} OBJECT ${SRC_PAYLOAD})
 
-# For now, the only windows build is using msys2/mingw. We look at
-# a few CMake variables and set "WINDOWS" accordingly.
+    # Per-object compile options: define TG_ISA macro and enable multi-simd
+    # define. We choose to set the macro via compile options here so token
+    # pasting works
 
-if(WIN32)
-  message(STATUS "***** found CMake::WIN32, setting WINDOWS TRUE")
-  set(WINDOWS TRUE)
-elseif(MINGW)
-  message(STATUS "***** found CMake::MINGW, setting WINDOWS TRUE")
-  set(WINDOWS TRUE)
-elseif(CYGWIN)
-  message(STATUS "***** found CMake::CYGWIN, setting WINDOWS TRUE")
-  set(WINDOWS TRUE)
-else()
-  set(WINDOWS FALSE)
-endif()
+    # TODO code is a bit dense
 
-# this section was provided by Karl Krieger:
+    target_compile_options(${obj_name} PRIVATE
+      $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:${COMMON_RELEASE_FLAGS} -DTG_ISA=HWY_${isa_u} -DMULTI_SIMD_ISA ${SIMD_BACKEND_FLAG}>
+      $<$<CXX_COMPILER_ID:MSVC>:${COMMON_RELEASE_FLAGS} -DTG_ISA=HWY_${isa_u} -DMULTI_SIMD_ISA ${SIMD_BACKEND_FLAG}>
+    )
 
-# on the mac, macPorts installs to /opt/local, hence:
-# 2025-01-06 Comment Karl: for homebrew we have to use /opt/homebrew
-# Code added to handle link and include directories on Apple architecture
-# for either MacPorts, Homebrew or none.
+    # Optionally add include path pointing to project root for payload includes
 
-if (APPLE)
-  if (EXISTS "/opt/local")
-    message(STATUS "Detected MacPorts installation. Adding /opt/local/lib and /opt/local/include.")
-    link_directories(/usr/local/lib /opt/local/lib)
-    include_directories(/usr/local/include /opt/local/include)
-  elseif (EXISTS "/opt/homebrew")
-    message(STATUS "Detected Homebrew installation. Adding /opt/homebrew/lib and /opt/homebrew/include.")
-    link_directories(/usr/local/lib /opt/homebrew/lib)
-    include_directories(/usr/local/include /opt/homebrew/include)
-  else()
-    message(WARNING "Neither /opt/local (MacPorts) nor /opt/homebrew (Homebrew) directories exist. Defaulting to /usr/local.")
-    link_directories(/usr/local/lib)
-    include_directories(/usr/local/include)
-  endif()
-elseif (WINDOWS)
-  include_directories(/usr/local/include /mingw64/include)
-  link_directories(/usr/local/lib /mingw64/lib)
-endif()
+    target_include_directories(${obj_name} PRIVATE ${PROJECT_SOURCE_DIR})
 
-# replacing my original code here:
-
-# # on the mac, macPorts installs to /opt/local, hence:
-# 
-# if ( APPLE )
-#   link_directories ( /usr/local/lib /opt/local/lib )
-#   include_directories ( /usr/local/include /opt/local/include )
-# elseif ( WINDOWS )
-#   include_directories ( /usr/local/include /mingw64/include )
-#   link_directories ( /usr/local/lib /mingw64/lib )
-# endif()
-
-set( required_libraries
-      ${required_libraries} OpenImageIO OpenImageIO_Util )
-
-set ( COMMON_ARGS "-O3" )
-
-if ( MULTI_SIMD_ISA )
-
-  set_source_files_properties (
-    envutil_main.cc envutil_dispatch.cc envutil_basic.cc
-    PROPERTIES COMPILE_FLAGS "${COMMON_ARGS} -DMULTI_SIMD_ISA -I.." )
-
-  add_executable ( envutil
-                   envutil_main.cc envutil_dispatch.cc envutil_basic.cc)
-
-  foreach ( isa IN LISTS isa_l )
-
-      add_library ( eu_${isa} OBJECT envutil_payload.cc )
-
-      # Here, highway sets the compiler flags for each ISA internally,
-      # the TG_ISA variable 'tells' the build which ISA to use for the
-      # object file at hand.
-
-      # TODO: would use '${COMMON_ARGS} here, but build fails,
-      # hence stating explicitly: -O3
-
-      target_compile_options (
-        eu_${isa} PUBLIC -DTG_ISA=HWY_${isa} -DMULTI_SIMD_ISA -O3 ${SIMD_BACKEND} )
-
-      target_link_libraries ( envutil $<TARGET_OBJECTS:eu_${isa}>)
-
+    list(APPEND OBJECT_LIBS $<TARGET_OBJECTS:${obj_name}>)
   endforeach()
 
+  # Main executable links to object files
+
+  add_executable(envutil ${SRC_MAIN})
+  target_include_directories(envutil PRIVATE ${PROJECT_SOURCE_DIR})
+
+  if(OBJECT_LIBS)
+    target_link_libraries(envutil PRIVATE ${OBJECT_LIBS})
+  endif()
+
 else()
+  # Non multi-ISA: compile payload into the main target
 
-  set_source_files_properties (
-    envutil_main.cc envutil_dispatch.cc envutil_basic.cc
-    PROPERTIES COMPILE_FLAGS ${COMMON_ARGS} )
+  add_executable(envutil ${SRC_MAIN} ${SRC_PAYLOAD})
+  target_include_directories(envutil PRIVATE ${PROJECT_SOURCE_DIR})
 
-  # if you're building envutil for a specific target ISA, you can add
-  # ISA-specific compiler flags via 'ISA_SPECIFIC_ARGS'
-
-  set_source_files_properties ( envutil_payload.cc
-                  PROPERTIES COMPILE_FLAGS
-                  "${COMMON_ARGS} ${SIMD_BACKEND} ${ISA_SPECIFIC_ARGS}" )
-
-  add_executable ( envutil
-                   envutil_main.cc envutil_basic.cc envutil_payload.cc)
+  # compile flags for payload are inherited from target settings below
 
 endif()
 
-target_link_libraries( envutil ${required_libraries} pthread)
+# -----------------------
+# Link libraries
+# -----------------------
+# Prefer imported targets if available
 
-# install the 'useful' binaries (stepper is only a demo)
+if(TARGET OpenImageIO::OpenImageIO)
+  target_link_libraries(envutil PRIVATE OpenImageIO::OpenImageIO OpenImageIO::OpenImageIO_Util)
+else()
+  target_link_libraries(envutil PRIVATE OpenImageIO OpenImageIO_Util)
+endif()
 
-install(TARGETS envutil DESTINATION bin)
+if(TARGET Imath::Imath)
+  target_link_libraries(envutil PRIVATE Imath::Imath)
+else()
+  target_link_libraries(envutil PRIVATE Imath)
+endif()
+
+if(EXTRA_LINK_LIBS)
+  target_link_libraries(envutil PRIVATE ${EXTRA_LINK_LIBS})
+endif()
+
+target_link_libraries(envutil PRIVATE Threads::Threads)
+
+target_link_libraries(envutil PRIVATE hwy)
+
+# -----------------------
+# Compiler options for the main target
+# -----------------------
+# Release-only optimization
+
+target_compile_options(envutil PRIVATE $<$<CONFIG:Release>:${COMMON_RELEASE_FLAGS}>)
+
+# Expose SIMD backend define to the top-level too (useful for headers)
+
+target_compile_definitions(envutil PRIVATE $<$<BOOL:${MULTI_SIMD_ISA}>:MULTI_SIMD_ISA>)
+if("${BACKEND}" STREQUAL "highway")
+  target_compile_definitions(envutil PRIVATE USE_HWY)
+elseif("${BACKEND}" STREQUAL "std::simd")
+  target_compile_definitions(envutil PRIVATE USE_STDSIMD)
+endif()
+
+# Strict warnings if requested
+
+if(ENABLE_STRICT_WARNINGS)
+  if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    target_compile_options(envutil PRIVATE -Wall -Wextra -Wpedantic)
+  elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(envutil PRIVATE /W4)
+  endif()
+endif()
+
+# chatGPT proposed adding IPO optimization, but this maxed out my system
+# and I stopped it after some time, so I took out this section:
+
+# -----------------------
+# IPO / LTO if available
+# -----------------------
+# include(CheckIPOSupported)
+# check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
+# if(ipo_supported)
+  # set_property(TARGET envutil PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+  # # also enable for object-libs if needed
+  # foreach(isa IN LISTS isa_l)
+    # if(TARGET eu_${isa})
+      # set_property(TARGET eu_${isa} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    # endif()
+  # endforeach()
+# endif()
+
+# -----------------------
+# Install rules & packaging
+# -----------------------
+
+install(TARGETS envutil RUNTIME DESTINATION bin)
+
 install(FILES copyright LICENSE DESTINATION share/doc/envutil)
+install(FILES scripts/envutil.desktop DESTINATION share/applications)
+install(FILES scripts/256X256/lux.png DESTINATION share/icons/hicolor/256x256/apps)
+install(FILES scripts/512X512/lux.png DESTINATION share/icons/hicolor/512x512/apps)
+install(FILES scripts/1024X1024/lux.png DESTINATION share/icons/hicolor/1024x1024/apps)
 
-# Some more options for building debian packages. The first one - with
+# CPack minimal config
 
-set(CPACK_DEBIAN_PACKAGE_NAME "envutil")
-set(CPACK_DEBIAN_PACKAGE_VERSION "0.2.0")
-
-set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CMAKE_INSTALL_PREFIX})
-set(CPACK_SET_DESTDIR "ON")
-
-set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Kay F. Jahnke")
-
-# insert license
-
-file(READ LICENSE CPACK_PACKAGE_LICENSE)
-
-# insert description
-
-set(CPACK_PACKAGE_DESCRIPTION_FILE
-  "${CMAKE_SOURCE_DIR}/brief_description.txt")
-
-set(CPACK_DEBIAN_PACKAGE_DESCRIPTION
-  "envutil: utility to process oriented images and environments")
-
-set(CPACK_DEBIAN_PACKAGE_SECTION "universe/graphics")
-set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
-set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/kfjahnke/envutil")
-
-# my debian system did not find the OIIO dependency automatically, hence
-
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libopenimageio2.4")
-
-# This option generates dependencies automatically - it requires
-# the dpkg-dev package to function
-
-set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-
-# is 'VENDOR' the right term here? This is FOSS
-
-set(CPACK_PACKAGE_VENDOR "Kay F. Jahnke")
-
-set(CPACK_STRIP_FILES 1)
-set(CPACK_PACKAGE_VERSION_MAJOR ${envutil_major})
-set(CPACK_PACKAGE_VERSION_MINOR ${envutil_minor})
-set(CPACK_PACKAGE_VERSION_PATCH ${envutil_patch})
-
-set(CPACK_PACKAGE_CONTACT "Kay F. Jahnke <kfjahnke+envutil@gmail.com>")
-
-set(CPACK_PACKAGE_ICON scripts/PV_512x512x32.png)
-
-# envutil is MIT-licensed. The license info doesn't seem to make it
-# into the packet, though.
-
-set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
-
-set(CPACK_DEBIAN_PACKAGE_LICENSE mit)
-set(CPACK_PACKAGE_LICENSE mit)
-
-set(CPACK_DEBIAN_PACKAGE_DEBUG ON)
-
-install(FILES scripts/256X256/lux.png
-        DESTINATION share/icons/hicolor/256x256/apps)
-
-install(FILES scripts/512X512/lux.png 
-        DESTINATION share/icons/hicolor/512x512/apps)
-
-install(FILES scripts/1024X1024/lux.png
-        DESTINATION share/icons/hicolor/1024x1024/apps)
-
-install(FILES scripts/envutil.desktop 
-        DESTINATION share/applications)
-
-message(STATUS "CMAKE_INSTALL_PREFIX = ${CMAKE_INSTALL_PREFIX}")
 include(CPack)
+set(CPACK_PACKAGE_NAME "envutil")
+set(CPACK_PACKAGE_VENDOR "Kay F. Jahnke")
+set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+
+# -----------------------
+# Diagnostics
+# -----------------------
+message(STATUS "Build summary:")
+message(STATUS "  MULTI_SIMD_ISA = ${MULTI_SIMD_ISA}")
+message(STATUS "  BACKEND = ${BACKEND}")
+message(STATUS "  HWY_FOUND = ${HWY_FOUND}")
+message(STATUS "  ISA list = ${isa_l}")
+

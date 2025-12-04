@@ -242,9 +242,10 @@ void fill_polygon ( const std::vector<float> & px ,
   int N = px.size() ;
   assert ( px.size() == py.size() ) ;
 
-  int  nodes, nodeX[N], dir[N] ,pixelX, pixelY, i, j, swap ;
+  int  nodes, pixelX, pixelY, i, j, swap ;
+  std::vector<int> nodeX(N), dir(N) ;
 
-//  Loop through the rows of the image.
+  //  Loop through the rows of the image.
   for (int pixelY=IMAGE_TOP; pixelY<IMAGE_BOT; pixelY++)
   {
 

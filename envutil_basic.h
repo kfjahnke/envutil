@@ -238,19 +238,22 @@ struct image_series
       buffer_size = pos + 16 ;
   }
 
-  bool valid()
+  bool valid() const
   {
     return ( buffer_size != 0 ) ;
   }
 
-  std::string operator[] ( const std::size_t & index )
+  std::string operator[] ( const std::size_t & index ) const
   {
     if ( buffer_size )
     {
-      char buffer [ buffer_size ] ;
-      snprintf ( buffer , buffer_size ,
-                 format_string.c_str() , int(index) ) ;
-      return buffer ;
+      std::vector<char> buffer ( buffer_size ) ;
+
+      std::snprintf ( buffer.data() , buffer.size() ,
+                      format_string.c_str() ,
+                      static_cast<int> ( index ) ) ;
+
+      return std::string ( buffer.data() ) ;
     }
     else
     {
@@ -295,23 +298,30 @@ struct cubeface_series
     {
       buffer_size = pos + 16 ;
 
-      char buffer [ buffer_size ] ;
-      snprintf ( buffer , buffer_size , format_string.c_str() , "left" ) ;
-      filename.push_back ( buffer ) ;
-      snprintf ( buffer , buffer_size , format_string.c_str() , "right" ) ;
-      filename.push_back ( buffer ) ;
-      snprintf ( buffer , buffer_size , format_string.c_str() , "top" ) ;
-      filename.push_back ( buffer ) ;
-      snprintf ( buffer , buffer_size , format_string.c_str() , "bottom" ) ;
-      filename.push_back ( buffer ) ;
-      snprintf ( buffer , buffer_size , format_string.c_str() , "front" ) ;
-      filename.push_back ( buffer ) ;
-      snprintf ( buffer , buffer_size , format_string.c_str() , "back" ) ;
-      filename.push_back ( buffer ) ;
+      std::vector<char> buffer ( buffer_size ) ;
+
+      std::snprintf ( buffer.data() , buffer.size() ,
+                      format_string.c_str() , "left" ) ;
+      filename.push_back ( buffer.data() ) ;
+      std::snprintf ( buffer.data() , buffer.size() ,
+                      format_string.c_str() , "right" ) ;
+      filename.push_back ( buffer.data() ) ;
+      std::snprintf ( buffer.data() , buffer.size() ,
+                      format_string.c_str() , "top" ) ;
+      filename.push_back ( buffer.data() ) ;
+      std::snprintf ( buffer.data() , buffer.size() ,
+                      format_string.c_str() , "bottom" ) ;
+      filename.push_back ( buffer.data() ) ;
+      std::snprintf ( buffer.data() , buffer.size() ,
+                      format_string.c_str() , "front" ) ;
+      filename.push_back ( buffer.data() ) ;
+      std::snprintf ( buffer.data() , buffer.size() ,
+                      format_string.c_str() , "back" ) ;
+      filename.push_back ( buffer.data() ) ;
     }
   }
 
-  bool valid()
+  bool valid() const
   {
     return filename.size() == 6 ;
   }
@@ -320,24 +330,26 @@ struct cubeface_series
   // cubeface filename by number, the second inserts a given orientation
   // string.
 
-  std::string operator[] ( const std::size_t & index )
+  std::string operator[] ( const std::size_t & index ) const
   {
     assert ( buffer_size != 0 && index < 6 ) ;
     return filename [ index ] ;
   }
 
-  std::string operator[] ( const std::string & face )
+  std::string operator[] ( const std::string & face ) const
   {
-    char buffer [ buffer_size ] ;
-    snprintf ( buffer , buffer_size ,
-               format_string.c_str() ,
-               face.c_str() ) ;
-    return buffer ;
+    std::vector<char> buffer ( buffer_size ) ;
+
+    std::snprintf ( buffer.data() , buffer.size() ,
+                    format_string.c_str() ,
+                    face.c_str() ) ;
+
+    return std::string ( buffer.data() ) ;
   }
 
   // return a reference to the set of six names
 
-  const std::vector < std::string > & get_filenames()
+  const std::vector < std::string > & get_filenames() const
   {
     return filename ;
   }
